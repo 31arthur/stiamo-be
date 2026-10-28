@@ -189,3 +189,74 @@ class MeetingModel(Owned, OutcomeCols, Base):
         Index("ix_meetings_related", "user_id", "related_kind", "related_id"),
         sync_index("meetings"),
     )
+
+
+class PlanModel(Owned, Base):
+    __tablename__ = "plans"
+    title: Mapped[str] = mapped_column(String(500))
+    objective: Mapped[str] = mapped_column(Text, default="")
+    workspace: Mapped[str] = mapped_column(String(10))
+    status: Mapped[str] = mapped_column(String(10))
+    due_date: Mapped[str | None] = mapped_column(String(10))
+    origin_kind: Mapped[str | None] = mapped_column(String(12))
+    origin_id: Mapped[str | None] = mapped_column(String(64))
+    task_id: Mapped[str | None] = mapped_column(String(64))
+    doc: Mapped[list[Any] | None] = mapped_column(Json)
+    __table_args__ = (Index("ix_plans_status", "user_id", "status"), sync_index("plans"))
+
+
+class PlanCaseModel(Base):
+    """Which cases a plan covers (the case side is enforced once cases exist)."""
+
+    __tablename__ = "plan_cases"
+    user_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    plan_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    case_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    position: Mapped[int] = mapped_column(Integer, default=0)
+    __table_args__ = (
+        ForeignKeyConstraint(["user_id", "plan_id"], ["plans.user_id", "plans.id"], ondelete="CASCADE"),
+        Index("ix_plan_cases_case", "user_id", "case_id"),
+    )
+
+
+class PlanHearingModel(Base):
+    """Which particular hearings a plan is for."""
+
+    __tablename__ = "plan_hearings"
+    user_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    plan_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    hearing_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    position: Mapped[int] = mapped_column(Integer, default=0)
+    __table_args__ = (
+        ForeignKeyConstraint(["user_id", "plan_id"], ["plans.user_id", "plans.id"], ondelete="CASCADE"),
+        Index("ix_plan_hearings_hearing", "user_id", "hearing_id"),
+    )
+
+
+class GoalModel(Owned, Base):
+    __tablename__ = "goals"
+    title: Mapped[str] = mapped_column(String(500))
+    description: Mapped[str] = mapped_column(Text, default="")
+    workspace: Mapped[str | None] = mapped_column(String(10))
+    horizon: Mapped[str] = mapped_column(String(12))
+    start_date: Mapped[str] = mapped_column(String(10))
+    target_date: Mapped[str] = mapped_column(String(10))
+    status: Mapped[str] = mapped_column(String(10))
+    key_results: Mapped[list[dict[str, Any]]] = mapped_column(Json)
+    check_ins: Mapped[list[dict[str, Any]]] = mapped_column(Json)
+    __table_args__ = (Index("ix_goals_status", "user_id", "status"), sync_index("goals"))
+
+
+class GoalPlanModel(Base):
+    """The action plans that move a goal forward; a plan may serve several goals."""
+
+    __tablename__ = "goal_plans"
+    user_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    goal_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    plan_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    position: Mapped[int] = mapped_column(Integer, default=0)
+    __table_args__ = (
+        ForeignKeyConstraint(["user_id", "goal_id"], ["goals.user_id", "goals.id"], ondelete="CASCADE"),
+        ForeignKeyConstraint(["user_id", "plan_id"], ["plans.user_id", "plans.id"], ondelete="CASCADE"),
+        Index("ix_goal_plans_plan", "user_id", "plan_id"),
+    )

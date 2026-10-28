@@ -11,6 +11,7 @@ from app.application.crud import Crud
 from app.application.ports import Env
 from app.application.use_cases.directory import ClientUseCases, counsel_crud, project_crud
 from app.application.use_cases.history import HistoryUseCases
+from app.application.use_cases.plans import GoalUseCases, PlanUseCases
 from app.application.use_cases.work import FollowUpUseCases, MeetingUseCases, RecordOutcome, task_crud
 from app.config import get_settings
 from app.infrastructure.db.repositories import build_stores
@@ -66,6 +67,14 @@ def meeting_service(env: EnvDep) -> MeetingUseCases:
 
 def record_outcome(env: EnvDep) -> RecordOutcome:
     return RecordOutcome(env)
+
+
+def plan_service(env: EnvDep) -> PlanUseCases:
+    return PlanUseCases(env)
+
+
+def goal_service(env: EnvDep) -> GoalUseCases:
+    return GoalUseCases(env)
 
 
 def history_service(env: EnvDep) -> HistoryUseCases:
