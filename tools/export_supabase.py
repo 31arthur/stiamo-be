@@ -83,7 +83,8 @@ async def main() -> int:
         print("Set SUPABASE_DB_URL (Supabase dashboard → Project Settings → Database → Connection string).")
         return 2
 
-    conn = await asyncpg.connect(db_url, ssl="require")
+    # statement_cache_size=0: the pooler (port 6543) does not support prepared statements
+    conn = await asyncpg.connect(db_url, ssl="require", statement_cache_size=0)
     try:
         await conn.set_type_codec("jsonb", encoder=json.dumps, decoder=json.loads, schema="pg_catalog")
         export = {"exportedAt": datetime.now(UTC).isoformat(), "users": await export_users(conn), "tables": {}}
