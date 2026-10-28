@@ -6,7 +6,8 @@ Backend for [Stiamo](https://github.com/31arthur/stiamo), built with **FastAPI**
 | --- | --- |
 | `libs/stiamo_common` | Shared kernel: error model, JWT verification, DB base |
 | `services/identity` | Accounts, login, JWT access + refresh tokens |
-| `services/records` | Per-user document store for every Stiamo collection |
+| `services/records` | Generic per-user document store (kept for now; superseded by `practice`) |
+| `services/practice` | The working domain, typed and relational: tasks, meetings, follow-ups, cases, hearings, plans, goals, clients, counsel, links, history |
 | `docs/ARCHITECTURE.md` | Layers, service boundaries, auth flow |
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Setup per service is in each service's README.
