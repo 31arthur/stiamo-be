@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Generic, TypeVar
 
@@ -63,6 +63,26 @@ class IdGenerator(ABC):
     def next(self) -> str: ...
 
 
+class FilesClient(ABC):
+    """The files service, told when a record is deleted or merged so its attachments follow. Best effort."""
+
+    @abstractmethod
+    async def delete_owner(self, ref: EntityRef) -> None: ...
+
+    @abstractmethod
+    async def transfer(self, source: EntityRef, target: EntityRef) -> None: ...
+
+
+class NoFiles(FilesClient):
+    """Used when no files service is configured."""
+
+    async def delete_owner(self, ref: EntityRef) -> None:
+        return None
+
+    async def transfer(self, source: EntityRef, target: EntityRef) -> None:
+        return None
+
+
 @dataclass
 class Stores:
     """Every repository the use cases can reach, all bound to one unit of work."""
@@ -86,6 +106,7 @@ class Env:
     stores: Stores
     clock: Clock
     ids: IdGenerator
+    files: FilesClient = field(default_factory=NoFiles)
 
     def now_iso(self) -> str:
         return to_iso(self.clock.now())

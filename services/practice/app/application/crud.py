@@ -85,5 +85,6 @@ class Crud(Generic[T]):
         await self.repo.remove(user_id, id)
         for link in await self.env.stores.link.touching(user_id, EntityRef(kind=self.kind, id=id)):
             await self.env.stores.link.remove(user_id, link.id)
+        await self.env.files.delete_owner(EntityRef(kind=self.kind, id=id))
         if before is not None:
             await self.log.deleted(user_id, self.kind, before)
