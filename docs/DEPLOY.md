@@ -32,6 +32,8 @@ The stack joins your existing Traefik through the external `traefik-proxy` netwo
 
 ## Every release
 
+On the VPS, `./deploy.sh` does the pull, recreate and log-follow in one go (copy `deploy/deploy.sh`, then `chmod +x deploy.sh`). Manually:
+
 ```bash
 docker compose pull
 docker compose up -d
