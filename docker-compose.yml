@@ -28,5 +28,25 @@ services:
     depends_on: { postgres: { condition: service_healthy } }
     ports: ["8002:8000"]
 
+  practice:
+    build: { context: ., dockerfile: services/practice/Dockerfile }
+    environment:
+      PRACTICE_DATABASE_URL: postgresql+asyncpg://stiamo:stiamo@postgres:5432/stiamo_practice
+      PRACTICE_JWT_SECRET: ${JWT_SECRET:-dev-only-secret-change-me-0123456789abcdef}
+      PRACTICE_FILES_URL: http://files:8000
+    depends_on: { postgres: { condition: service_healthy } }
+    ports: ["8003:8000"]
+
+  files:
+    build: { context: ., dockerfile: services/files/Dockerfile }
+    environment:
+      FILES_DATABASE_URL: postgresql+asyncpg://stiamo:stiamo@postgres:5432/stiamo_files
+      FILES_JWT_SECRET: ${JWT_SECRET:-dev-only-secret-change-me-0123456789abcdef}
+      FILES_PRACTICE_URL: http://practice:8000
+    volumes: [files:/data/files]
+    depends_on: { postgres: { condition: service_healthy } }
+    ports: ["8004:8000"]
+
 volumes:
   pgdata:
+  files:

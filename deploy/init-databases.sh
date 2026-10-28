@@ -10,3 +10,5 @@ SQL
 }
 create stiamo_identity "$IDENTITY_DB_PASSWORD"
 create stiamo_records  "$RECORDS_DB_PASSWORD"
+create stiamo_practice "$PRACTICE_DB_PASSWORD"
+create stiamo_files    "$FILES_DB_PASSWORD"

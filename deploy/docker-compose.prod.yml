@@ -3,6 +3,8 @@
 # Public host: stiamo-be.fullstackarthur.com
 #   /v1/auth/*, /v1/users/*  -> identity
 #   /v1/collections/*        -> records
+#   /v1/tasks, /v1/cases, /v1/plans, ... (the working domain) -> practice
+#   /v1/attachments/*, /v1/files/*  -> files
 name: stiamo-be
 
 x-logging: &logging
@@ -77,6 +79,73 @@ services:
       - "traefik.http.services.stiamo-records.loadbalancer.healthcheck.interval=30s"
       - "traefik.http.services.stiamo-records.loadbalancer.healthcheck.timeout=10s"
 
+  practice:
+    image: ghcr.io/${GHCR_OWNER:?set GHCR_OWNER}/stiamo-be-practice:${IMAGE_TAG:-latest}
+    pull_policy: always
+    restart: unless-stopped
+    expose: ["8000"]
+    environment:
+      PRACTICE_ENV: production
+      PRACTICE_DATABASE_URL: postgresql+asyncpg://stiamo_practice:${PRACTICE_DB_PASSWORD:?set PRACTICE_DB_PASSWORD}@db:5432/stiamo_practice
+      PRACTICE_JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET}
+      PRACTICE_CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
+      PRACTICE_FILES_URL: http://files:8000
+    depends_on:
+      db: { condition: service_healthy }
+    networks: [stiamo-net, traefik-proxy]
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 512M }
+        reservations: { memory: 128M }
+    logging: *logging
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik-proxy"
+      - "traefik.http.routers.stiamo-practice.rule=Host(`stiamo-be.fullstackarthur.com`) && (PathPrefix(`/v1/tasks`) || PathPrefix(`/v1/follow-ups`) || PathPrefix(`/v1/meetings`) || PathPrefix(`/v1/cases`) || PathPrefix(`/v1/hearings`) || PathPrefix(`/v1/plans`) || PathPrefix(`/v1/goals`) || PathPrefix(`/v1/counsel`) || PathPrefix(`/v1/clients`) || PathPrefix(`/v1/projects`) || PathPrefix(`/v1/links`) || PathPrefix(`/v1/activity`) || PathPrefix(`/v1/outcomes`) || PathPrefix(`/v1/agenda`) || PathPrefix(`/v1/relations`) || PathPrefix(`/v1/steps`))"
+      - "traefik.http.routers.stiamo-practice.entrypoints=websecure"
+      - "traefik.http.routers.stiamo-practice.tls=true"
+      - "traefik.http.routers.stiamo-practice.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.stiamo-practice.middlewares=stiamo-retry"
+      - "traefik.http.services.stiamo-practice.loadbalancer.server.port=8000"
+      - "traefik.http.services.stiamo-practice.loadbalancer.healthcheck.path=/health"
+      - "traefik.http.services.stiamo-practice.loadbalancer.healthcheck.interval=30s"
+      - "traefik.http.services.stiamo-practice.loadbalancer.healthcheck.timeout=10s"
+
+  files:
+    image: ghcr.io/${GHCR_OWNER:?set GHCR_OWNER}/stiamo-be-files:${IMAGE_TAG:-latest}
+    pull_policy: always
+    restart: unless-stopped
+    expose: ["8000"]
+    environment:
+      FILES_ENV: production
+      FILES_DATABASE_URL: postgresql+asyncpg://stiamo_files:${FILES_DB_PASSWORD:?set FILES_DB_PASSWORD}@db:5432/stiamo_files
+      FILES_JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET}
+      FILES_CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
+      FILES_PRACTICE_URL: http://practice:8000
+      FILES_STORAGE_DIR: /data/files
+    depends_on:
+      db: { condition: service_healthy }
+    networks: [stiamo-net, traefik-proxy]
+    volumes:
+      - stiamo-files:/data/files
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 512M }
+        reservations: { memory: 128M }
+    logging: *logging
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik-proxy"
+      - "traefik.http.routers.stiamo-files.rule=Host(`stiamo-be.fullstackarthur.com`) && (PathPrefix(`/v1/attachments`) || PathPrefix(`/v1/files`))"
+      - "traefik.http.routers.stiamo-files.entrypoints=websecure"
+      - "traefik.http.routers.stiamo-files.tls=true"
+      - "traefik.http.routers.stiamo-files.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.stiamo-files.middlewares=stiamo-retry"
+      - "traefik.http.services.stiamo-files.loadbalancer.server.port=8000"
+      - "traefik.http.services.stiamo-files.loadbalancer.healthcheck.path=/health"
+      - "traefik.http.services.stiamo-files.loadbalancer.healthcheck.interval=30s"
+      - "traefik.http.services.stiamo-files.loadbalancer.healthcheck.timeout=10s"
+
   db:
     image: postgres:16-alpine
     restart: unless-stopped
@@ -86,6 +155,8 @@ services:
       POSTGRES_DB: postgres
       IDENTITY_DB_PASSWORD: ${IDENTITY_DB_PASSWORD}
       RECORDS_DB_PASSWORD: ${RECORDS_DB_PASSWORD}
+      PRACTICE_DB_PASSWORD: ${PRACTICE_DB_PASSWORD}
+      FILES_DB_PASSWORD: ${FILES_DB_PASSWORD}
     volumes:
       - stiamo-pgdata:/var/lib/postgresql/data
       - ./init-databases.sh:/docker-entrypoint-initdb.d/init-databases.sh:ro
@@ -108,3 +179,4 @@ networks:
 
 volumes:
   stiamo-pgdata:
+  stiamo-files:
