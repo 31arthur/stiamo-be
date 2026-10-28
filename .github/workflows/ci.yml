@@ -1,0 +1,19 @@
+name: ci
+on:
+  push: { branches: [dev] }
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target: [libs/stiamo_common, services/identity, services/records]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -e libs/stiamo_common pytest pytest-asyncio ruff
+      - run: ruff check .
+      - if: matrix.target != 'libs/stiamo_common'
+        run: pip install -e "${{ matrix.target }}[dev]"
+      - run: cd ${{ matrix.target }} && pytest -q
