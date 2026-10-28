@@ -1,0 +1,15 @@
+# Single public entry point with automatic HTTPS. The frontend talks only to this host.
+{$DOMAIN} {
+	encode zstd gzip
+	@identity path /v1/auth/* /v1/users/*
+	handle @identity {
+		reverse_proxy identity:8000
+	}
+	@records path /v1/collections/*
+	handle @records {
+		reverse_proxy records:8000
+	}
+	handle {
+		respond "not found" 404
+	}
+}

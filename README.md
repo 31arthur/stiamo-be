@@ -23,7 +23,9 @@ cd services/identity && pip install -e ".[dev]" && pytest      # then the same i
 
 Or run everything with Docker: `docker compose up --build` (see below).
 
-## Run with Docker
+See [docs/DEPLOY.md](docs/DEPLOY.md) for the GHCR → VPS pipeline.
+
+## Run with Docker (local dev)
 
 ```bash
 docker compose up --build        # postgres + identity (:8001) + records (:8002), migrations run on start
