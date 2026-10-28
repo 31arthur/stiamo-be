@@ -1,0 +1,8 @@
+# Workspace-level tooling only. Each deployable lives in services/<name> with its own pyproject.
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+extend-exclude = [".venv"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC"]
