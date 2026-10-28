@@ -11,6 +11,7 @@ from app.application.crud import Crud
 from app.application.ports import Env
 from app.application.use_cases.directory import ClientUseCases, counsel_crud, project_crud
 from app.application.use_cases.history import HistoryUseCases
+from app.application.use_cases.work import FollowUpUseCases, MeetingUseCases, RecordOutcome, task_crud
 from app.config import get_settings
 from app.infrastructure.db.repositories import build_stores
 from app.infrastructure.system import SystemClock, UuidGenerator
@@ -49,6 +50,22 @@ def client_service(env: EnvDep) -> ClientUseCases:
 
 def project_service(env: EnvDep) -> Crud:
     return project_crud(env)
+
+
+def task_service(env: EnvDep) -> Crud:
+    return task_crud(env)
+
+
+def follow_up_service(env: EnvDep) -> FollowUpUseCases:
+    return FollowUpUseCases(env)
+
+
+def meeting_service(env: EnvDep) -> MeetingUseCases:
+    return MeetingUseCases(env)
+
+
+def record_outcome(env: EnvDep) -> RecordOutcome:
+    return RecordOutcome(env)
 
 
 def history_service(env: EnvDep) -> HistoryUseCases:
