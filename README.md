@@ -11,6 +11,7 @@ Backend for [Stiamo](https://github.com/31arthur/stiamo), built with **FastAPI**
 | `services/files` | Attachments: uploaded files and linked documents |
 | `docs/ARCHITECTURE.md` | Layers, service boundaries, auth flow |
 | `docs/API.md` | Every endpoint, mapped to the frontend's use cases |
+| `docs/MIGRATING_FROM_SUPABASE.md` | Moving accounts, records and files from Supabase to the VPS |
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Setup per service is in each service's README.
 

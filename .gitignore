@@ -11,3 +11,6 @@ __pycache__/
 .vscode/
 deploy/.env
 storage/
+export.json
+supabase-files/
+report.json
