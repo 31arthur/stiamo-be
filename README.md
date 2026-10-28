@@ -13,8 +13,12 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Setup per service is in each s
 
 ## Quick start (dev)
 
+Each service is its own app (top-level package `app`), so run and test them one at a time from their folder.
+
 ```bash
-python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install -e libs/stiamo_common -e "services/identity[dev]" -e "services/records[dev]"
-pytest services/identity services/records libs/stiamo_common
+python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scriptsctivate
+pip install -e libs/stiamo_common
+cd services/identity && pip install -e ".[dev]" && pytest      # then the same in services/records
 ```
+
+Or run everything with Docker: `docker compose up --build` (see below once added).
