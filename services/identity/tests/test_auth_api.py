@@ -86,3 +86,19 @@ async def test_separate_logins_are_independent_sessions(client, alice):
 
 async def test_health(client):
     assert (await client.get("/health")).json() == {"status": "ok"}
+
+
+async def test_registration_can_be_turned_off():
+    from app.config import Settings
+    from app.main import create_app
+    from httpx import ASGITransport, AsyncClient
+    from stiamo_common.db import Base
+
+    app = create_app(Settings(database_url="sqlite+aiosqlite:///:memory:", allow_registration=False), hasher_rounds=4)
+    async with app.router.lifespan_context(app):
+        async with app.state.engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            r = await c.post("/v1/auth/register", json=ALICE)
+            assert r.status_code == 403 and "turned off" in r.json()["error"]["message"]
+            assert (await c.post("/v1/auth/login", json={"email": ALICE["email"], "password": ALICE["password"]})).status_code == 401

@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     access_ttl_minutes: int = 15
     refresh_ttl_days: int = 30
 
+    #: Whether anyone can create an account through the API. Turn off once the people who need one have one.
+    allow_registration: bool = True
+
     cors_origins: Annotated[list[str], NoDecode] = ["http://localhost:5173"]
 
     @field_validator("cors_origins", mode="before")
