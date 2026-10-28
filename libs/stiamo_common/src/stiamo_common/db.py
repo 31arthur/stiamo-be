@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 
+from sqlalchemy import DateTime, TypeDecorator
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy.pool import StaticPool
@@ -33,3 +35,22 @@ async def session_scope(factory: async_sessionmaker[AsyncSession]) -> AsyncItera
         except Exception:
             await session.rollback()
             raise
+
+
+class UTCDateTime(TypeDecorator):
+    """Timezone-aware UTC datetimes on every backend (SQLite drops tzinfo, so restore it on read)."""
+
+    impl = DateTime(timezone=True)
+    cache_ok = True
+
+    def process_bind_param(self, value: datetime | None, dialect):
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            raise ValueError("naive datetime; use timezone-aware UTC")
+        return value.astimezone(UTC)
+
+    def process_result_value(self, value: datetime | None, dialect):
+        if value is None:
+            return None
+        return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)

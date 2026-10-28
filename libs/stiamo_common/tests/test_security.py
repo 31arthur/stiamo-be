@@ -2,7 +2,6 @@ import time
 
 import jwt
 import pytest
-
 from stiamo_common.errors import Unauthorized
 from stiamo_common.security import ACCESS, REFRESH, TokenSettings, decode_token
 
