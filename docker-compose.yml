@@ -1,0 +1,32 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: stiamo
+      POSTGRES_PASSWORD: stiamo
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./infra/init-databases.sh:/docker-entrypoint-initdb.d/init-databases.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U stiamo"]
+      interval: 3s
+      retries: 20
+
+  identity:
+    build: { context: ., dockerfile: services/identity/Dockerfile }
+    environment:
+      IDENTITY_DATABASE_URL: postgresql+asyncpg://stiamo:stiamo@postgres:5432/stiamo_identity
+      IDENTITY_JWT_SECRET: ${JWT_SECRET:-dev-only-secret-change-me-0123456789abcdef}
+    depends_on: { postgres: { condition: service_healthy } }
+    ports: ["8001:8000"]
+
+  records:
+    build: { context: ., dockerfile: services/records/Dockerfile }
+    environment:
+      RECORDS_DATABASE_URL: postgresql+asyncpg://stiamo:stiamo@postgres:5432/stiamo_records
+      RECORDS_JWT_SECRET: ${JWT_SECRET:-dev-only-secret-change-me-0123456789abcdef}
+    depends_on: { postgres: { condition: service_healthy } }
+    ports: ["8002:8000"]
+
+volumes:
+  pgdata:

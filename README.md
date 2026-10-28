@@ -21,4 +21,14 @@ pip install -e libs/stiamo_common
 cd services/identity && pip install -e ".[dev]" && pytest      # then the same in services/records
 ```
 
-Or run everything with Docker: `docker compose up --build` (see below once added).
+Or run everything with Docker: `docker compose up --build` (see below).
+
+## Run with Docker
+
+```bash
+docker compose up --build        # postgres + identity (:8001) + records (:8002), migrations run on start
+```
+
+Interactive API docs: http://localhost:8001/docs and http://localhost:8002/docs. Set `JWT_SECRET` in your shell for anything beyond local dev.
+
+Typical flow: `POST :8001/v1/auth/register` → use `tokens.access_token` as `Authorization: Bearer ...` against `:8002/v1/collections/tasks`; call `:8001/v1/auth/refresh` with the refresh token when the access token expires (15 min).
