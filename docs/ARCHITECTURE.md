@@ -34,3 +34,18 @@ infrastructure SQLAlchemy models/repositories, bcrypt, PyJWT adapters
 ## Data
 
 The frontend stores each aggregate as a JSON document (`id`, `userId`, ...). `records` keeps that contract: one table keyed by `(user_id, collection, id)` with a JSON `data` column; ownership is taken from the token, never from the payload.
+
+## The working domain
+
+`practice` holds the domain logic that used to live in the frontend (`src/domain`): outcomes, follow-up chasing,
+appointment confirmations, case numbers and counsel engagements, hearings and the case diary, plans and their steps,
+goals, links, history, the relation thread and the agenda. Each aggregate has a typed relational table (keys are
+`(user_id, id)`; ownership is enforced in every query), with small nested lists in JSON columns and join tables for
+the many-to-many relations (plan coverage, goal plans, hearings shared by several cases).
+
+`files` keeps attachment metadata and the bytes (a mounted volume, behind a `FileStorage` port so object storage can
+replace it). The two services talk over HTTP with the caller's own token: `files` tells `practice` to write
+"attached/removed" lines to a record's history, and `practice` tells `files` to clear or move attachments when a record
+is deleted or merged. Both calls are best-effort and never fail the user's change.
+
+See [API.md](API.md) for every endpoint.

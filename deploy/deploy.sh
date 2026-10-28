@@ -5,7 +5,7 @@ set -euo pipefail
 # Run from the folder this script lives in (where docker-compose.yml and .env are).
 cd "$(dirname "$(readlink -f "$0")")"
 
-APP_SERVICES=(identity records)   # the database ("db") is deliberately not recreated
+APP_SERVICES=(identity records practice files)   # the database ("db") is deliberately not recreated
 
 echo "==> Pulling latest images..."
 docker compose pull "${APP_SERVICES[@]}"

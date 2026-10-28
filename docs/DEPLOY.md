@@ -41,6 +41,17 @@ docker compose up -d
 
 Roll back: set `IMAGE_TAG=<short sha>` in `.env` and run the same two commands.
 
+## Adding the practice and files services to an existing install
+
+Postgres only creates databases the first time its volume is created, so a stack deployed before `practice` and `files`
+existed needs their databases added once:
+
+1. Add `PRACTICE_DB_PASSWORD` and `FILES_DB_PASSWORD` to `.env` (`openssl rand -hex 24` each).
+2. Copy the new `docker-compose.yml`, `deploy.sh` and `add-databases.sh` from `deploy/`, then `chmod +x add-databases.sh deploy.sh`.
+3. `./add-databases.sh` (safe to repeat), then `./deploy.sh`.
+
+Uploaded files live in the `stiamo-files` Docker volume; include it in your backups next to the database dump.
+
 ## Database and migrations
 
 - Your own PostgreSQL 16 runs in the stack with data in the `pgdata` volume. It publishes no ports; only the services reach it.
@@ -56,6 +67,8 @@ Roll back: set `IMAGE_TAG=<short sha>` in `.env` and run the same two commands.
 | --- | --- |
 | `/v1/auth/*`, `/v1/users/*` | identity |
 | `/v1/collections/*` | records |
+| `/v1/tasks`, `/v1/follow-ups`, `/v1/meetings`, `/v1/cases`, `/v1/hearings`, `/v1/plans`, `/v1/goals`, `/v1/counsel`, `/v1/clients`, `/v1/projects`, `/v1/links`, `/v1/activity`, `/v1/outcomes`, `/v1/agenda`, `/v1/relations`, `/v1/steps` | practice |
+| `/v1/attachments/*`, `/v1/files/*` | files |
 
 The frontend uses `https://stiamo-be.fullstackarthur.com` as its single API base URL, and its origin goes in `CORS_ORIGINS`.
 Interactive docs (`/docs`) are not routed publicly. The database is only on the private `stiamo-net` network.
