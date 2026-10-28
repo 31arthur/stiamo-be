@@ -13,6 +13,7 @@ from app.application.use_cases.cases import CaseUseCases, CounselUseCases, Heari
 from app.application.use_cases.directory import ClientUseCases, project_crud
 from app.application.use_cases.history import HistoryUseCases
 from app.application.use_cases.plans import GoalUseCases, PlanUseCases
+from app.application.use_cases.views import AgendaUseCases, RelationUseCases
 from app.application.use_cases.work import FollowUpUseCases, MeetingUseCases, RecordOutcome, task_crud
 from app.config import get_settings
 from app.infrastructure.db.repositories import build_stores
@@ -88,6 +89,14 @@ def hearing_service(env: EnvDep) -> HearingUseCases:
 
 def hearing_action_service(env: EnvDep) -> HearingActionUseCases:
     return HearingActionUseCases(env)
+
+
+def relation_service(env: EnvDep) -> RelationUseCases:
+    return RelationUseCases(env)
+
+
+def agenda_service(env: EnvDep) -> AgendaUseCases:
+    return AgendaUseCases(env)
 
 
 def history_service(env: EnvDep) -> HistoryUseCases:
