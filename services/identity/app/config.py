@@ -1,7 +1,9 @@
+import json
 from functools import lru_cache
+from typing import Annotated
 
-from pydantic import model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import field_validator, model_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 from stiamo_common.security import TokenSettings
 
 _DEV_SECRET = "dev-only-secret-change-me-0123456789abcdef"
@@ -22,7 +24,21 @@ class Settings(BaseSettings):
     access_ttl_minutes: int = 15
     refresh_ttl_days: int = 30
 
-    cors_origins: list[str] = ["http://localhost:5173"]
+    cors_origins: Annotated[list[str], NoDecode] = ["http://localhost:5173"]
+
+    @field_validator("cors_origins", mode="before")
+    @classmethod
+    def _parse_origins(cls, value):
+        """Accepts a JSON list or a plain comma-separated list: https://a.com,https://b.com"""
+        if not isinstance(value, str):
+            return value
+        text = value.strip()
+        if text.startswith("["):
+            try:
+                return json.loads(text)
+            except ValueError:
+                text = text.strip("[]")
+        return [part.strip().strip("\"'") for part in text.split(",") if part.strip().strip("\"'")]
 
     @model_validator(mode="after")
     def _safe_in_production(self) -> "Settings":
