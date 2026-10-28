@@ -125,3 +125,33 @@ async def test_agenda_and_threads_are_private(client, alice, bob):
     await seed(client, alice)
     assert (await client.get("/v1/agenda", params={"start": "2026-03-01", "end": "2026-04-30"}, headers=bob)).json()["items"] == []
     assert (await client.get("/v1/relations/thread", params={"kind": "case", "id": "c1"}, headers=bob)).status_code == 404
+
+
+async def test_everything_can_be_listed_for_a_live_view(client, alice, bob):
+    await seed(client, alice)
+    await client.post("/v1/links", headers=alice, json={"a": {"kind": "case", "id": "c1"}, "b": {"kind": "counsel", "id": "k1"},
+                                                        "titles": {"a": "Case", "b": "Counsel"}})
+    everything = (await client.get("/v1/activity", params={"limit": 5}, headers=alice)).json()
+    assert len(everything["items"]) == 5 and everything["nextCursor"]
+    seen, after = [], None
+    while True:
+        page = (await client.get("/v1/activity", params={"limit": 7, **({"after": after} if after else {})}, headers=alice)).json()
+        seen += [i["id"] for i in page["items"]]
+        after = page["nextCursor"]
+        if not after:
+            break
+    assert len(seen) == len(set(seen)) > 10
+    assert len((await client.get("/v1/links", headers=alice)).json()["items"]) == 1
+    assert (await client.get("/v1/links", headers=bob)).json()["items"] == []
+    assert (await client.get("/v1/activity", headers=bob)).json()["items"] == []
+    assert (await client.get("/v1/activity", params={"kind": "case"}, headers=alice)).status_code == 422
+
+
+async def test_saving_a_hearing_reports_what_was_folded_in(client, alice):
+    for cid in ("c1", "c2"):
+        await client.put(f"/v1/cases/{cid}", json={"organization": "SA", "title": cid}, headers=alice)
+    await client.put("/v1/hearings/h2", json={"caseId": "c2", "date": "2026-03-10", "purpose": "x"}, headers=alice)
+    r = await client.put("/v1/hearings/h1/listing", headers=alice,
+                         json={"caseId": "c1", "alsoCaseIds": ["c2"], "date": "2026-03-10", "purpose": "Arguments"})
+    assert r.status_code == 200, r.text
+    assert r.json()["hearing"]["id"] == "h1" and [h["id"] for h in r.json()["merged"]] == ["h2"]
