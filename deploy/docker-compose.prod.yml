@@ -1,63 +1,110 @@
-# Production stack for the VPS. Images come from GHCR (built by .github/workflows/publish.yml).
-# Usage:  cp .env.prod.example .env && docker compose -f docker-compose.prod.yml pull && docker compose -f docker-compose.prod.yml up -d
-name: stiamo
+# Production stack for the VPS, behind the existing Traefik (external network `traefik-proxy`).
+# Images come from GHCR (built by .github/workflows/publish.yml).
+# Public host: stiamo-be.fullstackarthur.com
+#   /v1/auth/*, /v1/users/*  -> identity
+#   /v1/collections/*        -> records
+name: stiamo-be
 
-x-service: &service
-  restart: unless-stopped
-  depends_on:
-    postgres: { condition: service_healthy }
+x-logging: &logging
+  driver: "json-file"
+  options: { max-size: "10m", max-file: "3" }
 
 services:
-  postgres:
-    image: postgres:16-alpine
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
-      IDENTITY_DB_PASSWORD: ${IDENTITY_DB_PASSWORD:?set IDENTITY_DB_PASSWORD}
-      RECORDS_DB_PASSWORD: ${RECORDS_DB_PASSWORD:?set RECORDS_DB_PASSWORD}
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-      - ./init-databases.sh:/docker-entrypoint-initdb.d/init-databases.sh:ro
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 5s
-      retries: 20
-    # No published ports: only the services on this compose network can reach the database.
-
   identity:
-    <<: *service
     image: ghcr.io/${GHCR_OWNER:?set GHCR_OWNER}/stiamo-be-identity:${IMAGE_TAG:-latest}
+    pull_policy: always
+    restart: unless-stopped
+    expose: ["8000"]
     environment:
       IDENTITY_ENV: production
-      IDENTITY_DATABASE_URL: postgresql+asyncpg://stiamo_identity:${IDENTITY_DB_PASSWORD}@postgres:5432/stiamo_identity
+      IDENTITY_DATABASE_URL: postgresql+asyncpg://stiamo_identity:${IDENTITY_DB_PASSWORD:?set IDENTITY_DB_PASSWORD}@db:5432/stiamo_identity
       IDENTITY_JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET}
       IDENTITY_CORS_ORIGINS: ${CORS_ORIGINS:-["http://localhost:5173"]}
       IDENTITY_ACCESS_TTL_MINUTES: ${ACCESS_TTL_MINUTES:-15}
       IDENTITY_REFRESH_TTL_DAYS: ${REFRESH_TTL_DAYS:-30}
+    depends_on:
+      db: { condition: service_healthy }
+    networks: [stiamo-net, traefik-proxy]
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 512M }
+        reservations: { memory: 128M }
+    logging: *logging
+    # The image defines its own HEALTHCHECK (GET /health).
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik-proxy"
+      - "traefik.http.routers.stiamo-identity.rule=Host(`stiamo-be.fullstackarthur.com`) && (PathPrefix(`/v1/auth`) || PathPrefix(`/v1/users`))"
+      - "traefik.http.routers.stiamo-identity.entrypoints=websecure"
+      - "traefik.http.routers.stiamo-identity.tls=true"
+      - "traefik.http.routers.stiamo-identity.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.stiamo-identity.middlewares=stiamo-retry"
+      - "traefik.http.services.stiamo-identity.loadbalancer.server.port=8000"
+      - "traefik.http.services.stiamo-identity.loadbalancer.healthcheck.path=/health"
+      - "traefik.http.services.stiamo-identity.loadbalancer.healthcheck.interval=30s"
+      - "traefik.http.services.stiamo-identity.loadbalancer.healthcheck.timeout=10s"
+      - "traefik.http.middlewares.stiamo-retry.retry.attempts=3"
+      - "traefik.http.middlewares.stiamo-retry.retry.initialinterval=100ms"
 
   records:
-    <<: *service
     image: ghcr.io/${GHCR_OWNER:?set GHCR_OWNER}/stiamo-be-records:${IMAGE_TAG:-latest}
+    pull_policy: always
+    restart: unless-stopped
+    expose: ["8000"]
     environment:
       RECORDS_ENV: production
-      RECORDS_DATABASE_URL: postgresql+asyncpg://stiamo_records:${RECORDS_DB_PASSWORD}@postgres:5432/stiamo_records
+      RECORDS_DATABASE_URL: postgresql+asyncpg://stiamo_records:${RECORDS_DB_PASSWORD:?set RECORDS_DB_PASSWORD}@db:5432/stiamo_records
       RECORDS_JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET}
       RECORDS_CORS_ORIGINS: ${CORS_ORIGINS:-["http://localhost:5173"]}
+    depends_on:
+      db: { condition: service_healthy }
+    networks: [stiamo-net, traefik-proxy]
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 512M }
+        reservations: { memory: 128M }
+    logging: *logging
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik-proxy"
+      - "traefik.http.routers.stiamo-records.rule=Host(`stiamo-be.fullstackarthur.com`) && PathPrefix(`/v1/collections`)"
+      - "traefik.http.routers.stiamo-records.entrypoints=websecure"
+      - "traefik.http.routers.stiamo-records.tls=true"
+      - "traefik.http.routers.stiamo-records.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.stiamo-records.middlewares=stiamo-retry"
+      - "traefik.http.services.stiamo-records.loadbalancer.server.port=8000"
+      - "traefik.http.services.stiamo-records.loadbalancer.healthcheck.path=/health"
+      - "traefik.http.services.stiamo-records.loadbalancer.healthcheck.interval=30s"
+      - "traefik.http.services.stiamo-records.loadbalancer.healthcheck.timeout=10s"
 
-  caddy:
-    image: caddy:2-alpine
+  db:
+    image: postgres:16-alpine
     restart: unless-stopped
     environment:
-      DOMAIN: ${DOMAIN:?set DOMAIN}
-    ports:
-      - "80:80"
-      - "443:443"
+      POSTGRES_USER: stiamo
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: postgres
+      IDENTITY_DB_PASSWORD: ${IDENTITY_DB_PASSWORD}
+      RECORDS_DB_PASSWORD: ${RECORDS_DB_PASSWORD}
     volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-    depends_on: [identity, records]
+      - stiamo-pgdata:/var/lib/postgresql/data
+      - ./init-databases.sh:/docker-entrypoint-initdb.d/init-databases.sh:ro
+    networks: [stiamo-net]   # not on traefik-proxy: never reachable from outside
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U stiamo -d postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 1G }
+    logging: *logging
+
+networks:
+  stiamo-net:
+    driver: bridge
+  traefik-proxy:
+    external: true
 
 volumes:
-  pgdata:
-  caddy_data:
+  stiamo-pgdata:

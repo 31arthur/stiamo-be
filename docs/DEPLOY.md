@@ -18,19 +18,23 @@ The workflow uses the built-in `GITHUB_TOKEN`; no secrets to configure. Packages
 
 ## One-time VPS setup
 
-1. Install Docker + the compose plugin. Point a DNS `A` record for your API domain at the VPS; open ports 80/443.
-2. If the packages are private: create a GitHub personal access token with `read:packages`, then
-   `echo <token> | docker login ghcr.io -u <github-user> --password-stdin`.
-3. Copy `deploy/docker-compose.prod.yml`, `deploy/Caddyfile`, `deploy/init-databases.sh` and `deploy/.env.prod.example`
-   to a folder on the VPS (e.g. `/opt/stiamo`); rename the example to `.env` and fill in the passwords and
-   `JWT_SECRET` (`openssl rand -hex 48`), `GHCR_OWNER` (lowercase) and `DOMAIN`.
-4. `docker compose -f docker-compose.prod.yml up -d`
+The stack joins your existing Traefik through the external `traefik-proxy` network (same pattern as `qs-erp`), served at
+**https://stiamo-be.fullstackarthur.com**.
+
+1. DNS: an `A` record for `stiamo-be.fullstackarthur.com` pointing at the VPS.
+2. If the GHCR packages are private: `echo <token> | docker login ghcr.io -u <github-user> --password-stdin`
+   (token with `read:packages`), or make the two packages public.
+3. `mkdir ~/stiamo-be && cd ~/stiamo-be`, then copy in `deploy/docker-compose.prod.yml` (as `docker-compose.yml`),
+   `deploy/init-databases.sh` and `deploy/.env.prod.example` (as `.env`).
+4. Fill `.env`: use hex passwords (`openssl rand -hex 24`, they go into URLs), `JWT_SECRET` (`openssl rand -hex 48`),
+   `GHCR_OWNER` (lowercase GitHub owner of this repo) and `CORS_ORIGINS`.
+5. `docker compose up -d`
 
 ## Every release
 
 ```bash
-docker compose -f docker-compose.prod.yml pull
-docker compose -f docker-compose.prod.yml up -d
+docker compose pull
+docker compose up -d
 ```
 
 Roll back: set `IMAGE_TAG=<short sha>` in `.env` and run the same two commands.
@@ -42,13 +46,14 @@ Roll back: set `IMAGE_TAG=<short sha>` in `.env` and run the same two commands.
 - **Alembic** migrations run automatically when a service container starts (`alembic upgrade head`). When you scale a
   service to several replicas, set `RUN_MIGRATIONS=false` on all but one.
 - New schema change: `cd services/<name> && alembic revision -m "what changed"`, edit the file, commit. It is applied on the next deploy.
-- Back up: `docker compose -f docker-compose.prod.yml exec -T postgres pg_dumpall -U postgres | gzip > backup-$(date +%F).sql.gz`
+- Back up: `docker compose exec -T db pg_dumpall -U stiamo | gzip > backup-$(date +%F).sql.gz`
 
-## Public routes (Caddy, automatic HTTPS)
+## Public routes (Traefik, Let's Encrypt via your `letsencrypt` resolver)
 
 | Path | Service |
 | --- | --- |
 | `/v1/auth/*`, `/v1/users/*` | identity |
 | `/v1/collections/*` | records |
 
-The frontend will use `https://<DOMAIN>` as its single API base URL. Remember to put its origin in `CORS_ORIGINS`.
+The frontend uses `https://stiamo-be.fullstackarthur.com` as its single API base URL, and its origin goes in `CORS_ORIGINS`.
+Interactive docs (`/docs`) are not routed publicly. The database is only on the private `stiamo-net` network.
