@@ -1,6 +1,6 @@
 # Workspace-level tooling only. Each deployable lives in services/<name> with its own pyproject.
 [tool.ruff]
-line-length = 110
+line-length = 120
 target-version = "py311"
 extend-exclude = [".venv"]
 
