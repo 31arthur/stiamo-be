@@ -9,9 +9,19 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.domain.common import EntityRef, Outcome, TimeSlot, to_dt, to_iso
+from app.domain.goals import CheckIn, Goal, KeyResult
 from app.domain.history import Activity, FieldChange, Link
+from app.domain.plans import ActionPlan
 from app.domain.work import AgendaItem, Attempt, DueDate, FollowUp, Meeting, Task
-from app.infrastructure.db.models import ActivityModel, FollowUpModel, LinkModel, MeetingModel, TaskModel
+from app.infrastructure.db.models import (
+    ActivityModel,
+    FollowUpModel,
+    GoalModel,
+    LinkModel,
+    MeetingModel,
+    PlanModel,
+    TaskModel,
+)
 
 
 @dataclass(frozen=True)
@@ -173,6 +183,39 @@ def _meeting_from_row(m: MeetingModel) -> Meeting:
     )
 
 
+def _plan_to_row(p: ActionPlan) -> dict[str, Any]:
+    return {
+        **base_row(p), "title": p.title, "objective": p.objective, "workspace": p.workspace, "status": p.status,
+        "due_date": p.due_date, **ref_to_cols(p.origin, "origin"), "task_id": p.task_id, "doc": p.doc,
+    }
+
+
+def _plan_from_row(m: PlanModel) -> ActionPlan:
+    return ActionPlan(
+        **base_fields(m), title=m.title, objective=m.objective, workspace=m.workspace, status=m.status,
+        due_date=m.due_date, origin=ref_from_cols(m, "origin"), task_id=m.task_id, doc=m.doc,
+    )
+
+
+def _goal_to_row(g: Goal) -> dict[str, Any]:
+    return {
+        **base_row(g), "title": g.title, "description": g.description, "workspace": g.workspace,
+        "horizon": g.horizon, "start_date": g.start_date, "target_date": g.target_date, "status": g.status,
+        "key_results": _dump_list(g.key_results), "check_ins": _dump_list(g.check_ins),
+    }
+
+
+def _goal_from_row(m: GoalModel) -> Goal:
+    return Goal(
+        **base_fields(m), title=m.title, description=m.description, workspace=m.workspace, horizon=m.horizon,
+        start_date=m.start_date, target_date=m.target_date, status=m.status,
+        key_results=[KeyResult.model_validate(k) for k in m.key_results],
+        check_ins=[CheckIn.model_validate(c) for c in m.check_ins],
+    )
+
+
+PLAN = Mapper(PlanModel, _plan_to_row, _plan_from_row)
+GOAL = Mapper(GoalModel, _goal_to_row, _goal_from_row)
 TASK = Mapper(TaskModel, _task_to_row, _task_from_row)
 FOLLOW_UP = Mapper(FollowUpModel, _follow_up_to_row, _follow_up_from_row)
 MEETING = Mapper(MeetingModel, _meeting_to_row, _meeting_from_row)

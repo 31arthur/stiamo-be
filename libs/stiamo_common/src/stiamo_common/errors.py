@@ -3,6 +3,7 @@
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
 
 
@@ -76,4 +77,14 @@ def install_error_handlers(app: FastAPI) -> None:
         return JSONResponse(
             status_code=409,
             content={"error": {"code": "conflict", "message": "The change conflicts with existing data."}},
+        )
+
+    @app.exception_handler(ValidationError)
+    async def _model_invalid(_: Request, exc: ValidationError) -> JSONResponse:
+        # A domain model rejected a value the use case built or loaded.
+        first = exc.errors()[0] if exc.errors() else {}
+        where = ".".join(str(p) for p in first.get("loc", ()))
+        return JSONResponse(
+            status_code=422,
+            content={"error": {"code": "validation_failed", "message": f"{where}: {first.get('msg', 'invalid value')}"}},
         )
