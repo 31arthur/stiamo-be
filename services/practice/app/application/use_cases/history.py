@@ -56,3 +56,9 @@ class HistoryUseCases:
             raise ValidationFailed("Only attached and detached events can be recorded from outside")
         await self.log.record(user_id, ref=ref, title=title or KIND_LABEL[ref.kind], action=action,  # type: ignore[arg-type]
                               summary=required(summary, "Summary"))
+
+    async def all_activity(self, user_id: str, after: str | None, limit: int):
+        return await self.env.stores.activity.list(user_id, after=after, limit=limit)
+
+    async def all_links(self, user_id: str, after: str | None, limit: int):
+        return await self.env.stores.link.list(user_id, after=after, limit=limit)

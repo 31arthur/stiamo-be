@@ -24,13 +24,14 @@ from app.domain.cases import (
     search_diary,
     unrecorded_hearings,
 )
-from app.domain.common import DomainModel, ISODate, Minutes, Outcome
+from app.domain.common import DomainModel, ISODate, Minutes, Outcome, draft_of
 from app.domain.plans import StepPool
 from app.presentation import deps
 from app.presentation.crud_router import crud_router, dump
 from app.presentation.routers.plans import StepBody
 
 cases = crud_router(prefix="/v1/cases", tag="cases", model=LegalCase, service_dep=deps.case_service)
+HearingDraft = draft_of(Hearing)
 hearings = crud_router(prefix="/v1/hearings", tag="hearings", model=Hearing, service_dep=deps.hearing_service)
 
 #: Registered before the CRUD routers so `/v1/hearings/diary` isn't read as a hearing id.
@@ -175,6 +176,13 @@ async def record_hearing(hearing_id: str, body: RecordBody, principal: deps.Curr
         "nextHearing": dump(result.next_hearing) if result.next_hearing else None,
         "plan": dump(result.plan) if result.plan else None,
     }
+
+
+@extra.put("/v1/hearings/{hearing_id}/listing", summary="Save a hearing and report the same-day listings folded into it")
+async def save_listing(hearing_id: str, body: HearingDraft, principal: deps.CurrentPrincipal,
+                       svc: Hearings):
+    result = await svc.save_listing(principal.user_id, hearing_id, body)
+    return {"hearing": dump(result.hearing), "merged": [dump(h) for h in result.merged]}
 
 
 class CasesBody(DomainModel):

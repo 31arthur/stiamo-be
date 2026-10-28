@@ -1,6 +1,7 @@
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Query, Response, status
+from stiamo_common.errors import ValidationFailed
 
 from app.application.use_cases.history import HistoryUseCases
 from app.domain.common import DomainModel, EntityKind, EntityRef
@@ -29,11 +30,18 @@ class NoteIn(DomainModel):
     text: str
 
 
-@router.get("/activity", summary="A record's own history, newest first")
-async def history(principal: deps.CurrentPrincipal, svc: Service, kind: EntityKind, id: str,
-                  limit: Annotated[int, Query(ge=1, le=500)] = 200) -> dict[str, Any]:
-    items = await svc.history_of(principal.user_id, EntityRef(kind=kind, id=id), limit)
-    return {"items": [dump(a) for a in items]}
+@router.get("/activity", summary="A record's own history, newest first; without a record, every line (paged by id)")
+async def history(principal: deps.CurrentPrincipal, svc: Service, kind: EntityKind | None = None, id: str | None = None,
+                  limit: Annotated[int, Query(ge=1, le=1000)] = 200, after: str | None = None) -> dict[str, Any]:
+    if (kind is None) != (id is None):
+        raise ValidationFailed("Give both kind and id, or neither")
+    if kind and id:
+        items = await svc.history_of(principal.user_id, EntityRef(kind=kind, id=id), limit)
+        return {"items": [dump(a) for a in items], "nextCursor": None}
+    items = await svc.all_activity(principal.user_id, after, limit + 1)
+    more = len(items) > limit
+    items = items[:limit]
+    return {"items": [dump(a) for a in items], "nextCursor": items[-1].id if more and items else None}
 
 
 @router.post("/activity/notes", status_code=status.HTTP_204_NO_CONTENT, summary="Add a note to a record's thread")
@@ -56,9 +64,18 @@ async def add_event(body: EventIn, principal: deps.CurrentPrincipal, svc: Servic
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-@router.get("/links", summary="Links touching a record")
-async def links(principal: deps.CurrentPrincipal, svc: Service, kind: EntityKind, id: str) -> dict[str, Any]:
-    return {"items": [dump(item) for item in await svc.links_of(principal.user_id, EntityRef(kind=kind, id=id))]}
+@router.get("/links", summary="Links touching a record; without a record, every link (paged by id)")
+async def links(principal: deps.CurrentPrincipal, svc: Service, kind: EntityKind | None = None, id: str | None = None,
+                limit: Annotated[int, Query(ge=1, le=1000)] = 500, after: str | None = None) -> dict[str, Any]:
+    if (kind is None) != (id is None):
+        raise ValidationFailed("Give both kind and id, or neither")
+    if kind and id:
+        found = await svc.links_of(principal.user_id, EntityRef(kind=kind, id=id))
+        return {"items": [dump(item) for item in found], "nextCursor": None}
+    items = await svc.all_links(principal.user_id, after, limit + 1)
+    more = len(items) > limit
+    items = items[:limit]
+    return {"items": [dump(item) for item in items], "nextCursor": items[-1].id if more and items else None}
 
 
 @router.post("/links", status_code=status.HTTP_201_CREATED, summary="Link two records")

@@ -268,11 +268,15 @@ class HearingUseCases(Crud[Hearing]):
         await self._require_cases(entity.user_id, entity)
         return await super().update(entity)
 
-    async def save(self, user_id, id, draft):
-        """Lists a hearing, or saves changes to one, together with the cases it was taken up with."""
+    async def save_listing(self, user_id, id, draft) -> "HearingSaveResult":
+        """Lists a hearing, or saves changes to one, together with the cases it was taken up with. Reports the
+        same-day listings that were folded into it."""
         wanted = draft.also_case_ids or []
         saved = await super().save(user_id, id, draft)
-        return (await self.join_cases(user_id, saved.id, wanted)).hearing
+        return await self.join_cases(user_id, saved.id, wanted)
+
+    async def save(self, user_id, id, draft):
+        return (await self.save_listing(user_id, id, draft)).hearing
 
     # --- outcome (used by the generic outcome endpoint) ------------------------------------------------
 
