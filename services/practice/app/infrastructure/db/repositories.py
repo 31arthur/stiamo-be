@@ -11,8 +11,10 @@ from app.infrastructure.db import models
 from app.infrastructure.db.joined import Join, SqlJoinedRepository
 from app.infrastructure.db.mappers import (
     ACTIVITY,
+    CASE,
     FOLLOW_UP,
     GOAL,
+    HEARING,
     LINK,
     MEETING,
     PLAN,
@@ -59,6 +61,8 @@ def build_stores(s: AsyncSession) -> Stores:
             Join(models.PlanHearingModel, "plan_id", "hearing_id", "hearing_ids"),
         ]),
         goal=SqlJoinedRepository(s, GOAL, [Join(models.GoalPlanModel, "goal_id", "plan_id", "plan_ids", [])]),
+        case=SqlRepository(s, CASE),
+        hearing=SqlJoinedRepository(s, HEARING, [Join(models.HearingCaseModel, "hearing_id", "case_id", "also_case_ids")]),
         link=SqlLinkRepository(s, LINK),
         activity=SqlActivityRepository(s, ACTIVITY),
     )

@@ -8,6 +8,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from app.domain.cases import Engagement, Hearing, HearingAction, LegalCase
 from app.domain.common import EntityRef, Outcome, TimeSlot, to_dt, to_iso
 from app.domain.goals import CheckIn, Goal, KeyResult
 from app.domain.history import Activity, FieldChange, Link
@@ -17,6 +18,8 @@ from app.infrastructure.db.models import (
     ActivityModel,
     FollowUpModel,
     GoalModel,
+    HearingModel,
+    LegalCaseModel,
     LinkModel,
     MeetingModel,
     PlanModel,
@@ -216,6 +219,55 @@ def _goal_from_row(m: GoalModel) -> Goal:
 
 PLAN = Mapper(PlanModel, _plan_to_row, _plan_from_row)
 GOAL = Mapper(GoalModel, _goal_to_row, _goal_from_row)
+def _case_to_row(c: LegalCase) -> dict[str, Any]:
+    e = c.engagement
+    return {
+        **base_row(c), "reference": c.reference, "organization": c.organization, "type": c.type, "title": c.title,
+        "client": c.client, "court_number": c.court_number, "court": c.court, "opposing_party": c.opposing_party,
+        "practice_area": c.practice_area, "stage": c.stage, "status": c.status, "summary": c.summary,
+        "filed_on": c.filed_on, "engagement_counsel_id": e.counsel_id if e else None,
+        "engagement_engaged_on": e.engaged_on if e else None, "engagement_scope": e.scope if e else None,
+        "engagement_pro_bono": e.pro_bono if e else None, "engagement_fee": e.fee if e else None,
+        "engagement_notes": e.notes if e else None,
+    }
+
+
+def _case_from_row(m: LegalCaseModel) -> LegalCase:
+    engagement = (
+        Engagement(counsel_id=m.engagement_counsel_id, engaged_on=m.engagement_engaged_on, scope=m.engagement_scope,
+                   pro_bono=bool(m.engagement_pro_bono), fee=m.engagement_fee, notes=m.engagement_notes)
+        if m.engagement_counsel_id else None
+    )
+    return LegalCase(
+        **base_fields(m), reference=m.reference, organization=m.organization, type=m.type, title=m.title,
+        client=m.client, court_number=m.court_number, court=m.court, engagement=engagement,
+        opposing_party=m.opposing_party, practice_area=m.practice_area, stage=m.stage, status=m.status,
+        summary=m.summary, filed_on=m.filed_on,
+    )
+
+
+def _hearing_to_row(h: Hearing) -> dict[str, Any]:
+    return {
+        **base_row(h), "case_id": h.case_id, "date": h.date, "time": h.time, "duration": h.duration,
+        "purpose": h.purpose, "forum": h.forum, "summary": h.summary, "bench": h.bench, "order_text": h.order,
+        "submissions": h.submissions, "authorities": h.authorities, "evidence": h.evidence,
+        "reflections": h.reflections, "actions": _dump_list(h.actions), "next_hearing_id": h.next_hearing_id,
+        **outcome_to_cols(h.outcome),
+    }
+
+
+def _hearing_from_row(m: HearingModel) -> Hearing:
+    return Hearing(
+        **base_fields(m), case_id=m.case_id, date=m.date, time=m.time, duration=m.duration, purpose=m.purpose,
+        forum=m.forum, summary=m.summary, bench=m.bench, order=m.order_text, submissions=m.submissions,
+        authorities=m.authorities, evidence=m.evidence, reflections=m.reflections,
+        actions=[HearingAction.model_validate(a) for a in m.actions] if m.actions else None,
+        next_hearing_id=m.next_hearing_id, outcome=outcome_from_cols(m),
+    )
+
+
+CASE = Mapper(LegalCaseModel, _case_to_row, _case_from_row)
+HEARING = Mapper(HearingModel, _hearing_to_row, _hearing_from_row)
 TASK = Mapper(TaskModel, _task_to_row, _task_from_row)
 FOLLOW_UP = Mapper(FollowUpModel, _follow_up_to_row, _follow_up_from_row)
 MEETING = Mapper(MeetingModel, _meeting_to_row, _meeting_from_row)

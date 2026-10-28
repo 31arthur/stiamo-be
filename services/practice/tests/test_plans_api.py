@@ -140,6 +140,7 @@ async def test_deleting_a_plan_keeps_its_steps_as_standalone_records(client, ali
 
 async def test_coverage_of_a_task_is_exclusive_and_reversible(client, alice):
     plan = await make_plan(client, alice, steps=[], workspace="personal")
+    await client.put("/v1/cases/c9", json={"organization": "SA", "title": "Some case"}, headers=alice)
     await client.put("/v1/tasks/t1", json={"title": "Pay fee", "workspace": "fsa", "related": {"kind": "case", "id": "c9"}}, headers=alice)
     covered = (await client.post(f"/v1/plans/{plan['id']}/cover", json={"kind": "task", "id": "t1"}, headers=alice)).json()
     assert covered["taskId"] == "t1" and covered["workspace"] == "fsa" and covered["caseIds"] == ["c9"]
