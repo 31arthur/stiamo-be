@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from stiamo_common.errors import Conflict, NotFound, Unauthorized, ValidationFailed
+from stiamo_common.errors import Conflict, Forbidden, NotFound, Unauthorized, ValidationFailed
 
 from app.application.dto import AuthResult
 from app.application.ports import (
@@ -34,11 +34,14 @@ def check_password_rules(password: str) -> None:
 
 class RegisterUser:
     def __init__(self, users: UserRepository, refresh_tokens: RefreshTokenRepository, hasher: PasswordHasher,
-                 tokens: TokenService, clock: Clock, ids: IdGenerator) -> None:
+                 tokens: TokenService, clock: Clock, ids: IdGenerator, open_registration: bool = True) -> None:
         self._users, self._refresh, self._hasher = users, refresh_tokens, hasher
         self._tokens, self._clock, self._ids = tokens, clock, ids
+        self._open = open_registration
 
     async def __call__(self, *, name: str, email: str, password: str) -> AuthResult:
+        if not self._open:
+            raise Forbidden("Account creation is turned off. Ask the owner to add you.")
         name, email = name.strip(), normalize_email(email)
         if not name:
             raise ValidationFailed("Name is required.")

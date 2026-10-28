@@ -47,6 +47,12 @@ services:
     depends_on: { postgres: { condition: service_healthy } }
     ports: ["8004:8000"]
 
+  gateway:
+    image: caddy:2-alpine
+    volumes: ["./infra/Caddyfile.dev:/etc/caddy/Caddyfile:ro"]
+    ports: ["8080:80"]
+    depends_on: [identity, practice, files, records]
+
 volumes:
   pgdata:
   files:

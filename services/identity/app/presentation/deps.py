@@ -39,7 +39,7 @@ def _tokens(settings: Settings) -> JwtTokenService:
 def register_uc(session: Session, request: Request) -> RegisterUser:
     return RegisterUser(SqlUserRepository(session), SqlRefreshTokenRepository(session),
                         request.app.state.hasher, _tokens(request.app.state.settings), SystemClock(),
-                        UuidGenerator())
+                        UuidGenerator(), request.app.state.settings.allow_registration)
 
 
 def login_uc(session: Session, request: Request) -> LoginUser:

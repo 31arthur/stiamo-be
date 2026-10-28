@@ -1,0 +1,21 @@
+# One address for every service, like production, so the frontend only needs VITE_API_URL=http://localhost:8080
+:80 {
+	handle /v1/auth/* {
+		reverse_proxy identity:8000
+	}
+	handle /v1/users/* {
+		reverse_proxy identity:8000
+	}
+	handle /v1/attachments* {
+		reverse_proxy files:8000
+	}
+	handle /v1/files/* {
+		reverse_proxy files:8000
+	}
+	handle /v1/collections/* {
+		reverse_proxy records:8000
+	}
+	handle {
+		reverse_proxy practice:8000
+	}
+}

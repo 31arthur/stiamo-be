@@ -14,3 +14,4 @@ storage/
 export.json
 supabase-files/
 report.json
+sample-export.json
