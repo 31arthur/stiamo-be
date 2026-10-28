@@ -33,8 +33,10 @@ async def get_session(request: Request) -> AsyncIterator[AsyncSession]:
 Session = Annotated[AsyncSession, Depends(get_session)]
 
 
-def get_env(session: Session) -> Env:
-    return Env(build_stores(session), SystemClock(), UuidGenerator())
+def get_env(session: Session, request: Request) -> Env:
+    header = request.headers.get("authorization", "")
+    token = header[7:].strip() if header.lower().startswith("bearer ") else ""
+    return Env(build_stores(session), SystemClock(), UuidGenerator(), request.app.state.files_factory(token))
 
 
 EnvDep = Annotated[Env, Depends(get_env)]

@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     jwt_issuer: str = "stiamo-identity"
     jwt_audience: str = "stiamo"
 
+    #: The files service. When set, deleting or merging a record also clears or moves its attachments.
+    files_url: str = ""
+
     cors_origins: Annotated[list[str], NoDecode] = ["http://localhost:5173"]
 
     @field_validator("cors_origins", mode="before")

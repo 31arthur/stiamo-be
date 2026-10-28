@@ -1,4 +1,4 @@
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Query, Response, status
 
@@ -39,6 +39,20 @@ async def history(principal: deps.CurrentPrincipal, svc: Service, kind: EntityKi
 @router.post("/activity/notes", status_code=status.HTTP_204_NO_CONTENT, summary="Add a note to a record's thread")
 async def add_note(body: NoteIn, principal: deps.CurrentPrincipal, svc: Service):
     await svc.add_note(principal.user_id, body.ref, body.title, body.text)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+class EventIn(DomainModel):
+    ref: EntityRef
+    title: str = ""
+    action: Literal["attached", "detached"]
+    summary: str
+
+
+@router.post("/activity/events", status_code=status.HTTP_204_NO_CONTENT,
+             summary="Record that a document was attached or removed (called by the files service)")
+async def add_event(body: EventIn, principal: deps.CurrentPrincipal, svc: Service):
+    await svc.add_event(principal.user_id, body.ref, body.title, body.action, body.summary)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

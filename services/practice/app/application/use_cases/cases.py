@@ -397,7 +397,8 @@ class HearingUseCases(Crud[Hearing]):
         await s.follow_up.save_many([
             f.model_copy(update={"subject": target, "updated_at": now})
             for f in await s.follow_up.list(user_id) if f.subject and f.subject.kind == "hearing" and f.subject.id == src.id])
-        await super().remove(user_id, src.id)
+        await self.env.files.transfer(EntityRef(kind="hearing", id=src.id), target)
+        await super().remove(user_id, src.id)  # also drops links to it and writes the history line
 
 
 class HearingActionUseCases:

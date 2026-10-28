@@ -49,3 +49,10 @@ class HistoryUseCases:
 
     async def history_of(self, user_id: str, ref: EntityRef, limit: int = 200):
         return await self.env.stores.activity.for_refs(user_id, [ref], limit)
+
+    async def add_event(self, user_id: str, ref: EntityRef, title: str, action: str, summary: str) -> None:
+        """A line written by another service (the files service records attachments added and removed)."""
+        if action not in ("attached", "detached"):
+            raise ValidationFailed("Only attached and detached events can be recorded from outside")
+        await self.log.record(user_id, ref=ref, title=title or KIND_LABEL[ref.kind], action=action,  # type: ignore[arg-type]
+                              summary=required(summary, "Summary"))
