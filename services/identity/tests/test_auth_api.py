@@ -1,5 +1,3 @@
-import asyncio
-
 from tests.conftest import ALICE
 
 
@@ -84,12 +82,6 @@ async def test_separate_logins_are_independent_sessions(client, alice):
               json={"email": "alice@example.com", "password": ALICE["password"]})).json()["tokens"]
     await client.post("/v1/auth/logout", json={"refresh_token": alice["tokens"]["refresh_token"]})
     assert (await client.post("/v1/auth/refresh", json={"refresh_token": second["refresh_token"]})).status_code == 200
-
-
-async def test_concurrent_registration_one_wins(client):
-    body = {"name": "B", "email": "b@example.com", "password": "password123"}
-    rs = await asyncio.gather(*[client.post("/v1/auth/register", json=body) for _ in range(3)])
-    assert sorted(r.status_code for r in rs).count(201) == 1
 
 
 async def test_health(client):

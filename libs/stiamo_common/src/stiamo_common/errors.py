@@ -1,7 +1,9 @@
 """Application error model shared by every service, rendered as one consistent JSON shape."""
 
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from sqlalchemy.exc import IntegrityError
 
 
 class AppError(Exception):
@@ -56,4 +58,22 @@ def install_error_handlers(app: FastAPI) -> None:
             status_code=exc.status_code,
             content={"error": {"code": exc.code, "message": exc.message}},
             headers=headers,
+        )
+
+    @app.exception_handler(RequestValidationError)
+    async def _request_invalid(_: Request, exc: RequestValidationError) -> JSONResponse:
+        first = exc.errors()[0] if exc.errors() else {}
+        where = ".".join(str(p) for p in first.get("loc", ()) if p not in ("body", "query", "path"))
+        message = f"{where}: {first.get('msg', 'invalid value')}" if where else first.get("msg", "invalid request")
+        return JSONResponse(
+            status_code=422,
+            content={"error": {"code": "validation_failed", "message": message}},
+        )
+
+    @app.exception_handler(IntegrityError)
+    async def _integrity(_: Request, __: IntegrityError) -> JSONResponse:
+        # A constraint the application didn't check first (unique key, missing parent row, …).
+        return JSONResponse(
+            status_code=409,
+            content={"error": {"code": "conflict", "message": "The change conflicts with existing data."}},
         )

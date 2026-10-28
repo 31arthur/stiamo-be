@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 
-from sqlalchemy import DateTime, TypeDecorator
+from sqlalchemy import DateTime, TypeDecorator, event
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy.pool import StaticPool
@@ -18,8 +18,18 @@ class Base(DeclarativeBase):
 def make_engine(url: str) -> AsyncEngine:
     if url.startswith("sqlite") and ":memory:" in url:
         # One shared connection so every session sees the same in-memory database (tests).
-        return create_async_engine(url, poolclass=StaticPool, connect_args={"check_same_thread": False})
-    return create_async_engine(url, pool_pre_ping=True)
+        engine = create_async_engine(url, poolclass=StaticPool, connect_args={"check_same_thread": False})
+    else:
+        engine = create_async_engine(url, pool_pre_ping=True)
+    if url.startswith("sqlite"):
+
+        @event.listens_for(engine.sync_engine, "connect")
+        def _enable_foreign_keys(dbapi_connection, _record):  # SQLite ignores foreign keys unless asked
+            cursor = dbapi_connection.cursor()
+            cursor.execute("PRAGMA foreign_keys=ON")
+            cursor.close()
+
+    return engine
 
 
 def make_session_factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
