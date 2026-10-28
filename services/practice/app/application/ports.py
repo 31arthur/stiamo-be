@@ -10,6 +10,7 @@ from typing import Generic, TypeVar
 from app.domain.common import Entity, EntityRef, to_iso
 from app.domain.directory import Client, Counsel, Project
 from app.domain.history import Activity, Link
+from app.domain.work import FollowUp, Meeting, Task
 
 T = TypeVar("T", bound=Entity)
 
@@ -66,6 +67,9 @@ class Stores:
     counsel: Repository[Counsel]
     client: Repository[Client]
     project: Repository[Project]
+    task: Repository[Task]
+    follow_up: Repository[FollowUp]
+    meeting: Repository[Meeting]
     link: LinkRepository
     activity: ActivityRepository
 

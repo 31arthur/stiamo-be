@@ -92,3 +92,20 @@ def progress_of(outcomes: list[Outcome]) -> float | None:
     """Progress over outcomes, ignoring cancelled ones: 0..1, or None when nothing counts."""
     counted = [o for o in outcomes if o.status != "cancelled"]
     return sum(outcome_score(o) for o in counted) / len(counted) if counted else None
+
+
+# --- calendar arithmetic ------------------------------------------------------------------------------
+
+
+def shift_date(date: str, days: int) -> str:
+    from datetime import date as _date
+    from datetime import timedelta
+
+    return (_date.fromisoformat(date) + timedelta(days=days)).isoformat()
+
+
+def offset_minutes(date: str, minute: int, delta: int) -> tuple[str, int]:
+    """Moves a point in time by a number of minutes, crossing midnight as needed."""
+    total = minute + delta
+    day_shift = total // 1440
+    return shift_date(date, day_shift), total - day_shift * 1440

@@ -10,7 +10,7 @@ from app.domain.common import EntityRef, to_dt
 from app.domain.directory import Client, Counsel, Project
 from app.domain.history import Activity, Link
 from app.infrastructure.db import models
-from app.infrastructure.db.mappers import ACTIVITY, LINK, Mapper, flat_mapper
+from app.infrastructure.db.mappers import ACTIVITY, FOLLOW_UP, LINK, MEETING, TASK, Mapper, flat_mapper
 
 _CHUNK = 200
 
@@ -89,6 +89,9 @@ def build_stores(s: AsyncSession) -> Stores:
         counsel=SqlRepository(s, flat_mapper(models.CounselModel, Counsel)),
         client=SqlRepository(s, flat_mapper(models.ClientModel, Client)),
         project=SqlRepository(s, flat_mapper(models.ProjectModel, Project)),
+        task=SqlRepository(s, TASK),
+        follow_up=SqlRepository(s, FOLLOW_UP),
+        meeting=SqlRepository(s, MEETING),
         link=SqlLinkRepository(s, LINK),
         activity=SqlActivityRepository(s, ACTIVITY),
     )
