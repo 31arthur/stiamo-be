@@ -125,6 +125,22 @@ class PlanUseCases(Crud[ActionPlan]):
         self.meetings = MeetingUseCases(env)
         self.goals = GoalUseCases(env)
 
+    async def _require_coverage(self, user_id: str, case_ids, hearing_ids) -> None:
+        for cid in case_ids or []:
+            if await self.env.stores.case.get(user_id, cid) is None:
+                raise ValidationFailed("One of the cases this plan covers no longer exists")
+        for hid in hearing_ids or []:
+            if await self.env.stores.hearing.get(user_id, hid) is None:
+                raise ValidationFailed("One of the hearings this plan covers no longer exists")
+
+    async def create(self, user_id, data):
+        await self._require_coverage(user_id, data.get("case_ids"), data.get("hearing_ids"))
+        return await super().create(user_id, data)
+
+    async def update(self, entity):
+        await self._require_coverage(entity.user_id, entity.case_ids, entity.hearing_ids)
+        return await super().update(entity)
+
     # --- reads ---------------------------------------------------------------------------------------------
 
     async def pool(self, user_id: str) -> StepPool:

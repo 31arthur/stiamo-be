@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Generic, TypeVar
 
+from app.domain.cases import Hearing, LegalCase
 from app.domain.common import Entity, EntityRef, to_iso
 from app.domain.directory import Client, Counsel, Project
 from app.domain.goals import Goal
@@ -74,6 +75,8 @@ class Stores:
     meeting: Repository[Meeting]
     plan: Repository[ActionPlan]
     goal: Repository[Goal]
+    case: Repository[LegalCase]
+    hearing: Repository[Hearing]
     link: LinkRepository
     activity: ActivityRepository
 

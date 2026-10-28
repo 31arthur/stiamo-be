@@ -9,7 +9,8 @@ from stiamo_common.security import Principal, make_principal_dependency
 
 from app.application.crud import Crud
 from app.application.ports import Env
-from app.application.use_cases.directory import ClientUseCases, counsel_crud, project_crud
+from app.application.use_cases.cases import CaseUseCases, CounselUseCases, HearingActionUseCases, HearingUseCases
+from app.application.use_cases.directory import ClientUseCases, project_crud
 from app.application.use_cases.history import HistoryUseCases
 from app.application.use_cases.plans import GoalUseCases, PlanUseCases
 from app.application.use_cases.work import FollowUpUseCases, MeetingUseCases, RecordOutcome, task_crud
@@ -41,8 +42,8 @@ EnvDep = Annotated[Env, Depends(get_env)]
 # --- aggregate services (each is a Crud or a subclass with extra rules) -------------------------------------
 
 
-def counsel_service(env: EnvDep) -> Crud:
-    return counsel_crud(env)
+def counsel_service(env: EnvDep) -> CounselUseCases:
+    return CounselUseCases(env)
 
 
 def client_service(env: EnvDep) -> ClientUseCases:
@@ -66,7 +67,7 @@ def meeting_service(env: EnvDep) -> MeetingUseCases:
 
 
 def record_outcome(env: EnvDep) -> RecordOutcome:
-    return RecordOutcome(env)
+    return RecordOutcome(env, hearing_outcome=HearingUseCases(env).set_outcome)
 
 
 def plan_service(env: EnvDep) -> PlanUseCases:
@@ -75,6 +76,18 @@ def plan_service(env: EnvDep) -> PlanUseCases:
 
 def goal_service(env: EnvDep) -> GoalUseCases:
     return GoalUseCases(env)
+
+
+def case_service(env: EnvDep) -> CaseUseCases:
+    return CaseUseCases(env)
+
+
+def hearing_service(env: EnvDep) -> HearingUseCases:
+    return HearingUseCases(env)
+
+
+def hearing_action_service(env: EnvDep) -> HearingActionUseCases:
+    return HearingActionUseCases(env)
 
 
 def history_service(env: EnvDep) -> HistoryUseCases:

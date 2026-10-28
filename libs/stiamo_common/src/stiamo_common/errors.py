@@ -86,5 +86,5 @@ def install_error_handlers(app: FastAPI) -> None:
         where = ".".join(str(p) for p in first.get("loc", ()))
         return JSONResponse(
             status_code=422,
-            content={"error": {"code": "validation_failed", "message": f"{where}: {first.get('msg', 'invalid value')}"}},
+            content={"error": {"code": "validation_failed", "message": f"{where}: {first.get('msg', 'invalid')}"}},
         )

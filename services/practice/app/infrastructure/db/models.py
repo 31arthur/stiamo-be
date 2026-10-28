@@ -8,7 +8,7 @@ instants are timezone-aware timestamps. Small nested lists that are never querie
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, Boolean, ForeignKeyConstraint, Index, Integer, String, Text
+from sqlalchemy import JSON, Boolean, ForeignKeyConstraint, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 from stiamo_common.db import Base, UTCDateTime
@@ -206,7 +206,7 @@ class PlanModel(Owned, Base):
 
 
 class PlanCaseModel(Base):
-    """Which cases a plan covers (the case side is enforced once cases exist)."""
+    """Which cases a plan covers."""
 
     __tablename__ = "plan_cases"
     user_id: Mapped[str] = mapped_column(String(36), primary_key=True)
@@ -215,6 +215,7 @@ class PlanCaseModel(Base):
     position: Mapped[int] = mapped_column(Integer, default=0)
     __table_args__ = (
         ForeignKeyConstraint(["user_id", "plan_id"], ["plans.user_id", "plans.id"], ondelete="CASCADE"),
+        ForeignKeyConstraint(["user_id", "case_id"], ["legal_cases.user_id", "legal_cases.id"], ondelete="CASCADE"),
         Index("ix_plan_cases_case", "user_id", "case_id"),
     )
 
@@ -229,6 +230,7 @@ class PlanHearingModel(Base):
     position: Mapped[int] = mapped_column(Integer, default=0)
     __table_args__ = (
         ForeignKeyConstraint(["user_id", "plan_id"], ["plans.user_id", "plans.id"], ondelete="CASCADE"),
+        ForeignKeyConstraint(["user_id", "hearing_id"], ["hearings.user_id", "hearings.id"], ondelete="CASCADE"),
         Index("ix_plan_hearings_hearing", "user_id", "hearing_id"),
     )
 
@@ -259,4 +261,76 @@ class GoalPlanModel(Base):
         ForeignKeyConstraint(["user_id", "goal_id"], ["goals.user_id", "goals.id"], ondelete="CASCADE"),
         ForeignKeyConstraint(["user_id", "plan_id"], ["plans.user_id", "plans.id"], ondelete="CASCADE"),
         Index("ix_goal_plans_plan", "user_id", "plan_id"),
+    )
+
+
+class LegalCaseModel(Owned, Base):
+    __tablename__ = "legal_cases"
+    reference: Mapped[str] = mapped_column(String(40))
+    organization: Mapped[str] = mapped_column(String(8))
+    type: Mapped[str] = mapped_column(String(24))
+    title: Mapped[str] = mapped_column(String(500))
+    client: Mapped[str | None] = mapped_column(String(300))
+    court_number: Mapped[str | None] = mapped_column(String(120))
+    court: Mapped[str | None] = mapped_column(String(300))
+    opposing_party: Mapped[str | None] = mapped_column(String(300))
+    practice_area: Mapped[str | None] = mapped_column(String(200))
+    stage: Mapped[str | None] = mapped_column(String(200))
+    status: Mapped[str] = mapped_column(String(10))
+    summary: Mapped[str] = mapped_column(Text, default="")
+    filed_on: Mapped[str | None] = mapped_column(String(10))
+    # Outside counsel briefed on the case; all empty when we handle it ourselves.
+    engagement_counsel_id: Mapped[str | None] = mapped_column(String(64))
+    engagement_engaged_on: Mapped[str | None] = mapped_column(String(10))
+    engagement_scope: Mapped[str | None] = mapped_column(Text)
+    engagement_pro_bono: Mapped[bool | None] = mapped_column(Boolean)
+    engagement_fee: Mapped[str | None] = mapped_column(Text)
+    engagement_notes: Mapped[str | None] = mapped_column(Text)
+    __table_args__ = (
+        UniqueConstraint("user_id", "reference", name="uq_legal_cases_reference"),
+        Index("ix_legal_cases_org", "user_id", "organization"),
+        Index("ix_legal_cases_status", "user_id", "status"),
+        Index("ix_legal_cases_counsel", "user_id", "engagement_counsel_id"),
+        sync_index("legal_cases"),
+    )
+
+
+class HearingModel(Owned, OutcomeCols, Base):
+    __tablename__ = "hearings"
+    case_id: Mapped[str] = mapped_column(String(64))
+    date: Mapped[str] = mapped_column(String(10))
+    time: Mapped[int | None] = mapped_column(Integer)
+    duration: Mapped[int] = mapped_column(Integer)
+    purpose: Mapped[str] = mapped_column(String(500))
+    forum: Mapped[str | None] = mapped_column(String(300))
+    summary: Mapped[str | None] = mapped_column(Text)
+    bench: Mapped[str | None] = mapped_column(String(500))
+    order_text: Mapped[str | None] = mapped_column(Text)
+    submissions: Mapped[str | None] = mapped_column(Text)
+    authorities: Mapped[list[str] | None] = mapped_column(Json)
+    evidence: Mapped[str | None] = mapped_column(Text)
+    reflections: Mapped[str | None] = mapped_column(Text)
+    actions: Mapped[list[dict[str, Any]] | None] = mapped_column(Json)
+    next_hearing_id: Mapped[str | None] = mapped_column(String(64))
+    __table_args__ = (
+        ForeignKeyConstraint(["user_id", "case_id"], ["legal_cases.user_id", "legal_cases.id"], ondelete="CASCADE"),
+        Index("ix_hearings_date", "user_id", "date"),
+        Index("ix_hearings_case", "user_id", "case_id"),
+        Index("ix_hearings_open", "user_id", "outcome_status"),
+        sync_index("hearings"),
+    )
+
+
+class HearingCaseModel(Base):
+    """The other cases a hearing is heard together with (the main case is `hearings.case_id`)."""
+
+    __tablename__ = "hearing_cases"
+    user_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    hearing_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    case_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    position: Mapped[int] = mapped_column(Integer, default=0)
+    __table_args__ = (
+        ForeignKeyConstraint(["user_id", "hearing_id"], ["hearings.user_id", "hearings.id"], ondelete="CASCADE"),
+        ForeignKeyConstraint(["user_id", "case_id"], ["legal_cases.user_id", "legal_cases.id"], ondelete="CASCADE"),
+        Index("ix_hearing_cases_case", "user_id", "case_id"),
     )

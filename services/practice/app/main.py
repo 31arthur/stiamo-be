@@ -6,7 +6,7 @@ from stiamo_common.db import make_engine, make_session_factory
 from stiamo_common.errors import install_error_handlers
 
 from app.config import Settings, get_settings
-from app.presentation.routers import directory, history, plans, work
+from app.presentation.routers import directory, history, legal, plans, work
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -26,7 +26,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins, allow_methods=["*"], allow_headers=["*"])
     install_error_handlers(app)
 
-    for router in (directory.counsel, directory.clients, directory.extra, directory.projects, history.router,
+    for router in (legal.views, legal.cases, legal.hearings, legal.extra, directory.counsel, directory.clients, directory.extra, directory.projects, history.router,
                    work.tasks, work.follow_ups, work.meetings, work.extra,
                    plans.plans, plans.goals, plans.extra):
         app.include_router(router)

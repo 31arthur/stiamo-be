@@ -174,7 +174,7 @@ class OutcomeResult:
 
 
 @dataclass
-class _Context:
+class OutcomeContext:
     workspace: str = "personal"
     plan_id: str | None = None
     contact: str | None = None
@@ -217,19 +217,19 @@ class RecordOutcome:
         })
         return OutcomeResult(EntityRef(kind="followUp", id=follow_up.id))
 
-    async def _apply(self, user_id: str, ref: EntityRef, recorded: Outcome) -> _Context:
+    async def _apply(self, user_id: str, ref: EntityRef, recorded: Outcome) -> OutcomeContext:
         if ref.kind == "task":
             t = await self.tasks.require(user_id, ref.id, "Task")
             await self.tasks.update(t.model_copy(update={"outcome": recorded}))
-            return _Context(t.workspace, t.plan_id)
+            return OutcomeContext(t.workspace, t.plan_id)
         if ref.kind == "followUp":
             f = await self.follow_ups.require(user_id, ref.id, "Follow-up")
             await self.follow_ups.update(f.model_copy(update={"outcome": recorded}))
-            return _Context(f.workspace, f.plan_id, f.contact)
+            return OutcomeContext(f.workspace, f.plan_id, f.contact)
         if ref.kind == "meeting":
             m = await self.meetings.require(user_id, ref.id, "Meeting")
             await self.meetings.update(m.model_copy(update={"outcome": recorded}))
-            return _Context(m.workspace, m.prep_plan_id, m.contact or m.counterpart)
+            return OutcomeContext(m.workspace, m.prep_plan_id, m.contact or m.counterpart)
         if ref.kind == "hearing" and self._hearing_outcome:
             return await self._hearing_outcome(user_id, ref, recorded)
         raise NotFound(f"Nothing to record an outcome on for {ref.kind}.")
