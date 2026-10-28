@@ -1,0 +1,63 @@
+# Production stack for the VPS. Images come from GHCR (built by .github/workflows/publish.yml).
+# Usage:  cp .env.prod.example .env && docker compose -f docker-compose.prod.yml pull && docker compose -f docker-compose.prod.yml up -d
+name: stiamo
+
+x-service: &service
+  restart: unless-stopped
+  depends_on:
+    postgres: { condition: service_healthy }
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      IDENTITY_DB_PASSWORD: ${IDENTITY_DB_PASSWORD:?set IDENTITY_DB_PASSWORD}
+      RECORDS_DB_PASSWORD: ${RECORDS_DB_PASSWORD:?set RECORDS_DB_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./init-databases.sh:/docker-entrypoint-initdb.d/init-databases.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      retries: 20
+    # No published ports: only the services on this compose network can reach the database.
+
+  identity:
+    <<: *service
+    image: ghcr.io/${GHCR_OWNER:?set GHCR_OWNER}/stiamo-be-identity:${IMAGE_TAG:-latest}
+    environment:
+      IDENTITY_ENV: production
+      IDENTITY_DATABASE_URL: postgresql+asyncpg://stiamo_identity:${IDENTITY_DB_PASSWORD}@postgres:5432/stiamo_identity
+      IDENTITY_JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET}
+      IDENTITY_CORS_ORIGINS: ${CORS_ORIGINS:-["http://localhost:5173"]}
+      IDENTITY_ACCESS_TTL_MINUTES: ${ACCESS_TTL_MINUTES:-15}
+      IDENTITY_REFRESH_TTL_DAYS: ${REFRESH_TTL_DAYS:-30}
+
+  records:
+    <<: *service
+    image: ghcr.io/${GHCR_OWNER:?set GHCR_OWNER}/stiamo-be-records:${IMAGE_TAG:-latest}
+    environment:
+      RECORDS_ENV: production
+      RECORDS_DATABASE_URL: postgresql+asyncpg://stiamo_records:${RECORDS_DB_PASSWORD}@postgres:5432/stiamo_records
+      RECORDS_JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET}
+      RECORDS_CORS_ORIGINS: ${CORS_ORIGINS:-["http://localhost:5173"]}
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    depends_on: [identity, records]
+
+volumes:
+  pgdata:
+  caddy_data:
