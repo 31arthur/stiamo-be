@@ -59,6 +59,19 @@ its sole hearings, a plan frees its steps, and so on.
 | `AttachmentUseCases` | `POST /v1/attachments` (multipart), `POST /v1/attachments/links`, `GET /v1/attachments?kind=&id=`, `PATCH`/`DELETE /v1/attachments/{id}` |
 | `FileStore.url` | `POST /v1/attachments/{id}/url` → short-lived `/v1/files/{token}` for `<img>`/`<iframe>`; `GET /v1/attachments/{id}/content` with the header |
 
+## Drive search (`drive`)
+
+Searches the owner's Google Drive, names and contents, without copying anything. Only the emails listed in
+`DRIVE_ALLOWED_EMAILS` may use it (see [DRIVE_SETUP.md](DRIVE_SETUP.md)).
+
+| Call | Meaning |
+| --- | --- |
+| `GET /v1/drive/status` | `{available, folder?, reason?}`: whether the signed-in user can search, and the shared folder's name |
+| `GET /v1/drive/search?q=&limit=&pageToken=` | `{items: [{id, name, mimeType, modifiedTime, webViewLink, size?}], nextPageToken?}`; every word must match, `"quoted phrases"` stay together; no `q` lists the newest files |
+| `POST /v1/drive/suggest` `{terms: [...]}` | files mentioning any of the details (case number, court number, parties…), best first, each with the terms it `matched` |
+
+Attach a result to a record with `POST /v1/attachments/links` (`url` = the file's `webViewLink`).
+
 ## What stays in the frontend
 
 Pure presentation and device logic is deliberately not duplicated here: the day planner's reflow/packing

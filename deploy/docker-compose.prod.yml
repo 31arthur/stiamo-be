@@ -5,6 +5,7 @@
 #   /v1/collections/*        -> records
 #   /v1/tasks, /v1/cases, /v1/plans, ... (the working domain) -> practice
 #   /v1/attachments/*, /v1/files/*  -> files
+#   /v1/drive/*              -> drive (searches your Google Drive; copies nothing)
 name: stiamo-be
 
 x-logging: &logging
@@ -146,6 +147,40 @@ services:
       - "traefik.http.services.stiamo-files.loadbalancer.healthcheck.path=/health"
       - "traefik.http.services.stiamo-files.loadbalancer.healthcheck.interval=30s"
       - "traefik.http.services.stiamo-files.loadbalancer.healthcheck.timeout=10s"
+
+  drive:
+    image: ghcr.io/${GHCR_OWNER:?set GHCR_OWNER}/stiamo-be-drive:${IMAGE_TAG:-latest}
+    pull_policy: always
+    restart: unless-stopped
+    expose: ["8000"]
+    environment:
+      DRIVE_ENV: production
+      DRIVE_JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET}
+      DRIVE_CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
+      DRIVE_CREDENTIALS_FILE: /run/secrets/drive.json
+      DRIVE_FOLDER_ID: ${DRIVE_FOLDER_ID:-}
+      DRIVE_ALLOWED_EMAILS: ${DRIVE_ALLOWED_EMAILS:-}
+    # The service account's key lives in ./secrets/drive.json on the server (see docs/DRIVE_SETUP.md); never in Git.
+    volumes:
+      - ./secrets:/run/secrets:ro
+    networks: [stiamo-net, traefik-proxy]
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 256M }
+        reservations: { memory: 64M }
+    logging: *logging
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik-proxy"
+      - "traefik.http.routers.stiamo-drive.rule=Host(`stiamo-be.fullstackarthur.com`) && PathPrefix(`/v1/drive`)"
+      - "traefik.http.routers.stiamo-drive.entrypoints=websecure"
+      - "traefik.http.routers.stiamo-drive.tls=true"
+      - "traefik.http.routers.stiamo-drive.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.stiamo-drive.middlewares=stiamo-retry"
+      - "traefik.http.services.stiamo-drive.loadbalancer.server.port=8000"
+      - "traefik.http.services.stiamo-drive.loadbalancer.healthcheck.path=/health"
+      - "traefik.http.services.stiamo-drive.loadbalancer.healthcheck.interval=30s"
+      - "traefik.http.services.stiamo-drive.loadbalancer.healthcheck.timeout=10s"
 
   db:
     image: postgres:16-alpine

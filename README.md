@@ -9,6 +9,8 @@ Backend for [Stiamo](https://github.com/31arthur/stiamo), built with **FastAPI**
 | `services/records` | Generic per-user document store (kept for now; superseded by `practice`) |
 | `services/practice` | The working domain, typed and relational: tasks, meetings, follow-ups, cases, hearings, plans, goals, clients, counsel, links, history |
 | `services/files` | Attachments: uploaded files and linked documents |
+| `services/drive` | Searches the contents of your Google Drive letters without copying them |
+| `docs/DRIVE_SETUP.md` | Connecting Google Drive (service account, sharing, server settings) |
 | `docs/ARCHITECTURE.md` | Layers, service boundaries, auth flow |
 | `docs/API.md` | Every endpoint, mapped to the frontend's use cases |
 | `docs/MIGRATING_FROM_SUPABASE.md` | Moving accounts, records and files from Supabase to the VPS |
