@@ -15,3 +15,6 @@ export.json
 supabase-files/
 report.json
 sample-export.json
+secrets/
+drive-credentials.json
+*-credentials.json

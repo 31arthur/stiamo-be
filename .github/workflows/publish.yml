@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        target: [libs/stiamo_common, services/identity, services/records, services/practice, services/files]
+        target: [libs/stiamo_common, services/identity, services/records, services/practice, services/files, services/drive]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -31,7 +31,7 @@ jobs:
       packages: write
     strategy:
       matrix:
-        service: [identity, records, practice, files]
+        service: [identity, records, practice, files, drive]
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
