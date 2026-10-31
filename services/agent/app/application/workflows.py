@@ -35,6 +35,7 @@ from app.domain.llm import DECISION_MODELS, AiError, Message
 from app.domain.workflows import (
     MAIL_FETCH,
     MAX_ITEM_CHARS,
+    MAX_REFINEMENTS,
     SAMPLE_ITEMS,
     TEST_ITEMS,
     Item,
@@ -42,11 +43,14 @@ from app.domain.workflows import (
     account_of,
     apply_filters,
     decide_status,
+    extra_guidance,
+    feedback_prompt,
     item_from_mail,
     item_from_record,
     jev_batch,
     parse_batch,
     parse_decision,
+    parse_feedback,
     parse_manual,
     protected_by,
     render_batch,
@@ -124,6 +128,14 @@ class Fetched:
     remaining: int = 0
     #: How many messages are in the range at all.
     total: int = 0
+
+
+def parse_sender_domain(excerpt: str) -> str | None:
+    """The domain of the From address at the top of a kept email."""
+    import re
+
+    m = re.search(r"^From:.*?<?([\w.+'-]+@([\w-]+(?:\.[\w-]+)+))>?\s*$", excerpt, re.MULTILINE)
+    return m.group(2).lower() if m else None
 
 
 def workflow_json(w: Workflow, counts: dict[str, int] | None = None) -> dict[str, Any]:
@@ -303,7 +315,7 @@ class WorkflowService:
                 return Verdict(choice, float((answer.get("probabilities") or {}).get(choice, answer.get("confidence", 0.0))), "", {}, cost)
 
             async def one(item: Item) -> Verdict:
-                out = await jev.decide(model=jev_model, state=f"{item.title}\n{item.text}", questions={"label": {"type": "choice", "instructions": cfg.prompt, "criteria": criteria}})
+                out = await jev.decide(model=jev_model, state=f"{item.title}\n{item.text}", questions={"label": {"type": "choice", "instructions": f"{cfg.prompt}\n\n{extra_guidance(cfg)}".strip(), "criteria": criteria}})
                 cost = float(out.get("cost") or 0)
                 return verdict((out.get("answers") or {}).get("label") or {}, cost) or Verdict(None, 0.0, "The decision model's answer wasn't one of the labels.", {}, cost)
 
@@ -395,7 +407,7 @@ class WorkflowService:
                 state, questions = jev_batch(cfg, SAMPLE_ITEMS)
             else:
                 state = f"{SAMPLE_ITEMS[0].title}\n{SAMPLE_ITEMS[0].text}"
-                questions = {"label": {"type": "choice", "instructions": cfg.prompt, "criteria": {lb.name: lb.description for lb in cfg.labels}}}
+                questions = {"label": {"type": "choice", "instructions": f"{cfg.prompt}\n\n{extra_guidance(cfg)}".strip(), "criteria": {lb.name: lb.description for lb in cfg.labels}}}
             return {**out, "provider": "openrouter", "model": model, "system": None, "user": state, "questions": questions}
         sel, _ = selection_of(s, "draft")
         user = render_batch(SAMPLE_ITEMS) if batch else wrap_item(SAMPLE_ITEMS[0])
@@ -548,6 +560,65 @@ class WorkflowService:
         iso = e.started_at.astimezone(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
         return {"id": e.id, "startedAt": iso, "durationMs": e.duration_ms, "status": e.status, "summary": e.summary, "counts": e.counts, "stats": e.stats, "error": e.error, "version": e.version, "now": now}
 
+    # --- learning from corrections ----------------------------------------------------------------------------
+
+    async def analyse_feedback(self, who: Who, workflow_id: str, item_id: str, reason: str) -> dict[str, Any]:
+        """"This wasn't spam, because…": reads the whole setup, the email and the reason, and suggests one general point to add to the
+        prompt. Nothing is changed here: the person sees the suggestion first. Without a model to ask, the reason itself is the suggestion."""
+        w = await self._mine(who, workflow_id)
+        cfg = self._config(w.config)
+        reason = reason.strip()
+        if not reason:
+            raise ValidationFailed("Say why it isn't spam: the reason is what the agent learns from.")
+        entry = await self._repo.entry(who.user_id, workflow_id, item_id)
+        if entry is None:
+            raise NotFound("No such email in this agent's records.")
+        sender = parse_sender_domain(entry.excerpt)
+        plain = {"point": reason[:300], "duplicate": False, "protectDomain": None, "note": "", "source": "reason", "senderDomain": sender}
+        s = await self._settings.get(who.user_id) or UserSettings(who.user_id)
+        sel, _ = selection_of(s, workflow_id)
+        if not sel or not sel.get("modelId"):
+            return {**plain, "note": "No chat model is chosen for this agent, so your own words are suggested. Choose one in Settings to have it written as a general rule."}
+        system, user = feedback_prompt(cfg, who.name, entry.excerpt, reason, entry.label)
+        try:
+            reply = await self._llm(sel["providerId"], s.keys[sel["providerId"]]).chat(model=sel["modelId"], messages=[Message("system", system), Message("user", user)], tools=[], thinking=sel.get("thinking", "off"))
+        except AiError as exc:
+            return {**plain, "note": f"The model couldn't be asked ({exc}), so your own words are suggested."}
+        parsed = parse_feedback(reply.text)
+        if parsed is None:
+            return {**plain, "note": "The model's answer couldn't be read, so your own words are suggested."}
+        return {**parsed, "source": "model", "senderDomain": sender}
+
+    async def add_refinement(self, who: Who, workflow_id: str, point: str | None, protect_domain: str | None) -> dict[str, Any]:
+        """Adds a point to what the agent has learned, and/or a domain it always keeps. What the person wrote is never touched."""
+        w = await self._mine(who, workflow_id)
+        cfg = self._config(w.config)
+        text = (point or "").strip()[:400]
+        if text and text.lower() not in [r.lower() for r in cfg.refinements]:
+            if len(cfg.refinements) >= MAX_REFINEMENTS:
+                raise ValidationFailed(f"It has learned {MAX_REFINEMENTS} points already. Remove one in Settings first.")
+            cfg.refinements = [*cfg.refinements, text]
+        domain = (protect_domain or "").strip().lower().lstrip("@")
+        if domain and domain not in cfg.rules.protected_domains:
+            cfg.rules = cfg.rules.model_copy(update={"protected_domains": [*cfg.rules.protected_domains, domain]})
+        new = self._config(cfg.model_dump(by_alias=True, mode="json")).model_dump(by_alias=True, mode="json")
+        if new != w.config:
+            w.version += 1
+            w.config = new
+            await self._repo.save(w)
+        return workflow_json(w, await self._repo.counts(w.id))
+
+    async def remove_refinement(self, who: Who, workflow_id: str, index: int) -> dict[str, Any]:
+        w = await self._mine(who, workflow_id)
+        cfg = self._config(w.config)
+        if not 0 <= index < len(cfg.refinements):
+            raise NotFound("No such point.")
+        cfg.refinements = [r for i, r in enumerate(cfg.refinements) if i != index]
+        w.version += 1
+        w.config = cfg.model_dump(by_alias=True, mode="json")
+        await self._repo.save(w)
+        return workflow_json(w, await self._repo.counts(w.id))
+
     # --- review ------------------------------------------------------------------------------------------------
 
     async def review(self, who: Who, workflow_id: str) -> dict[str, Any]:
@@ -556,7 +627,7 @@ class WorkflowService:
         iso = lambda d: d.astimezone(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z") if d else None  # noqa: E731
         return {"items": [{"id": r.item_id, "title": r.title, "excerpt": r.excerpt, "label": r.label, "confidence": round(r.confidence, 3), "reason": r.reason, "status": r.status, "version": r.version, "at": iso(r.created_at)} for r in rows]}
 
-    async def decide_review(self, who: Who, token: str, workflow_id: str, item_ids: list[str], action: str, label: str | None) -> dict[str, int]:
+    async def decide_review(self, who: Who, token: str, workflow_id: str, item_ids: list[str], action: str, label: str | None, note: str | None = None) -> dict[str, int]:
         """A person's answer on items the agent proposed or wasn't sure about. Approving may correct the label."""
         w = await self._mine(who, workflow_id)
         if action not in ("approve", "dismiss"):
@@ -576,5 +647,5 @@ class WorkflowService:
                     moved += await data.mail_trash(account, cfg.source.folder, [uid_of(i) for i in targets if account_of(i) == account])
             except AiError as exc:
                 raise ValidationFailed(str(exc)) from exc
-        n = await self._repo.decide(who.user_id, workflow_id, item_ids, "approved" if action == "approve" else "dismissed", label if action == "approve" else None)
+        n = await self._repo.decide(who.user_id, workflow_id, item_ids, "approved" if action == "approve" else "dismissed", label if action == "approve" else None, f"You said it isn't spam: {note.strip()}" if note and note.strip() else None)
         return {"changed": n, "moved": moved} if cfg.source.kind == "mail" else {"changed": n}

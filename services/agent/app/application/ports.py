@@ -292,8 +292,11 @@ class WorkflowRepository(ABC):
     async def review(self, user_id: str, workflow_id: str, statuses: list[str], limit: int = 200) -> list[LedgerEntry]: ...
 
     @abstractmethod
-    async def decide(self, user_id: str, workflow_id: str, item_ids: list[str], status: str, label: str | None = None) -> int:
+    async def decide(self, user_id: str, workflow_id: str, item_ids: list[str], status: str, label: str | None = None, note: str | None = None) -> int:
         """Approve or dismiss items awaiting a person. Returns how many were changed."""
+
+    @abstractmethod
+    async def entry(self, user_id: str, workflow_id: str, item_id: str) -> LedgerEntry | None: ...
 
     @abstractmethod
     async def counts(self, workflow_id: str) -> dict[str, int]:

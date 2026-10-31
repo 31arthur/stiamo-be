@@ -71,3 +71,17 @@ Make one Spam filter per mailbox or workspace. The starting point differs by wor
 - **Nothing happens on a run**: the notification bell shows the error; the Run tab shows how many were read, protected and judged.
 - **Too much is kept**: lower the threshold on the spam label (Advanced), or sharpen **Spam**.
 - **Something important was moved**: open the mailbox's Trash and move it back; then add its sender to **Safe addresses**.
+
+## Teaching it from mistakes
+
+When the agent calls something spam and it isn't:
+
+1. In **Review** or an **execution**, press **Not spam** on the email.
+2. Say why, in your own words (a few suggested reasons are one click away). The agent reads its whole setup, the email and your
+   reason, and suggests **one extra point**, for example "Mail from partner organisations about joint events is always
+   relevant."
+3. Edit it if you like and press **Add to the prompt**. You can also tick **Always keep mail from this domain**.
+
+Your five boxes are never changed. The extra points are added after them when the prompt is sent, and are listed under
+**Settings, What it has learned**, where you can remove any of them. Choose a chat model for the agent (Settings) so the agent
+can write the point; without one, your own words are used as the point.

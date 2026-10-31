@@ -297,3 +297,105 @@ async def test_every_real_run_is_an_execution_with_its_items(rig):
     assert (await rig.client.get(f"{BASE}/{wid}/executions", headers=other)).status_code == 404
     assert (await rig.client.get(f"{BASE}/{wid}/executions/{run['runId']}", headers=other)).status_code == 404
     assert (await rig.client.get(f"{BASE}/{wid}/executions/nope", headers=headers())).status_code == 404
+
+
+def suggestion(point="Mail from partner organisations about joint events is always relevant.", duplicate=False, domain=None):
+    return ChatResult(json.dumps({"point": point, "duplicate": duplicate, "protectDomain": domain, "note": "n"}))
+
+
+async def trashed_item(rig, wid):
+    rig.script += [answer("keep"), answer("spam", 0.6)]
+    run = (await rig.client.post(f"{BASE}/{wid}/run", json={}, headers=headers())).json()
+    detail = (await rig.client.get(f"{BASE}/{wid}/executions/{run['runId']}", headers=headers())).json()
+    return next(i for i in detail["items"] if i["status"] == "needs_review")
+
+
+async def test_a_reason_becomes_one_extra_point_and_the_original_prompt_is_untouched(rig):
+    wid = await make(rig)
+    before = (await rig.client.get(f"{BASE}/{wid}", headers=headers())).json()["config"]
+    item = await trashed_item(rig, wid)
+    rig.script += [suggestion(domain="shop.com")]
+    r = await rig.client.post(f"{BASE}/{wid}/feedback", json={"itemId": item["id"], "reason": "They are a partner we work with"}, headers=headers())
+    assert r.status_code == 200
+    out = r.json()
+    assert out["source"] == "model" and out["point"].startswith("Mail from partner organisations") and out["protectDomain"] == "shop.com" and out["senderDomain"] == "shop.com"
+    system = rig.llm_log[-1]["system"]
+    assert "Keep only business opportunities." in system and "Only add. Never contradict" in system and "(none yet)" in system
+    assert "From: Shop <deals@shop.com>" in rig.llm_log[-1]["last"] and "They are a partner we work with" in rig.llm_log[-1]["last"]
+    # asking changes nothing
+    assert (await rig.client.get(f"{BASE}/{wid}", headers=headers())).json()["config"] == before
+
+    added = await rig.client.post(f"{BASE}/{wid}/refinements", json={"point": out["point"], "protectDomain": "shop.com"}, headers=headers())
+    cfg = added.json()["config"]
+    assert cfg["refinements"] == [out["point"]] and cfg["rules"]["protectedDomains"] == ["bwint.org", "shop.com"] and added.json()["version"] == 2
+    assert cfg["prompt"] == before["prompt"] and cfg["labels"] == before["labels"]  # what the person wrote is exactly as it was
+
+
+async def test_the_added_points_reach_the_model_in_every_form_of_the_prompt(rig):
+    wid = await make(rig, refinements=["Replies from clients are always relevant."])
+    rig.script += [answer("keep"), answer("keep")]
+    await rig.client.post(f"{BASE}/{wid}/test", json={}, headers=headers())
+    system = rig.llm_log[0]["system"]
+    assert "Keep only business opportunities." in system and "## Extra guidance" in system and "- Replies from clients are always relevant." in system
+    assert system.index("## Purpose") < system.index("## Extra guidance") < system.index("## Labels")
+    batched = await make(rig, batchSize=10, refinements=["Replies from clients are always relevant."])
+    rig.script += [batch_answer((1, "keep", 0.9), (2, "keep", 0.9))]
+    await rig.client.post(f"{BASE}/{batched}/test", json={}, headers=headers())
+    assert "Replies from clients are always relevant." in rig.llm_log[-1]["system"]
+    await connect(rig, "openrouter", "sk-or-12345678")
+    j = (await rig.client.post(BASE, json={"name": "J", "description": "", "config": config(decider="jev", batchSize=10, refinements=["Replies from clients are always relevant."])}, headers=headers())).json()["id"]
+    await rig.client.post(f"{BASE}/{j}/test", json={}, headers=headers())
+    assert "Replies from clients are always relevant." in rig.decision_log[-1]["state"]
+    single = (await rig.client.post(BASE, json={"name": "J1", "description": "", "config": config(decider="jev", refinements=["Replies from clients are always relevant."])}, headers=headers())).json()["id"]
+    await rig.client.post(f"{BASE}/{single}/test", json={}, headers=headers())
+    assert "Replies from clients are always relevant." in rig.decision_log[-1]["questions"]["label"]["instructions"]
+    preview = (await rig.client.post(f"{BASE}/prompt-preview", json={"config": config(refinements=["Replies from clients are always relevant."])}, headers=headers())).json()
+    assert "- Replies from clients are always relevant." in preview["system"]
+
+
+async def test_without_a_model_the_owners_own_words_are_suggested(rig):
+    wid = await make(rig)
+    item = await trashed_item(rig, wid)
+    await rig.client.delete("/v1/agent/providers/openai", headers=headers())  # the key and the model choices go with it
+    r = (await rig.client.post(f"{BASE}/{wid}/feedback", json={"itemId": item["id"], "reason": "A partner of ours"}, headers=headers())).json()
+    assert r["point"] == "A partner of ours" and r["source"] == "reason" and "No chat model" in r["note"] and r["senderDomain"] == "shop.com"
+
+
+async def test_a_duplicate_garbage_or_missing_reason_is_handled(rig):
+    wid = await make(rig)
+    item = await trashed_item(rig, wid)
+    rig.script += [suggestion(point="", duplicate=True)]
+    dup = (await rig.client.post(f"{BASE}/{wid}/feedback", json={"itemId": item["id"], "reason": "again"}, headers=headers())).json()
+    assert dup["duplicate"] is True
+    rig.script += [ChatResult("sure, I will add that")]
+    bad = (await rig.client.post(f"{BASE}/{wid}/feedback", json={"itemId": item["id"], "reason": "a partner"}, headers=headers())).json()
+    assert bad["source"] == "reason" and bad["point"] == "a partner"
+    assert (await rig.client.post(f"{BASE}/{wid}/feedback", json={"itemId": item["id"], "reason": "  "}, headers=headers())).status_code == 422
+    assert (await rig.client.post(f"{BASE}/{wid}/feedback", json={"itemId": "nope:1:1", "reason": "x"}, headers=headers())).status_code == 404
+    other = headers("b@example.com", "u2")
+    assert (await rig.client.post(f"{BASE}/{wid}/feedback", json={"itemId": item["id"], "reason": "x"}, headers=other)).status_code == 404
+
+
+async def test_points_are_deduplicated_limited_and_can_be_forgotten(rig):
+    wid = await make(rig)
+    one = (await rig.client.post(f"{BASE}/{wid}/refinements", json={"point": "Replies from clients matter."}, headers=headers())).json()
+    again = (await rig.client.post(f"{BASE}/{wid}/refinements", json={"point": "replies from clients matter."}, headers=headers())).json()
+    assert again["config"]["refinements"] == ["Replies from clients matter."] and again["version"] == one["version"]
+    gone = (await rig.client.delete(f"{BASE}/{wid}/refinements/0", headers=headers())).json()
+    assert gone["config"]["refinements"] == [] and gone["config"]["prompt"] == one["config"]["prompt"]
+    assert (await rig.client.delete(f"{BASE}/{wid}/refinements/0", headers=headers())).status_code == 404
+    for i in range(30):
+        await rig.client.post(f"{BASE}/{wid}/refinements", json={"point": f"Point {i}"}, headers=headers())
+    assert (await rig.client.post(f"{BASE}/{wid}/refinements", json={"point": "One too many"}, headers=headers())).status_code == 422
+
+
+async def test_the_reason_is_kept_with_the_decision(rig):
+    wid = await make(rig)
+    item = await trashed_item(rig, wid)
+    r = await rig.client.post(f"{BASE}/{wid}/review", json={"itemIds": [item["id"]], "action": "approve", "label": "keep", "note": "A partner of ours"}, headers=headers())
+    assert r.json() == {"changed": 1, "moved": 0}
+    runs = (await rig.client.get(f"{BASE}/{wid}/executions", headers=headers())).json()["items"]
+    detail = (await rig.client.get(f"{BASE}/{wid}/executions/{runs[0]['id']}", headers=headers())).json()
+    done = next(i for i in detail["items"] if i["id"] == item["id"])
+    assert done["status"] == "approved" and done["label"] == "keep" and done["reason"] == "You said it isn't spam: A partner of ours"
+    assert rig.data.trashed == []

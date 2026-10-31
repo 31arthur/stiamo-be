@@ -237,3 +237,20 @@ counts next to `counts`, which is what the run itself did.
 - `GET /v1/agent/workflows/{id}/executions`: newest first.
 - `GET /v1/agent/workflows/{id}/executions/{runId}`: `{execution, items[]}`, least sure first. Each item keeps the start of the
   email (sender, subject, text) so it can still be read after the mail was moved to Trash.
+
+### Learning from corrections
+
+When an email is judged spam and the owner says it is not, the agent asks why and learns from the reason without touching what
+the owner wrote:
+
+1. `POST .../feedback {itemId, reason}`: the agent's own chat model reads the whole setup (purpose, labels, points already
+   added), the email and the reason, and suggests **one general point** (at most 30 words) to add, or says an existing point
+   already covers it. It can also name a domain to always keep. Nothing is changed by asking. With no model to ask, the owner's
+   own words are the suggestion.
+2. `POST .../refinements {point?, protectDomain?}`: the owner confirms (and may edit) the suggestion. The point is added to
+   `config.refinements` (up to 30; duplicates ignored) and the setup becomes a new version.
+3. Refinements are added to every form of the prompt: a block "Extra guidance" between Purpose and Labels for a chat model, and
+   after the purpose in the decision model's state or instructions. `prompt`, `labels` and `guide` are never edited by it.
+   `DELETE .../refinements/{index}` forgets a point.
+
+The decision also records the reason (`You said it isn't spam: …`) on the item in its execution.

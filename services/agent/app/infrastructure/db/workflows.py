@@ -70,15 +70,21 @@ class SqlWorkflowRepository(WorkflowRepository):
         q = select(LedgerModel).where(LedgerModel.user_id == user_id, LedgerModel.agent_id == workflow_id, LedgerModel.status.in_(statuses)).order_by(LedgerModel.created_at.desc()).limit(limit)
         return [_entry(r) for r in (await self._s.execute(q)).scalars()]
 
-    async def decide(self, user_id: str, workflow_id: str, item_ids: list[str], status: str, label: str | None = None) -> int:
+    async def decide(self, user_id: str, workflow_id: str, item_ids: list[str], status: str, label: str | None = None, note: str | None = None) -> int:
         values: dict = {"status": status, "decided_at": datetime.now(UTC)}
         if label:
             values["label"] = label
+        if note:
+            values["reason"] = note[:500]
         q = update(LedgerModel).where(LedgerModel.user_id == user_id, LedgerModel.agent_id == workflow_id, LedgerModel.item_id.in_(item_ids), LedgerModel.status.in_(["proposed", "needs_review"]))
         if status == "approved" and not label:
             q = q.where(LedgerModel.label.is_not(None))  # an item the agent couldn't label needs one chosen before it is approved
         result = await self._s.execute(q.values(**values))
         return result.rowcount or 0
+
+    async def entry(self, user_id: str, workflow_id: str, item_id: str) -> LedgerEntry | None:
+        row = (await self._s.execute(select(LedgerModel).where(LedgerModel.user_id == user_id, LedgerModel.agent_id == workflow_id, LedgerModel.item_id == item_id))).scalar_one_or_none()
+        return _entry(row) if row else None
 
     async def counts(self, workflow_id: str) -> dict[str, int]:
         rows = (await self._s.execute(select(LedgerModel.status, func.count()).where(LedgerModel.agent_id == workflow_id).group_by(LedgerModel.status))).all()

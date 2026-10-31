@@ -36,6 +36,18 @@ class ReviewBody(DomainModel):
     action: str
     #: When approving: the label to use instead of the agent's (one item at a time).
     label: str | None = None
+    #: Why, when the person says an email is not spam. Kept with the decision.
+    note: Annotated[str, Field(max_length=500)] | None = None
+
+
+class FeedbackBody(DomainModel):
+    item_id: Annotated[str, Field(max_length=200)]
+    reason: Annotated[str, Field(max_length=500)]
+
+
+class RefinementBody(DomainModel):
+    point: Annotated[str, Field(max_length=400)] | None = None
+    protect_domain: Annotated[str, Field(max_length=253)] | None = None
 
 
 @router.get("", summary="The agents this person built")
@@ -89,6 +101,21 @@ async def run(workflow_id: str, body: TestBody, workflows: deps.Workflows, me: d
     return await workflows.run(me, token, workflow_id, body.manual)
 
 
+@router.post("/{workflow_id}/feedback", summary="\"This wasn't spam, because…\": suggests one general point to add to the prompt (nothing is changed yet)")
+async def feedback(workflow_id: str, body: FeedbackBody, workflows: deps.Workflows, me: deps.Me) -> dict[str, Any]:
+    return await workflows.analyse_feedback(me, workflow_id, body.item_id, body.reason)
+
+
+@router.post("/{workflow_id}/refinements", summary="Add a point the agent learned, and/or a domain it always keeps")
+async def add_refinement(workflow_id: str, body: RefinementBody, workflows: deps.Workflows, me: deps.Me) -> dict[str, Any]:
+    return await workflows.add_refinement(me, workflow_id, body.point, body.protect_domain)
+
+
+@router.delete("/{workflow_id}/refinements/{index}", summary="Forget one learned point")
+async def remove_refinement(workflow_id: str, index: int, workflows: deps.Workflows, me: deps.Me) -> dict[str, Any]:
+    return await workflows.remove_refinement(me, workflow_id, index)
+
+
 @router.get("/{workflow_id}/executions", summary="Every real run of the agent, newest first")
 async def executions(workflow_id: str, workflows: deps.Workflows, me: deps.Me) -> dict[str, Any]:
     return await workflows.executions(me, workflow_id)
@@ -106,4 +133,4 @@ async def review(workflow_id: str, workflows: deps.Workflows, me: deps.Me) -> di
 
 @router.post("/{workflow_id}/review", summary="Approve or dismiss items (approving may correct the label)")
 async def decide_review(workflow_id: str, body: ReviewBody, workflows: deps.Workflows, me: deps.Me, token: deps.Token) -> dict[str, int]:
-    return await workflows.decide_review(me, token, workflow_id, body.item_ids, body.action, body.label)
+    return await workflows.decide_review(me, token, workflow_id, body.item_ids, body.action, body.label, body.note)
