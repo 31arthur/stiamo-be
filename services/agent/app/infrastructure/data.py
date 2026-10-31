@@ -45,6 +45,13 @@ class HttpDataGateway(DataGateway):
     async def attachments(self) -> list[dict[str, Any]]:
         return await self._all(f"{self._files}/v1/attachments")
 
+    async def records(self, table: str) -> list[dict[str, Any]]:
+        from app.domain.workflows import TABLES
+
+        if table not in TABLES:
+            raise AiError("That collection can't be read.")
+        return await self._all(f"{self._practice}{TABLES[table]}")
+
     async def drive_available(self) -> bool:
         if self._drive_ok is None:
             try:

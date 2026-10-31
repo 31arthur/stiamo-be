@@ -17,7 +17,7 @@ def _entity(r: RunModel, *, light: bool = False) -> RunRecord:
         provider=r.provider, model=r.model, thinking=r.thinking, input=r.input,
         user_message="" if light else r.user_message, system_prompt="" if light else r.system_prompt,
         tools=[] if light else list(r.tools or []), steps=[] if light else list(r.steps or []), steps_count=r.steps_count,
-        output=r.output, found_count=r.found_count, error=r.error, usage=dict(r.usage or {}), channel=r.channel,
+        output=r.output, found_count=r.found_count, error=r.error, usage=dict(r.usage or {}), channel=r.channel, version=r.version,
     )
 
 
@@ -33,7 +33,7 @@ class SqlRunLog(RunLog):
                 id=rec.id, user_id=rec.user_id, agent_id=rec.agent_id, trigger=rec.trigger, status=rec.status, started_at=rec.started_at,
                 duration_ms=rec.duration_ms, provider=rec.provider, model=rec.model, thinking=rec.thinking, input=rec.input,
                 user_message=rec.user_message, system_prompt=rec.system_prompt, tools=rec.tools, steps=rec.steps, steps_count=len(rec.steps), output=rec.output,
-                found_count=rec.found_count, error=rec.error, usage=rec.usage, channel=rec.channel,
+                found_count=rec.found_count, error=rec.error, usage=rec.usage, channel=rec.channel, version=rec.version,
             ))
             await s.flush()
             # Prune: everything beyond the newest KEEP for this person and agent.

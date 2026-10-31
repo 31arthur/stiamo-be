@@ -13,8 +13,10 @@ from stiamo_common.security import Principal, make_principal_dependency
 
 from app.application.channels import ChannelService
 from app.application.services import AgentService, Who
+from app.application.workflows import WorkflowService
 from app.config import get_settings
 from app.infrastructure.db.repositories import SqlChannelRepository, SqlSettingsRepository
+from app.infrastructure.db.workflows import SqlWorkflowRepository
 
 current_principal = make_principal_dependency(lambda: get_settings().token_settings())
 CurrentPrincipal = Annotated[Principal, Depends(current_principal)]
@@ -47,9 +49,14 @@ Session = Annotated[AsyncSession, Depends(get_session)]
 
 def build_services(app: FastAPI, session: AsyncSession) -> tuple[AgentService, ChannelService]:
     s = app.state
-    agent = AgentService(SqlSettingsRepository(session, s.box), s.registry, s.runs, s.llm_factory, s.decision_factory, s.data_factory, s.settings.max_steps)
+    agent = AgentService(SqlSettingsRepository(session, s.box), s.registry, s.runs, SqlWorkflowRepository(session), s.llm_factory, s.decision_factory, s.data_factory, s.settings.max_steps)
     channels = ChannelService(SqlChannelRepository(session, s.box), agent, s.telegram, s.twilio, s.tokens, public_url=s.settings.public_url, pairing_minutes=s.settings.pairing_minutes, memory=s.chat_memory)
     return agent, channels
+
+
+def workflow_service(request: Request, session: Session) -> WorkflowService:
+    s = request.app.state
+    return WorkflowService(SqlWorkflowRepository(session), SqlSettingsRepository(session, s.box), s.runs, s.llm_factory, s.decision_factory, s.data_factory)
 
 
 def agent_service(request: Request, session: Session) -> AgentService:
@@ -65,5 +72,6 @@ def who(principal: CurrentPrincipal) -> Who:
 
 
 Agent = Annotated[AgentService, Depends(agent_service)]
+Workflows = Annotated[WorkflowService, Depends(workflow_service)]
 Channels = Annotated[ChannelService, Depends(channel_service)]
 Me = Annotated[Who, Depends(who)]
