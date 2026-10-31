@@ -49,6 +49,11 @@ async def test_draft(body: DraftTestBody, workflows: deps.Workflows, me: deps.Me
     return await workflows.test_draft(me, token, body.config, body.manual)
 
 
+@router.post("/prompt-preview", summary="Exactly what the model would be sent for a setup, filled with example emails (nothing is asked of any model)")
+async def prompt_preview(body: DraftTestBody, workflows: deps.Workflows, me: deps.Me) -> dict[str, Any]:
+    return await workflows.preview(me, body.config)
+
+
 @router.get("/{workflow_id}", summary="One agent with its setup and ledger counts")
 async def get_workflow(workflow_id: str, workflows: deps.Workflows, me: deps.Me) -> dict[str, Any]:
     return await workflows.get(me, workflow_id)

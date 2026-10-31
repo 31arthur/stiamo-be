@@ -8,7 +8,7 @@ import json
 import logging
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -33,16 +33,21 @@ from app.domain.agents import clean_workspaces
 from app.domain.llm import DECISION_MODELS, AiError, Message
 from app.domain.workflows import (
     MAIL_PAGES,
+    SAMPLE_ITEMS,
     TEST_ITEMS,
     Item,
     WorkflowConfig,
+    account_of,
     apply_filters,
     decide_status,
     item_from_mail,
     item_from_record,
+    jev_batch,
+    parse_batch,
     parse_decision,
     parse_manual,
     protected_by,
+    render_batch,
     system_prompt,
     uid_of,
     wrap_item,
@@ -66,6 +71,8 @@ class Outcome:
     error: str | None = None
     ms: int = 0
     usage: dict[str, int] = field(default_factory=dict)
+    #: What the decision model charged for this item, when it says (USD).
+    cost: float = 0.0
     #: What is (or, in a test run, would be) done with the item: `trash`.
     action: str | None = None
 
@@ -79,6 +86,38 @@ class Outcome:
         if self.action:
             out["action"] = self.action
         return out
+
+
+@dataclass
+class Verdict:
+    """One item's answer: the label, how sure, why, and what asking cost."""
+
+    label: str | None
+    confidence: float = 0.0
+    reason: str = ""
+    usage: dict[str, int] = field(default_factory=dict)
+    cost: float = 0.0
+
+
+@dataclass
+class Decider:
+    """Asks the chosen model about one item, or about several at once (a batch). `many` leaves a hole for an item it got no answer for."""
+
+    one: Callable[[Item], Awaitable[Verdict]]
+    many: Callable[[list[Item]], Awaitable[list[Verdict | None]]]
+    provider: str
+    model: str
+
+
+@dataclass
+class Fetched:
+    items: list[Item]
+    #: How many matched the filters before the cap.
+    matched: int
+    #: Set aside by the rules, never judged.
+    protected: int
+    #: How many the source had to look through.
+    scanned: int
 
 
 def workflow_json(w: Workflow, counts: dict[str, int] | None = None) -> dict[str, Any]:
@@ -168,75 +207,92 @@ class WorkflowService:
 
     # --- deciding ----------------------------------------------------------------------------------------------
 
-    async def _items(self, token: str, cfg: WorkflowConfig, manual: str | None, seen: set[str], limit: int | None) -> tuple[list[Item], int, int]:
-        """The items to decide about (filtered, capped), how many matched before the cap, and how many were set aside by the rules."""
+    async def _items(self, token: str, cfg: WorkflowConfig, manual: str | None, seen: set[str], limit: int | None) -> Fetched:
+        """The items to decide about (filtered, capped), how many matched before the cap, and what the rules set aside."""
         cap = min(cfg.filters.limit, limit) if limit else cfg.filters.limit
-        protected = 0
+        protected = scanned = 0
         if cfg.source.kind == "manual":
             items = parse_manual(manual or "")
             if not items:
                 raise ValidationFailed("Paste at least one item to try. Separate several with a line of ---.")
+            scanned = len(items)
         elif cfg.source.kind == "mail":
-            items, protected = await self._mail_items(token, cfg, seen, cap)
+            items, protected, scanned = await self._mail_items(token, cfg, seen, cap)
         else:
             try:
                 records = await Memo(self._data(token)).records(cfg.source.table or "")
             except AiError as exc:
                 raise ValidationFailed(str(exc)) from exc
             items = [item_from_record(r) for r in records]
+            scanned = len(items)
         matched = apply_filters(items, cfg.filters.model_copy(update={"limit": 10_000}), seen)
-        return matched[:cap], len(matched), protected
+        return Fetched(matched[:cap], len(matched), protected, scanned)
 
-    async def _mail_items(self, token: str, cfg: WorkflowConfig, seen: set[str], cap: int) -> tuple[list[Item], int]:
-        """Reads the folder newest first, a page at a time, setting aside what the rules protect, until there is enough to decide about."""
+    async def _mail_items(self, token: str, cfg: WorkflowConfig, seen: set[str], cap: int) -> tuple[list[Item], int, int]:
+        """Reads each mailbox newest first, a page at a time, setting aside what the rules protect, until there is enough to decide
+        about (or it has looked far enough). Returns the items, how many were protected, and how many messages were looked at."""
         data = Memo(self._data(token))
-        account, folder = cfg.source.account_id or "", cfg.source.folder
         cutoff = datetime.now(UTC).timestamp() - cfg.filters.since_days * 86400 if cfg.filters.since_days else None
         items: list[Item] = []
-        protected = 0
+        protected = scanned = 0
         try:
-            friends = set(await data.mail_correspondents(account)) if cfg.rules.protect_correspondents else set()
-            before: int | None = None
-            for _ in range(MAIL_PAGES):
-                page = await data.mail_page(account, folder, before)
-                for m in page.get("messages", []):
-                    item = item_from_mail(m, page.get("uidValidity", 0))
-                    if cfg.filters.new_only and item.id in seen:
-                        continue
-                    if protected_by(item, cfg.rules, friends):
-                        protected += 1
-                        continue
-                    items.append(item)
-                before = page.get("nextBefore")
-                oldest = (page.get("messages") or [{}])[-1].get("date")
-                too_old = bool(cutoff and oldest and datetime.fromisoformat(oldest.replace("Z", "+00:00")).timestamp() < cutoff)
-                if not before or len(items) >= cap or too_old:
-                    break
+            for account in cfg.source.account_ids:
+                friends = set(await data.mail_correspondents(account)) if cfg.rules.protect_correspondents else set()
+                found, before = 0, None
+                for _ in range(MAIL_PAGES):
+                    page = await data.mail_page(account, cfg.source.folder, before)
+                    messages = page.get("messages", [])
+                    scanned += len(messages)
+                    for m in messages:
+                        item = item_from_mail(m, page.get("uidValidity", 0), account)
+                        if cfg.filters.new_only and item.id in seen:
+                            continue
+                        if protected_by(item, cfg.rules, friends):
+                            protected += 1
+                            continue
+                        items.append(item)
+                        found += 1
+                    before = page.get("nextBefore")
+                    oldest = (messages or [{}])[-1].get("date")
+                    too_old = bool(cutoff and oldest and datetime.fromisoformat(oldest.replace("Z", "+00:00")).timestamp() < cutoff)
+                    if not before or found >= cap or too_old:
+                        break
         except AiError as exc:
             raise ValidationFailed(str(exc)) from exc
-        return items, protected
+        return items, protected, scanned
 
-    async def _decider(self, who: Who, cfg: WorkflowConfig, s: UserSettings, workflow_id: str | None):
-        """A function that decides one item. Raises ValidationFailed when the model it needs isn't set up."""
-        system = system_prompt(cfg, who.name)
+    async def _decider(self, who: Who, cfg: WorkflowConfig, s: UserSettings, workflow_id: str | None) -> Decider:
+        """What decides, for one item or a batch. Raises ValidationFailed when the model it needs isn't set up."""
         names = [lb.name for lb in cfg.labels]
+        batch_system = system_prompt(cfg, who.name, True)
+        single_system = system_prompt(cfg, who.name)
+
         if cfg.decider == "jev":
             if "openrouter" not in s.keys:
                 raise ValidationFailed("The decision model runs through OpenRouter. Add an OpenRouter key first, or switch this agent to its own model.")
             jev = self._decisions(s.keys["openrouter"])
-            jev_model = (s.decision or {}).get("modelId") or DECISION_MODELS[0]["id"]
+            jev_model = cfg.decision_model or (s.decision or {}).get("modelId") or DECISION_MODELS[0]["id"]
             criteria = {lb.name: lb.description for lb in cfg.labels}
 
-            async def by_jev(item: Item) -> tuple[str | None, float, str, dict[str, int]]:
-                out = await jev.decide(model=jev_model, state=f"{item.title}\n{item.text}", questions={"label": {"type": "choice", "instructions": cfg.prompt, "criteria": criteria}})
-                a = (out.get("answers") or {}).get("label") or {}
-                choice = a.get("choice")
+            def verdict(answer: dict[str, Any], cost: float) -> Verdict | None:
+                choice = answer.get("choice")
                 if choice not in names:
-                    return None, 0.0, "The decision model's answer wasn't one of the labels.", {}
-                conf = (a.get("probabilities") or {}).get(choice, a.get("confidence", 0.0))
-                return choice, float(conf), "", {}
+                    return None
+                return Verdict(choice, float((answer.get("probabilities") or {}).get(choice, answer.get("confidence", 0.0))), "", {}, cost)
 
-            return by_jev
+            async def one(item: Item) -> Verdict:
+                out = await jev.decide(model=jev_model, state=f"{item.title}\n{item.text}", questions={"label": {"type": "choice", "instructions": cfg.prompt, "criteria": criteria}})
+                cost = float(out.get("cost") or 0)
+                return verdict((out.get("answers") or {}).get("label") or {}, cost) or Verdict(None, 0.0, "The decision model's answer wasn't one of the labels.", {}, cost)
+
+            async def many(items: list[Item]) -> list[Verdict | None]:
+                state, questions = jev_batch(cfg, items)
+                out = await jev.decide(model=jev_model, state=state, questions=questions)
+                share = float(out.get("cost") or 0) / len(items)
+                answers = out.get("answers") or {}
+                return [verdict(answers.get(str(i)) or {}, share) for i in range(1, len(items) + 1)]
+
+            return Decider(one, many, "openrouter", jev_model)
 
         sel, _ = selection_of(s, workflow_id or "draft")
         if not sel or not sel.get("modelId"):
@@ -244,46 +300,93 @@ class WorkflowService:
         client = self._llm(sel["providerId"], s.keys[sel["providerId"]])
         model, thinking = sel["modelId"], sel.get("thinking", "off")
 
-        async def by_model(item: Item) -> tuple[str | None, float, str, dict[str, int]]:
+        async def one(item: Item) -> Verdict:
             usage = {"inputTokens": 0, "outputTokens": 0}
-            messages = [Message("system", system), Message("user", wrap_item(item))]
+            messages = [Message("system", single_system), Message("user", wrap_item(item))]
             for attempt in (1, 2):
                 reply = await client.chat(model=model, messages=messages, tools=[], thinking=thinking)
                 for k, v in (reply.usage or {}).items():
                     usage[k] = usage.get(k, 0) + v
                 parsed = parse_decision(reply.text, names)
                 if parsed:
-                    return parsed.label, parsed.confidence, parsed.reason, usage
+                    return Verdict(parsed.label, parsed.confidence, parsed.reason, usage)
                 if attempt == 1:  # one more try, told what was wrong
                     messages = [*messages, Message("assistant", reply.text), Message("user", "That wasn't valid. Answer again with the JSON only, using one of the label names.")]
-            return None, 0.0, "The model's answer couldn't be read.", usage
+            return Verdict(None, 0.0, "The model's answer couldn't be read.", usage)
 
-        return by_model
+        async def many(items: list[Item]) -> list[Verdict | None]:
+            usage = {"inputTokens": 0, "outputTokens": 0}
+            messages = [Message("system", batch_system), Message("user", render_batch(items))]
+            parsed: dict[int, Any] = {}
+            for attempt in (1, 2):
+                reply = await client.chat(model=model, messages=messages, tools=[], thinking=thinking)
+                for k, v in (reply.usage or {}).items():
+                    usage[k] = usage.get(k, 0) + v
+                parsed = parse_batch(reply.text, names, len(items))
+                if parsed:
+                    break
+                if attempt == 1:
+                    messages = [*messages, Message("assistant", reply.text), Message("user", "That wasn't valid. Answer again with the JSON array only, one object per item, using one of the label names.")]
+            n = len(items)
+            # What the one request used is shared out, so the totals add up whatever the batch size.
+            share = [{k: v // n + (v % n if i == 0 else 0) for k, v in usage.items()} for i in range(n)]
+            return [Verdict(p.label, p.confidence, p.reason, share[i]) if (p := parsed.get(i + 1)) else None for i in range(n)]
 
-    async def _decide_all(self, cfg: WorkflowConfig, items: list[Item], decide) -> list[Outcome]:
+        return Decider(one, many, sel["providerId"], model)
+
+    async def _decide_all(self, cfg: WorkflowConfig, items: list[Item], decider: Decider) -> tuple[list[Outcome], int]:
+        """Decides every item, in requests of `batch_size` items. An item the model didn't answer in its batch is asked about alone."""
         gate = asyncio.Semaphore(CONCURRENCY)
+        size = max(1, cfg.batch_size)
+        chunks = [items[i : i + size] for i in range(0, len(items), size)]
 
-        async def one(item: Item) -> Outcome:
+        def outcome(item: Item, v: Verdict, ms: int) -> Outcome:
+            if v.label is None:
+                return Outcome(item, "needs_review", None, v.confidence, v.reason, ms=ms, usage=v.usage, cost=v.cost)  # unsure means ask
+            return Outcome(item, decide_status(v.confidence, cfg.threshold(v.label)), v.label, v.confidence, v.reason, ms=ms, usage=v.usage, cost=v.cost)
+
+        async def chunk(group: list[Item]) -> list[Outcome]:
             async with gate:
                 began = time.monotonic()
                 try:
-                    label, conf, reason, usage = await decide(item)
+                    verdicts = [await decider.one(group[0])] if size == 1 else await decider.many(group)
+                    for i, v in enumerate(verdicts):
+                        if v is None:
+                            verdicts[i] = await decider.one(group[i])
                 except AiError as exc:
-                    return Outcome(item, "failed", error=str(exc), ms=int((time.monotonic() - began) * 1000))
-                ms = int((time.monotonic() - began) * 1000)
-                if label is None:
-                    return Outcome(item, "needs_review", None, conf, reason, ms=ms, usage=usage)  # unsure means ask
-                return Outcome(item, decide_status(conf, cfg.threshold(label)), label, conf, reason, ms=ms, usage=usage)
+                    ms = int((time.monotonic() - began) * 1000)
+                    return [Outcome(item, "failed", error=str(exc), ms=ms) for item in group]
+                ms = int((time.monotonic() - began) * 1000 / len(group))
+                return [outcome(item, v, ms) for item, v in zip(group, verdicts, strict=True) if v is not None]
 
-        return await asyncio.gather(*(one(i) for i in items))
+        return [o for group in await asyncio.gather(*(chunk(g) for g in chunks)) for o in group], len(chunks)
+
+    async def preview(self, who: Who, config: dict[str, Any]) -> dict[str, Any]:
+        """Exactly what the model would be sent for this setup, filled with two example emails. Nothing is asked of any model."""
+        cfg = self._config(config)
+        s = await self._settings.get(who.user_id) or UserSettings(who.user_id)
+        batch = cfg.batch_size > 1
+        out: dict[str, Any] = {"decider": cfg.decider, "batchSize": cfg.batch_size, "batched": batch}
+        if cfg.decider == "jev":
+            model = cfg.decision_model or (s.decision or {}).get("modelId") or DECISION_MODELS[0]["id"]
+            if batch:
+                state, questions = jev_batch(cfg, SAMPLE_ITEMS)
+            else:
+                state = f"{SAMPLE_ITEMS[0].title}\n{SAMPLE_ITEMS[0].text}"
+                questions = {"label": {"type": "choice", "instructions": cfg.prompt, "criteria": {lb.name: lb.description for lb in cfg.labels}}}
+            return {**out, "provider": "openrouter", "model": model, "system": None, "user": state, "questions": questions}
+        sel, _ = selection_of(s, "draft")
+        user = render_batch(SAMPLE_ITEMS) if batch else wrap_item(SAMPLE_ITEMS[0])
+        return {**out, "provider": (sel or {}).get("providerId"), "model": (sel or {}).get("modelId"), "system": system_prompt(cfg, who.name, batch), "user": user, "questions": None}
 
     async def _execute(self, who: Who, token: str, *, workflow: Workflow | None, cfg: WorkflowConfig, manual: str | None, mode: str) -> dict[str, Any]:
         s = await self._settings.get(who.user_id) or UserSettings(who.user_id)
         started, began = datetime.now(UTC), time.monotonic()
         seen = await self._repo.seen(workflow.id) if workflow else set()
-        items, matched, protected = await self._items(token, cfg, manual, seen, TEST_ITEMS if mode == "test" else None)
-        decide = await self._decider(who, cfg, s, workflow.id if workflow else None)
-        outcomes = await self._decide_all(cfg, items, decide) if items else []
+        fetched = await self._items(token, cfg, manual, seen, TEST_ITEMS if mode == "test" else None)
+        items, matched, protected = fetched.items, fetched.matched, fetched.protected
+        decider = await self._decider(who, cfg, s, workflow.id if workflow else None)
+        outcomes, batches = await self._decide_all(cfg, items, decider) if items else ([], 0)
         trash_note = await self._act(token, cfg, outcomes, mode)
 
         counts = {"items": len(outcomes), "proposed": 0, "needsReview": 0, "failed": 0}
@@ -292,6 +395,11 @@ class WorkflowService:
         for o in outcomes:
             counts[{"proposed": "proposed", "needs_review": "needsReview", "failed": "failed", "kept": "kept", "applied": "applied"}[o.status]] += 1
         usage = {"inputTokens": sum(o.usage.get("inputTokens", 0) for o in outcomes), "outputTokens": sum(o.usage.get("outputTokens", 0) for o in outcomes)}
+        cost = sum(o.cost for o in outcomes)
+        stats = {
+            "scanned": fetched.scanned, "protected": protected, "judged": len(outcomes), "requests": batches, "batchSize": cfg.batch_size,
+            "decider": cfg.decider, "provider": decider.provider, "model": decider.model, "mailboxes": len(cfg.source.account_ids), "cost": round(cost, 6) if cost else None,
+        }
         run_id = str(uuid.uuid4())
 
         if mode == "run" and workflow:
@@ -311,14 +419,14 @@ class WorkflowService:
             await self._log(RunRecord(
                 id=run_id, user_id=who.user_id, agent_id=workflow.id, trigger="test" if mode == "test" else "manual",
                 status="error" if outcomes and counts["failed"] == len(outcomes) else "ok", started_at=started, duration_ms=int((time.monotonic() - began) * 1000),
-                provider=(sel or {}).get("providerId", "openrouter" if cfg.decider == "jev" else ""), model=(sel or {}).get("modelId", "") if cfg.decider == "model" else (s.decision or {}).get("modelId", "jev"),
+                provider=decider.provider, model=decider.model,
                 thinking=(sel or {}).get("thinking", "off") if cfg.decider == "model" else "off", input=f"{counts['items']} items from {'the mailbox' if cfg.source.kind == 'mail' else cfg.source.table or 'pasted text'}",
-                user_message=cfg.prompt, system_prompt=system_prompt(cfg, who.name), steps=[self._step(o) for o in outcomes], steps_count=len(outcomes),
+                user_message=cfg.prompt, system_prompt=system_prompt(cfg, who.name, cfg.batch_size > 1), steps=[self._step(o) for o in outcomes], steps_count=len(outcomes),
                 output=summary, found_count=counts["proposed"] + counts["needsReview"] + counts.get("applied", 0), error=next((o.error for o in outcomes if o.error), None) if counts["failed"] == len(outcomes) and outcomes else None,
                 usage=usage, version=workflow.version,
             ))
         return {
-            "runId": run_id if workflow else None, "mode": mode, "counts": counts, "matched": matched, "usage": usage, "summary": summary,
+            "runId": run_id if workflow else None, "mode": mode, "counts": counts, "matched": matched, "usage": usage, "stats": stats, "summary": summary,
             "durationMs": int((time.monotonic() - began) * 1000), "items": [o.to_json() for o in outcomes],
         }
 
@@ -338,13 +446,18 @@ class WorkflowService:
         targets = [o for o in outcomes if o.action == "trash"]
         if mode != "run" or not act.auto or not targets:
             return ""
-        try:
-            await Memo(self._data(token)).mail_trash(cfg.source.account_id or "", cfg.source.folder, [uid_of(o.item.id) for o in targets])
-        except AiError as exc:
-            return f". Couldn't move them to Trash: {exc}"
-        for o in targets:
-            o.status = "applied"
-        return ""
+        notes = []
+        data = Memo(self._data(token))
+        for account in dict.fromkeys(account_of(o.item.id) for o in targets):
+            mine = [o for o in targets if account_of(o.item.id) == account]
+            try:
+                await data.mail_trash(account, cfg.source.folder, [uid_of(o.item.id) for o in mine])
+            except AiError as exc:
+                notes.append(str(exc))
+                continue
+            for o in mine:
+                o.status = "applied"
+        return f". Couldn't move some to Trash: {notes[0]}" if notes else ""
 
     @staticmethod
     def _step(o: Outcome) -> dict[str, Any]:
@@ -396,10 +509,11 @@ class WorkflowService:
         if action == "approve" and cfg.source.kind == "mail" and cfg.action.trash_label:
             pending = {r.item_id: r for r in await self._repo.review(who.user_id, workflow_id, ["proposed", "needs_review"])}
             targets = [i for i in item_ids if i in pending and (label or pending[i].label) == cfg.action.trash_label]
-            if targets:
-                try:
-                    moved = await Memo(self._data(token)).mail_trash(cfg.source.account_id or "", cfg.source.folder, [uid_of(i) for i in targets])
-                except AiError as exc:
-                    raise ValidationFailed(str(exc)) from exc
+            data = Memo(self._data(token))
+            try:
+                for account in dict.fromkeys(account_of(i) for i in targets):
+                    moved += await data.mail_trash(account, cfg.source.folder, [uid_of(i) for i in targets if account_of(i) == account])
+            except AiError as exc:
+                raise ValidationFailed(str(exc)) from exc
         n = await self._repo.decide(who.user_id, workflow_id, item_ids, "approved" if action == "approve" else "dismissed", label if action == "approve" else None)
         return {"changed": n, "moved": moved} if cfg.source.kind == "mail" else {"changed": n}

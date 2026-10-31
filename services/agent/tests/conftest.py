@@ -58,12 +58,17 @@ class FakeDecisions(DecisionClient):
 
     async def decide(self, *, model: str, state: Any, questions: dict[str, Any]) -> dict[str, Any]:
         self.log.append({"model": model, "state": state, "questions": questions})
-        return {"answers": {name: {"type": q["type"], "choice": "a", "probabilities": {"a": 0.9, "b": 0.1}} for name, q in questions.items()}, "model": model, "cost": 0.00001}
+        def answer(q: dict[str, Any]) -> dict[str, Any]:
+            options = list(q["criteria"]) if isinstance(q.get("criteria"), dict) and q["criteria"] else ["a", "b"]
+            return {"type": q["type"], "choice": options[0], "probabilities": {options[0]: 0.9, **{o: 0.1 for o in options[1:]}}}
+
+        return {"answers": {name: answer(q) for name, q in questions.items()}, "model": model, "cost": 0.00001}
 
 
 class FakeData(DataGateway):
     def __init__(self) -> None:
         self.trashed: list[int] = []
+        self.trashed_by: list[tuple[str, int]] = []
         self.mail = [
             {"uid": 4, "subject": "Partnership opportunity", "sender": {"name": "Lead", "address": "lead@client.io"}, "snippet": "We would like a quote for a new app", "date": "2026-10-04T10:00:00Z"},
             {"uid": 3, "subject": "50% off everything", "sender": {"name": "Shop", "address": "deals@shop.com"}, "snippet": "Huge sale", "date": "2026-10-03T10:00:00Z"},
@@ -104,6 +109,7 @@ class FakeData(DataGateway):
 
     async def mail_trash(self, account_id, folder, uids):
         self.trashed.extend(uids)
+        self.trashed_by.extend((account_id, u) for u in uids)
         return len(uids)
 
     async def drive_available(self):
