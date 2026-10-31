@@ -18,6 +18,7 @@ and `id` is the client's UUID when given (`PUT`), otherwise generated (`POST`).
 | records | generic document store (legacy; retire once the frontend uses `practice`) | `/v1/collections/*` |
 | drive | search and bytes of the owner's Google Drive letters | `/v1/drive/*` |
 | agent | AI providers and models, agents and their prompts, chat channels | `/v1/agent/*` |
+| mail | IMAP mailboxes per workspace, messages, live events | `/v1/mail/*` |
 
 ## Every record type (`practice`)
 
@@ -170,3 +171,21 @@ The **setup** (`config`, camelCase):
 
 A run's result: `{runId, mode, counts{items, proposed, needsReview, failed}, matched, usage, summary, durationMs, items[{id, title, excerpt, label, confidence, reason, status, error?, ms}]}`.
 `manual` is pasted text, items separated by a line of `---`.
+
+## Mail (`mail`)
+
+Mailboxes belong to the signed-in person and to one workspace. Passwords are sealed and never returned. Mail itself is read
+from the IMAP server on request. Setup and rules: [MAIL_SETUP.md](MAIL_SETUP.md).
+
+| Endpoint | |
+|---|---|
+| `GET /v1/mail/accounts?workspace=` | `[{id, workspace, label, address, host, port, security, username, error, createdAt}]` |
+| `POST /v1/mail/accounts` `{workspace, label?, address, host, port, security: ssl\|starttls, username?, password}` | logs in to check, then keeps it; `422 mail_auth_failed` / `502 mail_unavailable` carry the server's reason |
+| `PATCH /v1/mail/accounts/{id}` | any of `workspace, label, host, port, security, username, password` (the password is kept unless a new one is sent) |
+| `DELETE /v1/mail/accounts/{id}` · `POST .../test` | forget it · check the connection again |
+| `GET .../folders` | `[{name, label, role, unseen, total}]` (`role`: inbox, drafts, sent, archive, junk, trash or empty) |
+| `GET .../messages?folder=&before=&q=&limit=` | `{messages[], total, nextBefore, uidValidity}`, newest first; pass `nextBefore` as `before` for the next page; `q` searches the server |
+| `GET .../messages/{uid}?folder=` | the message with `text`, cleaned `html`, `hasRemoteContent`, `attachments[]` |
+| `PATCH .../messages/{uid}?folder=` `{seen?, flagged?}` | the only changes it can make |
+| `GET .../messages/{uid}/attachments/{index}?folder=` | always a download |
+| `GET .../events?folder=` | server-sent events: `state` (`connecting`, `live`, `down`, `auth`) and `changed` |

@@ -12,6 +12,11 @@
 	handle /v1/files/* {
 		reverse_proxy files:8000
 	}
+	handle /v1/mail/* {
+		reverse_proxy mail:8000 {
+			flush_interval -1
+		}
+	}
 	handle /v1/agent/* {
 		reverse_proxy agent:8000
 	}
