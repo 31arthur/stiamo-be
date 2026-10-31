@@ -10,6 +10,7 @@ import base64
 import re
 from datetime import UTC, datetime
 from email import policy
+from email.header import decode_header, make_header
 from email.message import EmailMessage
 from email.parser import BytesParser
 from email.utils import parseaddr
@@ -172,18 +173,49 @@ def _has_attachment_in(structure) -> bool:
     return False
 
 
-def summary(uid: int, raw: bytes, flags: tuple, structure=None) -> MessageSummary:
-    """A row for the list from the start of a message (headers and the first few kilobytes of body)."""
+def _word(value: bytes | str | None) -> str:
+    """An envelope field: bytes that may be an encoded word (=?UTF-8?B?...?=)."""
+    if value is None:
+        return ""
+    raw = value.decode("utf-8", errors="replace") if isinstance(value, bytes) else value
+    try:
+        return str(make_header(decode_header(raw))).strip()
+    except Exception:
+        return raw.strip()
+
+
+def _envelope_sender(envelope) -> Person:
+    first = (getattr(envelope, "from_", None) or [None])[0]
+    if first is None:
+        return Person("", "")
+    mailbox, host = _word(first.mailbox), _word(first.host)
+    return Person(_word(first.name), f"{mailbox}@{host}" if mailbox and host else mailbox)
+
+
+def summary(uid: int, raw: bytes, flags: tuple, structure=None, envelope=None) -> MessageSummary:
+    """A row for the list from the start of a message (headers and the first few kilobytes of body).
+
+    The server's own ENVELOPE (subject, sender, date) fills in whatever the text of the message could not give.
+    """
     msg = parse(raw)
     text, html = _bodies(msg)
     seen = {f.decode() if isinstance(f, bytes) else str(f) for f in flags}
     body = text or (html_to_text(html) if html else "")
     has_files = _has_attachment_in(structure) if structure is not None else bool(attachments(msg))
+    sender = _person(msg["from"])
+    subject = str(msg["subject"] or "").strip()
+    date = _date(msg)
+    if envelope is not None:
+        if not sender.address:
+            sender = _envelope_sender(envelope)
+        subject = subject or _word(envelope.subject)
+        if date is None and envelope.date is not None:
+            date = envelope.date.replace(tzinfo=UTC) if envelope.date.tzinfo is None else envelope.date.astimezone(UTC)
     return MessageSummary(
         uid=uid,
-        subject=str(msg["subject"] or "").strip() or "(no subject)",
-        sender=_person(msg["from"]),
-        date=_date(msg),
+        subject=subject or "(no subject)",
+        sender=sender,
+        date=date,
         snippet=_snippet(body),
         seen="\\Seen" in seen,
         flagged="\\Flagged" in seen,
