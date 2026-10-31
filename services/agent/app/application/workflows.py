@@ -19,6 +19,7 @@ from stiamo_common.errors import NotFound, ValidationFailed
 from app.application.ports import (
     DataGateway,
     DecisionClient,
+    Execution,
     LedgerEntry,
     LlmClient,
     RunLog,
@@ -33,6 +34,7 @@ from app.domain.agents import clean_workspaces
 from app.domain.llm import DECISION_MODELS, AiError, Message
 from app.domain.workflows import (
     MAIL_FETCH,
+    MAX_ITEM_CHARS,
     SAMPLE_ITEMS,
     TEST_ITEMS,
     Item,
@@ -425,11 +427,11 @@ class WorkflowService:
 
         if mode == "run" and workflow:
             await self._repo.record([
-                LedgerEntry(str(uuid.uuid4()), workflow.id, who.user_id, o.item.id, o.item.title, o.item.text[:EXCERPT_CHARS], o.label, o.confidence, o.reason, o.status, run_id, workflow.version)
+                LedgerEntry(str(uuid.uuid4()), workflow.id, who.user_id, o.item.id, o.item.title, o.item.text[:MAX_ITEM_CHARS], o.label, o.confidence, o.reason, o.status, run_id, workflow.version)
                 for o in outcomes if o.status != "failed"
             ] + [
                 # Kept by a rule: remembered, so the next run goes on to older mail instead of reading these again.
-                LedgerEntry(str(uuid.uuid4()), workflow.id, who.user_id, item.id, item.title, item.text[:EXCERPT_CHARS], None, 0.0, f"Kept: {why}", "protected", run_id, workflow.version)
+                LedgerEntry(str(uuid.uuid4()), workflow.id, who.user_id, item.id, item.title, item.text[:MAX_ITEM_CHARS], None, 0.0, f"Kept: {why}", "protected", run_id, workflow.version)
                 for item, why in fetched.protected
             ])
             await self._repo.touch(workflow.id, started)
@@ -440,6 +442,12 @@ class WorkflowService:
                 summary += f", {counts[key]} {words}"
         if fetched.remaining:
             summary += f". {fetched.remaining} more to go"
+        if mode == "run" and workflow:
+            failed_all = bool(outcomes) and counts["failed"] == len(outcomes)
+            await self._repo.add_execution(Execution(
+                run_id, workflow.id, who.user_id, started, int((time.monotonic() - began) * 1000), "error" if failed_all else "ok", summary, counts, stats,
+                next((o.error for o in outcomes if o.error), None) if failed_all else None, workflow.version,
+            ))
         summary += trash_note
         if workflow:
             sel, _ = selection_of(s, workflow.id)
@@ -514,6 +522,31 @@ class WorkflowService:
         """Decides the new items and keeps each decision in the ledger for review."""
         w = await self._mine(who, workflow_id)
         return await self._execute(who, token, workflow=w, cfg=self._config(w.config), manual=manual, mode="run")
+
+    # --- executions: every real run, and what it decided -------------------------------------------------------
+
+    async def executions(self, who: Who, workflow_id: str) -> dict[str, Any]:
+        await self._mine(who, workflow_id)
+        now = await self._repo.run_status_counts(workflow_id)
+        return {"items": [self._execution_json(e, now.get(e.id, {})) for e in await self._repo.executions(who.user_id, workflow_id)]}
+
+    async def execution(self, who: Who, workflow_id: str, run_id: str) -> dict[str, Any]:
+        await self._mine(who, workflow_id)
+        e = await self._repo.execution(who.user_id, workflow_id, run_id)
+        if e is None:
+            raise NotFound("No such run.")
+        rows = await self._repo.run_items(who.user_id, workflow_id, run_id)
+        counts: dict[str, int] = {}
+        for r in rows:
+            counts[r.status] = counts.get(r.status, 0) + 1
+        iso = lambda d: d.astimezone(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z") if d else None  # noqa: E731
+        items = [{"id": r.item_id, "title": r.title, "excerpt": r.excerpt, "label": r.label, "confidence": round(r.confidence, 3), "reason": r.reason, "status": r.status, "at": iso(r.created_at), "decidedAt": iso(r.decided_at)} for r in rows]
+        return {"execution": self._execution_json(e, counts), "items": items}
+
+    @staticmethod
+    def _execution_json(e: Execution, now: dict[str, int]) -> dict[str, Any]:
+        iso = e.started_at.astimezone(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+        return {"id": e.id, "startedAt": iso, "durationMs": e.duration_ms, "status": e.status, "summary": e.summary, "counts": e.counts, "stats": e.stats, "error": e.error, "version": e.version, "now": now}
 
     # --- review ------------------------------------------------------------------------------------------------
 

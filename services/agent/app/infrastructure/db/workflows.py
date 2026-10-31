@@ -3,8 +3,8 @@ from datetime import UTC, datetime
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.application.ports import LedgerEntry, Workflow, WorkflowRepository
-from app.infrastructure.db.models import LedgerModel, WorkflowModel, WorkflowVersionModel
+from app.application.ports import Execution, LedgerEntry, Workflow, WorkflowRepository
+from app.infrastructure.db.models import ExecutionModel, LedgerModel, WorkflowModel, WorkflowVersionModel
 
 
 def _workflow(r: WorkflowModel) -> Workflow:
@@ -13,6 +13,10 @@ def _workflow(r: WorkflowModel) -> Workflow:
 
 def _entry(r: LedgerModel) -> LedgerEntry:
     return LedgerEntry(r.id, r.agent_id, r.user_id, r.item_id, r.title, r.excerpt, r.label, r.confidence, r.reason, r.status, r.run_id, r.version, r.created_at, r.decided_at)
+
+
+def _execution(r: ExecutionModel) -> Execution:
+    return Execution(r.id, r.agent_id, r.user_id, r.started_at, r.duration_ms, r.status, r.summary, dict(r.counts or {}), dict(r.stats or {}), r.error, r.version)
 
 
 class SqlWorkflowRepository(WorkflowRepository):
@@ -44,6 +48,7 @@ class SqlWorkflowRepository(WorkflowRepository):
         if await self.get(user_id, workflow_id) is None:
             return
         await self._s.execute(delete(LedgerModel).where(LedgerModel.agent_id == workflow_id))
+        await self._s.execute(delete(ExecutionModel).where(ExecutionModel.agent_id == workflow_id))
         await self._s.execute(delete(WorkflowVersionModel).where(WorkflowVersionModel.agent_id == workflow_id))
         await self._s.execute(delete(WorkflowModel).where(WorkflowModel.id == workflow_id))
 
@@ -81,3 +86,26 @@ class SqlWorkflowRepository(WorkflowRepository):
 
     async def touch(self, workflow_id: str, when: datetime) -> None:
         await self._s.execute(update(WorkflowModel).where(WorkflowModel.id == workflow_id).values(last_run_at=when))
+
+    async def add_execution(self, e: Execution) -> None:
+        self._s.add(ExecutionModel(id=e.id, agent_id=e.agent_id, user_id=e.user_id, started_at=e.started_at, duration_ms=e.duration_ms, status=e.status, summary=e.summary, counts=dict(e.counts), stats=dict(e.stats), error=e.error, version=e.version))
+        await self._s.flush()
+
+    async def executions(self, user_id: str, workflow_id: str, limit: int = 50) -> list[Execution]:
+        q = select(ExecutionModel).where(ExecutionModel.user_id == user_id, ExecutionModel.agent_id == workflow_id).order_by(ExecutionModel.started_at.desc()).limit(limit)
+        return [_execution(r) for r in (await self._s.execute(q)).scalars()]
+
+    async def execution(self, user_id: str, workflow_id: str, run_id: str) -> Execution | None:
+        row = await self._s.get(ExecutionModel, run_id)
+        return _execution(row) if row and row.user_id == user_id and row.agent_id == workflow_id else None
+
+    async def run_items(self, user_id: str, workflow_id: str, run_id: str, limit: int = 2000) -> list[LedgerEntry]:
+        q = select(LedgerModel).where(LedgerModel.user_id == user_id, LedgerModel.agent_id == workflow_id, LedgerModel.run_id == run_id).order_by(LedgerModel.confidence.asc()).limit(limit)
+        return [_entry(r) for r in (await self._s.execute(q)).scalars()]
+
+    async def run_status_counts(self, workflow_id: str) -> dict[str, dict[str, int]]:
+        rows = (await self._s.execute(select(LedgerModel.run_id, LedgerModel.status, func.count()).where(LedgerModel.agent_id == workflow_id).group_by(LedgerModel.run_id, LedgerModel.status))).all()
+        out: dict[str, dict[str, int]] = {}
+        for run_id, status, n in rows:
+            out.setdefault(run_id, {})[status] = n
+        return out

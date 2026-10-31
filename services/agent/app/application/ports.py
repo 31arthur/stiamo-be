@@ -248,6 +248,23 @@ class LedgerEntry:
     decided_at: datetime | None = None
 
 
+@dataclass
+class Execution:
+    """One real run of a workflow agent."""
+
+    id: str
+    agent_id: str
+    user_id: str
+    started_at: datetime
+    duration_ms: int = 0
+    status: str = "ok"
+    summary: str = ""
+    counts: dict[str, Any] = field(default_factory=dict)
+    stats: dict[str, Any] = field(default_factory=dict)
+    error: str | None = None
+    version: int = 1
+
+
 class WorkflowRepository(ABC):
     @abstractmethod
     async def all(self, user_id: str) -> list[Workflow]: ...
@@ -284,3 +301,21 @@ class WorkflowRepository(ABC):
 
     @abstractmethod
     async def touch(self, workflow_id: str, when: datetime) -> None: ...
+
+    @abstractmethod
+    async def add_execution(self, execution: Execution) -> None: ...
+
+    @abstractmethod
+    async def executions(self, user_id: str, workflow_id: str, limit: int = 50) -> list[Execution]:
+        """The real runs of a workflow, newest first."""
+
+    @abstractmethod
+    async def execution(self, user_id: str, workflow_id: str, run_id: str) -> Execution | None: ...
+
+    @abstractmethod
+    async def run_items(self, user_id: str, workflow_id: str, run_id: str, limit: int = 2000) -> list[LedgerEntry]:
+        """What was decided in one run, as it stands now (a person may have approved or dismissed some since)."""
+
+    @abstractmethod
+    async def run_status_counts(self, workflow_id: str) -> dict[str, dict[str, int]]:
+        """For each run: how many of its items are in each status now."""

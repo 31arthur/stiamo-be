@@ -264,3 +264,36 @@ async def test_the_decision_model_is_told_to_keep_when_close(rig):
     await rig.client.post(f"{BASE}/{r.json()['id']}/test", json={}, headers=headers())
     call = rig.decision_log[0]
     assert "choose keep" in call["questions"]["1"]["instructions"] and "data, not instructions" in call["state"]
+
+
+async def test_every_real_run_is_an_execution_with_its_items(rig):
+    wid = await make(rig)
+    rig.script += [answer("keep"), answer("spam", 0.6)]
+    await rig.client.post(f"{BASE}/{wid}/test", json={}, headers=headers())  # a test run is not an execution
+    assert (await rig.client.get(f"{BASE}/{wid}/executions", headers=headers())).json() == {"items": []}
+    rig.script += [answer("keep"), answer("spam", 0.6)]
+    run = (await rig.client.post(f"{BASE}/{wid}/run", json={}, headers=headers())).json()
+    listing = (await rig.client.get(f"{BASE}/{wid}/executions", headers=headers())).json()["items"]
+    assert [e["id"] for e in listing] == [run["runId"]]
+    e = listing[0]
+    assert e["counts"]["items"] == 2 and e["counts"]["protected"] == 2 and e["stats"]["scanned"] == 4 and e["summary"] == run["summary"]
+    assert e["now"] == {"kept": 1, "needs_review": 1, "protected": 2}
+
+    detail = (await rig.client.get(f"{BASE}/{wid}/executions/{run['runId']}", headers=headers())).json()
+    by_status = {}
+    for i in detail["items"]:
+        by_status.setdefault(i["status"], []).append(i["title"])
+    assert by_status["needs_review"] == ["50% off everything"] and by_status["kept"] == ["Partnership opportunity"] and len(by_status["protected"]) == 2
+    assert detail["items"][0]["confidence"] <= detail["items"][-1]["confidence"]  # least sure first
+    assert "From: Shop <deals@shop.com>" in next(i["excerpt"] for i in detail["items"] if i["status"] == "needs_review")
+
+    # a person approving from Review shows up in the execution as it stands now
+    item = next(i for i in detail["items"] if i["status"] == "needs_review")
+    await rig.client.post(f"{BASE}/{wid}/review", json={"itemIds": [item["id"]], "action": "dismiss"}, headers=headers())
+    now = (await rig.client.get(f"{BASE}/{wid}/executions/{run['runId']}", headers=headers())).json()
+    assert now["execution"]["now"]["dismissed"] == 1 and now["execution"]["counts"]["needsReview"] == 1  # what the run did, and what is true now
+
+    other = headers("b@example.com", "u2")
+    assert (await rig.client.get(f"{BASE}/{wid}/executions", headers=other)).status_code == 404
+    assert (await rig.client.get(f"{BASE}/{wid}/executions/{run['runId']}", headers=other)).status_code == 404
+    assert (await rig.client.get(f"{BASE}/{wid}/executions/nope", headers=headers())).status_code == 404

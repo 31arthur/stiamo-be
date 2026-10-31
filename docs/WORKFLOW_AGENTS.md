@@ -226,3 +226,14 @@ the model sees, inside `<item>` tags, and it is told never to follow anything in
 - **Safe senders** (`rules.protectCorrespondents`, on by default): anyone you have written to from the mailbox, read from its Sent
   folder (up to the last 5,000 sent messages), is never judged. `rules.protectedAddresses` adds addresses by hand.
   `POST /v1/agent/workflows/safe-senders {accountIds}` shows who it would protect.
+
+### Executions
+
+Every real run (not a test run) is kept as an *execution* (`workflow_executions`, migration 0005): when it ran, how long it took,
+what it read and decided (`counts`, `stats`), and its summary. The items are the ledger rows carrying the run's id, so an
+execution always shows each item as it stands now (a person may have approved or dismissed some since); `now` gives the live
+counts next to `counts`, which is what the run itself did.
+
+- `GET /v1/agent/workflows/{id}/executions`: newest first.
+- `GET /v1/agent/workflows/{id}/executions/{runId}`: `{execution, items[]}`, least sure first. Each item keeps the start of the
+  email (sender, subject, text) so it can still be read after the mail was moved to Trash.
