@@ -7,6 +7,7 @@ from stiamo_common.db import make_engine, make_session_factory
 from stiamo_common.errors import install_error_handlers
 
 from app.agents import default_registry
+from app.application.sweeps import SweepManager
 from app.config import Settings, get_settings
 from app.infrastructure.data import HttpDataGateway
 from app.infrastructure.db.runs import SqlRunLog
@@ -32,6 +33,7 @@ def create_app(settings: Settings | None = None, *, registry=None, llm_factory=N
         app.state.engine = engine
         app.state.session_factory = make_session_factory(engine)
         yield
+        await app.state.sweeps.close()
         await http.aclose()
         await engine.dispose()
 
@@ -43,6 +45,8 @@ def create_app(settings: Settings | None = None, *, registry=None, llm_factory=N
     app.state.runs = SqlRunLog(lambda: app.state.session_factory())
     #: Ids of the agents being run right now (the service runs as one process, so this is shared by every request).
     app.state.running = set()
+    #: Runs through a whole inbox that are going on in the background (see application/sweeps.py).
+    app.state.sweeps = SweepManager()
     app.state.llm_factory = llm_factory or (lambda provider, key: GeminiClient(key, http) if provider == "gemini" else OpenAiCompatibleClient(provider, key, http))
     app.state.decision_factory = decision_factory or (lambda key: JevClient(key, http))
     app.state.data_factory = data_factory or (lambda token: HttpDataGateway(http, token, settings.practice_url, settings.files_url, settings.drive_url, settings.mail_url))

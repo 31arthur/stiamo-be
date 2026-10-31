@@ -1,7 +1,8 @@
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Response, status
+from fastapi import APIRouter, Request, Response, status
 from pydantic import Field
+from stiamo_common.errors import ValidationFailed
 from stiamo_common.models import DomainModel
 
 from app.presentation import deps
@@ -114,6 +115,28 @@ async def add_refinement(workflow_id: str, body: RefinementBody, workflows: deps
 @router.delete("/{workflow_id}/refinements/{index}", summary="Forget one learned point")
 async def remove_refinement(workflow_id: str, index: int, workflows: deps.Workflows, me: deps.Me) -> dict[str, Any]:
     return await workflows.remove_refinement(me, workflow_id, index)
+
+
+@router.post("/{workflow_id}/sweep", status_code=status.HTTP_202_ACCEPTED, summary="Run through the whole inbox in the background: again and again, a batch at a time, until done")
+async def start_sweep(workflow_id: str, request: Request, workflows: deps.Workflows, me: deps.Me) -> dict[str, Any]:
+    w = await workflows.get(me, workflow_id)
+    if w["config"].get("source", {}).get("kind") not in ("mail", "table"):
+        raise ValidationFailed("Only an agent that reads a mailbox or a collection can run through everything.")
+    return {"sweep": request.app.state.sweeps.start(workflow_id, me.user_id, deps.sweep_run(request.app, me, workflow_id)).json()}
+
+
+@router.get("/{workflow_id}/sweep", summary="How the background run is going (or how the last one ended)")
+async def sweep_status(workflow_id: str, request: Request, workflows: deps.Workflows, me: deps.Me) -> dict[str, Any]:
+    await workflows.get(me, workflow_id)
+    s = request.app.state.sweeps.get(workflow_id)
+    return {"sweep": s.json() if s and s.user_id == me.user_id else None}
+
+
+@router.post("/{workflow_id}/sweep/stop", summary="Stop after the run in progress")
+async def stop_sweep(workflow_id: str, request: Request, workflows: deps.Workflows, me: deps.Me) -> dict[str, Any]:
+    await workflows.get(me, workflow_id)
+    s = request.app.state.sweeps.stop(workflow_id)
+    return {"sweep": s.json() if s and s.user_id == me.user_id else None}
 
 
 @router.get("/{workflow_id}/executions", summary="Every real run of the agent, newest first")
