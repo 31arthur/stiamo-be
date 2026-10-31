@@ -188,4 +188,6 @@ from the IMAP server on request. Setup and rules: [MAIL_SETUP.md](MAIL_SETUP.md)
 | `GET .../messages/{uid}?folder=` | the message with `text`, cleaned `html`, `hasRemoteContent`, `attachments[]` |
 | `PATCH .../messages/{uid}?folder=` `{seen?, flagged?}` | the only changes it can make |
 | `GET .../messages/{uid}/attachments/{index}?folder=` | always a download |
+| `GET .../correspondents` | addresses the mailbox has written to (from Sent), lower case |
+| `POST .../messages/trash` `{folder?, uids[]}` | moves messages to Trash (never deletes); `{moved}` |
 | `GET .../events?folder=` | server-sent events: `state` (`connecting`, `live`, `down`, `auth`) and `changed` |

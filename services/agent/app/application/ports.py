@@ -43,6 +43,17 @@ class DataGateway(ABC):
         """Every record of a Stiamo collection (see `TABLES`), as the practice service gives them."""
 
     @abstractmethod
+    async def mail_page(self, account_id: str, folder: str, before: int | None) -> dict[str, Any]:
+        """One page of a mailbox folder, newest first, as the mail service lists it: {messages, nextBefore, uidValidity}."""
+
+    @abstractmethod
+    async def mail_correspondents(self, account_id: str) -> list[str]: ...
+
+    @abstractmethod
+    async def mail_trash(self, account_id: str, folder: str, uids: list[int]) -> int:
+        """Moves messages to the mailbox's Trash folder. Never deletes."""
+
+    @abstractmethod
     async def drive_available(self) -> bool: ...
 
     @abstractmethod

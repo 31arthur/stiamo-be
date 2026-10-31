@@ -105,5 +105,5 @@ def test_the_servers_envelope_fills_in_a_list_row_when_the_text_gave_nothing():
     assert (s.subject, s.sender.name, s.sender.address) == ("Security alert", "Google", "no-reply@accounts.google.com")
     assert s.date.isoformat() == "2026-11-01T02:45:00+00:00"
     # Whatever the server calls the item, the message text is found.
-    assert _raw({b"BODY[]<0>": b"From: a@b.co\r\n\r\nhi", b"FLAGS": (b"\Seen",)}) == b"From: a@b.co\r\n\r\nhi"
+    assert _raw({b"BODY[]<0>": b"From: a@b.co\r\n\r\nhi", b"FLAGS": (b"Seen",)}) == b"From: a@b.co\r\n\r\nhi"
     assert _raw({b"FLAGS": ()}) == b""

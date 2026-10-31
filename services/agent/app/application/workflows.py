@@ -32,15 +32,19 @@ from app.application.services import Memo, Who, selection_of
 from app.domain.agents import clean_workspaces
 from app.domain.llm import DECISION_MODELS, AiError, Message
 from app.domain.workflows import (
+    MAIL_PAGES,
     TEST_ITEMS,
     Item,
     WorkflowConfig,
     apply_filters,
     decide_status,
+    item_from_mail,
     item_from_record,
     parse_decision,
     parse_manual,
+    protected_by,
     system_prompt,
+    uid_of,
     wrap_item,
 )
 
@@ -55,13 +59,15 @@ EXCERPT_CHARS = 300
 @dataclass
 class Outcome:
     item: Item
-    status: str  # proposed, needs_review or failed
+    status: str  # proposed, needs_review, failed, kept (judged fine, nothing to do) or applied (moved to Trash)
     label: str | None = None
     confidence: float = 0.0
     reason: str = ""
     error: str | None = None
     ms: int = 0
     usage: dict[str, int] = field(default_factory=dict)
+    #: What is (or, in a test run, would be) done with the item: `trash`.
+    action: str | None = None
 
     def to_json(self) -> dict[str, Any]:
         out: dict[str, Any] = {
@@ -70,6 +76,8 @@ class Outcome:
         }
         if self.error:
             out["error"] = self.error
+        if self.action:
+            out["action"] = self.action
         return out
 
 
@@ -160,12 +168,16 @@ class WorkflowService:
 
     # --- deciding ----------------------------------------------------------------------------------------------
 
-    async def _items(self, token: str, cfg: WorkflowConfig, manual: str | None, seen: set[str], limit: int | None) -> tuple[list[Item], int]:
-        """The items to decide about (filtered, capped), and how many matched before the cap."""
+    async def _items(self, token: str, cfg: WorkflowConfig, manual: str | None, seen: set[str], limit: int | None) -> tuple[list[Item], int, int]:
+        """The items to decide about (filtered, capped), how many matched before the cap, and how many were set aside by the rules."""
+        cap = min(cfg.filters.limit, limit) if limit else cfg.filters.limit
+        protected = 0
         if cfg.source.kind == "manual":
             items = parse_manual(manual or "")
             if not items:
                 raise ValidationFailed("Paste at least one item to try. Separate several with a line of ---.")
+        elif cfg.source.kind == "mail":
+            items, protected = await self._mail_items(token, cfg, seen, cap)
         else:
             try:
                 records = await Memo(self._data(token)).records(cfg.source.table or "")
@@ -173,8 +185,36 @@ class WorkflowService:
                 raise ValidationFailed(str(exc)) from exc
             items = [item_from_record(r) for r in records]
         matched = apply_filters(items, cfg.filters.model_copy(update={"limit": 10_000}), seen)
-        cap = min(cfg.filters.limit, limit) if limit else cfg.filters.limit
-        return matched[:cap], len(matched)
+        return matched[:cap], len(matched), protected
+
+    async def _mail_items(self, token: str, cfg: WorkflowConfig, seen: set[str], cap: int) -> tuple[list[Item], int]:
+        """Reads the folder newest first, a page at a time, setting aside what the rules protect, until there is enough to decide about."""
+        data = Memo(self._data(token))
+        account, folder = cfg.source.account_id or "", cfg.source.folder
+        cutoff = datetime.now(UTC).timestamp() - cfg.filters.since_days * 86400 if cfg.filters.since_days else None
+        items: list[Item] = []
+        protected = 0
+        try:
+            friends = set(await data.mail_correspondents(account)) if cfg.rules.protect_correspondents else set()
+            before: int | None = None
+            for _ in range(MAIL_PAGES):
+                page = await data.mail_page(account, folder, before)
+                for m in page.get("messages", []):
+                    item = item_from_mail(m, page.get("uidValidity", 0))
+                    if cfg.filters.new_only and item.id in seen:
+                        continue
+                    if protected_by(item, cfg.rules, friends):
+                        protected += 1
+                        continue
+                    items.append(item)
+                before = page.get("nextBefore")
+                oldest = (page.get("messages") or [{}])[-1].get("date")
+                too_old = bool(cutoff and oldest and datetime.fromisoformat(oldest.replace("Z", "+00:00")).timestamp() < cutoff)
+                if not before or len(items) >= cap or too_old:
+                    break
+        except AiError as exc:
+            raise ValidationFailed(str(exc)) from exc
+        return items, protected
 
     async def _decider(self, who: Who, cfg: WorkflowConfig, s: UserSettings, workflow_id: str | None):
         """A function that decides one item. Raises ValidationFailed when the model it needs isn't set up."""
@@ -241,13 +281,16 @@ class WorkflowService:
         s = await self._settings.get(who.user_id) or UserSettings(who.user_id)
         started, began = datetime.now(UTC), time.monotonic()
         seen = await self._repo.seen(workflow.id) if workflow else set()
-        items, matched = await self._items(token, cfg, manual, seen, TEST_ITEMS if mode == "test" else None)
+        items, matched, protected = await self._items(token, cfg, manual, seen, TEST_ITEMS if mode == "test" else None)
         decide = await self._decider(who, cfg, s, workflow.id if workflow else None)
         outcomes = await self._decide_all(cfg, items, decide) if items else []
+        trash_note = await self._act(token, cfg, outcomes, mode)
 
         counts = {"items": len(outcomes), "proposed": 0, "needsReview": 0, "failed": 0}
+        if cfg.source.kind == "mail":  # what a mailbox agent adds: judged fine, moved to Trash, set aside by the rules
+            counts.update(kept=0, applied=0, protected=protected)
         for o in outcomes:
-            counts[{"proposed": "proposed", "needs_review": "needsReview", "failed": "failed"}[o.status]] += 1
+            counts[{"proposed": "proposed", "needs_review": "needsReview", "failed": "failed", "kept": "kept", "applied": "applied"}[o.status]] += 1
         usage = {"inputTokens": sum(o.usage.get("inputTokens", 0) for o in outcomes), "outputTokens": sum(o.usage.get("outputTokens", 0) for o in outcomes)}
         run_id = str(uuid.uuid4())
 
@@ -259,21 +302,49 @@ class WorkflowService:
             await self._repo.touch(workflow.id, started)
 
         summary = f"{counts['items']} item{'s' if counts['items'] != 1 else ''}: {counts['proposed']} proposed, {counts['needsReview']} to review" + (f", {counts['failed']} failed" if counts["failed"] else "")
+        for key, words in (("applied", "moved to Trash"), ("kept", "kept"), ("protected", "protected")):
+            if counts.get(key):
+                summary += f", {counts[key]} {words}"
+        summary += trash_note
         if workflow:
             sel, _ = selection_of(s, workflow.id)
             await self._log(RunRecord(
                 id=run_id, user_id=who.user_id, agent_id=workflow.id, trigger="test" if mode == "test" else "manual",
                 status="error" if outcomes and counts["failed"] == len(outcomes) else "ok", started_at=started, duration_ms=int((time.monotonic() - began) * 1000),
                 provider=(sel or {}).get("providerId", "openrouter" if cfg.decider == "jev" else ""), model=(sel or {}).get("modelId", "") if cfg.decider == "model" else (s.decision or {}).get("modelId", "jev"),
-                thinking=(sel or {}).get("thinking", "off") if cfg.decider == "model" else "off", input=f"{counts['items']} items from {cfg.source.table or 'pasted text'}",
+                thinking=(sel or {}).get("thinking", "off") if cfg.decider == "model" else "off", input=f"{counts['items']} items from {'the mailbox' if cfg.source.kind == 'mail' else cfg.source.table or 'pasted text'}",
                 user_message=cfg.prompt, system_prompt=system_prompt(cfg, who.name), steps=[self._step(o) for o in outcomes], steps_count=len(outcomes),
-                output=summary, found_count=counts["proposed"] + counts["needsReview"], error=next((o.error for o in outcomes if o.error), None) if counts["failed"] == len(outcomes) and outcomes else None,
+                output=summary, found_count=counts["proposed"] + counts["needsReview"] + counts.get("applied", 0), error=next((o.error for o in outcomes if o.error), None) if counts["failed"] == len(outcomes) and outcomes else None,
                 usage=usage, version=workflow.version,
             ))
         return {
             "runId": run_id if workflow else None, "mode": mode, "counts": counts, "matched": matched, "usage": usage, "summary": summary,
             "durationMs": int((time.monotonic() - began) * 1000), "items": [o.to_json() for o in outcomes],
         }
+
+    async def _act(self, token: str, cfg: WorkflowConfig, outcomes: list[Outcome], mode: str) -> str:
+        """What the labels mean for a mailbox. Confident "trash" items are moved to Trash only in a real run of an agent set to act on
+        its own; in a test run, or when approval is required, they are only marked. Everything judged fine is kept. Returns a note when
+        the move failed (the items then wait in Review as proposals)."""
+        act = cfg.action
+        if cfg.source.kind != "mail" or not act.trash_label:
+            return ""
+        for o in outcomes:
+            if o.status == "proposed":
+                if o.label == act.trash_label:
+                    o.action = "trash"
+                else:
+                    o.status = "kept"
+        targets = [o for o in outcomes if o.action == "trash"]
+        if mode != "run" or not act.auto or not targets:
+            return ""
+        try:
+            await Memo(self._data(token)).mail_trash(cfg.source.account_id or "", cfg.source.folder, [uid_of(o.item.id) for o in targets])
+        except AiError as exc:
+            return f". Couldn't move them to Trash: {exc}"
+        for o in targets:
+            o.status = "applied"
+        return ""
 
     @staticmethod
     def _step(o: Outcome) -> dict[str, Any]:
@@ -311,7 +382,7 @@ class WorkflowService:
         iso = lambda d: d.astimezone(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z") if d else None  # noqa: E731
         return {"items": [{"id": r.item_id, "title": r.title, "excerpt": r.excerpt, "label": r.label, "confidence": round(r.confidence, 3), "reason": r.reason, "status": r.status, "version": r.version, "at": iso(r.created_at)} for r in rows]}
 
-    async def decide_review(self, who: Who, workflow_id: str, item_ids: list[str], action: str, label: str | None) -> dict[str, int]:
+    async def decide_review(self, who: Who, token: str, workflow_id: str, item_ids: list[str], action: str, label: str | None) -> dict[str, int]:
         """A person's answer on items the agent proposed or wasn't sure about. Approving may correct the label."""
         w = await self._mine(who, workflow_id)
         if action not in ("approve", "dismiss"):
@@ -320,5 +391,15 @@ class WorkflowService:
             raise ValidationFailed("That isn't one of this agent's labels.")
         if label and len(item_ids) != 1:
             raise ValidationFailed("Change a label one item at a time.")
+        moved = 0
+        cfg = self._config(w.config)
+        if action == "approve" and cfg.source.kind == "mail" and cfg.action.trash_label:
+            pending = {r.item_id: r for r in await self._repo.review(who.user_id, workflow_id, ["proposed", "needs_review"])}
+            targets = [i for i in item_ids if i in pending and (label or pending[i].label) == cfg.action.trash_label]
+            if targets:
+                try:
+                    moved = await Memo(self._data(token)).mail_trash(cfg.source.account_id or "", cfg.source.folder, [uid_of(i) for i in targets])
+                except AiError as exc:
+                    raise ValidationFailed(str(exc)) from exc
         n = await self._repo.decide(who.user_id, workflow_id, item_ids, "approved" if action == "approve" else "dismissed", label if action == "approve" else None)
-        return {"changed": n}
+        return {"changed": n, "moved": moved} if cfg.source.kind == "mail" else {"changed": n}

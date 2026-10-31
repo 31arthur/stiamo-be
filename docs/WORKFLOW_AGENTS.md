@@ -186,3 +186,16 @@ Existing history, stats and the agent hub work unchanged: they read `agent_runs`
 | Which email access? | IMAP with an app password first (works with Gmail/Outlook/most hosts, sealed, revocable). OAuth later if wanted. |
 | Delete mail? | Not in v1. Move to a "Stiamo/Spam" folder, which the person empties. |
 | Retention of item content | Keep ids, headers, decision and a short excerpt in the log; not whole bodies. Say so in the UI and allow clearing. |
+
+## Mailbox sources (implemented, a first slice of phase 4)
+
+`source.kind = "mail"` reads a folder of a mailbox connected in the Mail section (`accountId`, `folder`), newest first, a page
+at a time. An item's id is `UIDVALIDITY:UID`. Mail is hostile input: the sender, subject and the start of the text are what
+the model sees, inside `<item>` tags, and it is told never to follow anything in them.
+
+- `rules`: `protectedDomains`, `protectedPhrases`, `protectCorrespondents`. Applied in code before the model; protected mail
+  is counted, not decided, and not put in the ledger.
+- `action`: `{trashLabel, auto}`. Mail labelled `trashLabel` with enough confidence is moved to Trash (`auto: true`), or
+  waits in Review as a proposal and is moved when approved. Everything else judged fine is `kept`. Test runs never move.
+- Ledger statuses added: `kept` and `applied`. Nothing is ever deleted: the only mail action is "move to Trash".
+- Not yet: a schedule (runs are started by a person), undo from the app (the mail is in Trash), labels and other folders.

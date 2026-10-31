@@ -27,6 +27,7 @@ _ROLES = {b"\\inbox": "inbox", b"\\sent": "sent", b"\\drafts": "drafts", b"\\tra
 _BY_NAME = {"inbox": "inbox", "sent": "sent", "sent items": "sent", "sent mail": "sent", "drafts": "drafts", "trash": "trash", "deleted items": "trash", "bin": "trash", "spam": "junk", "junk": "junk", "junk email": "junk", "archive": "archive"}
 _PEEK = 3000  # bytes of each message fetched for the list: its headers and the start of its body
 _MAX_DOWNLOAD = 30_000_000
+_SENT_LOOKBACK = 1000  # how many sent messages are read to learn who the person writes to
 
 
 def check_host(host: str, *, allow_private: bool) -> None:
@@ -131,6 +132,45 @@ class ImapGateway(MailGateway):
                 raise MailError("That message isn’t in the mailbox any more.")
             data = rows[uid]
             return parse.message(uid, _raw(data), data.get(b"FLAGS", ()))
+
+    def correspondents(self, creds: Credentials) -> list[str]:
+        with self._open(creds) as c:
+            sent = next((name for flags, _d, name in c.list_folders() if b"\\sent" in {f.lower() for f in flags}), None)
+            if sent is None:
+                sent = next((name for _f, _d, name in c.list_folders() if name.lower().rsplit("/", 1)[-1] in ("sent", "sent items", "sent mail")), None)
+            if sent is None:
+                return []
+            _select(c, sent, readonly=True)
+            uids = sorted(c.search(["ALL"]))[-_SENT_LOOKBACK:]
+            found: set[str] = set()
+            for start in range(0, len(uids), 200):
+                for data in c.fetch(uids[start : start + 200], ["ENVELOPE"]).values():
+                    env = data.get(b"ENVELOPE")
+                    for group in (env.to, env.cc, env.bcc) if env else ():
+                        for a in group or ():
+                            mailbox, host = parse.word(a.mailbox), parse.word(a.host)
+                            if mailbox and host:
+                                found.add(f"{mailbox}@{host}".lower())
+            return sorted(found)
+
+    def move_to_trash(self, creds: Credentials, folder: str, uids: list[int]) -> int:
+        """Copies to Trash first and only then removes from the folder (imapclient's move), so nothing is ever lost."""
+        if not uids:
+            return 0
+        with self._open(creds) as c:
+            trash = next((name for flags, _d, name in c.list_folders() if b"\\trash" in {f.lower() for f in flags}), None)
+            if trash is None:
+                trash = next((name for _f, _d, name in c.list_folders() if name.lower().rsplit("/", 1)[-1] in ("trash", "deleted items", "bin")), None)
+            if trash is None:
+                raise MailError("This mailbox has no Trash folder to move messages to.")
+            if trash == folder:
+                return 0
+            _select(c, folder, readonly=False)
+            try:
+                c.move(uids, trash)
+            except IMAPClientError:
+                raise MailError("The mail server refused to move the messages.") from None
+            return len(uids)
 
     # -- the only changes it can make -----------------------------------------------------------------------------------------
 

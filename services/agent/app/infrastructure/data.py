@@ -11,9 +11,9 @@ MAX_RECORDS = 3000
 
 
 class HttpDataGateway(DataGateway):
-    def __init__(self, http: httpx.AsyncClient, token: str, practice_url: str, files_url: str, drive_url: str) -> None:
+    def __init__(self, http: httpx.AsyncClient, token: str, practice_url: str, files_url: str, drive_url: str, mail_url: str = "http://mail:8000") -> None:
         self._http, self._headers = http, {"Authorization": f"Bearer {token}"}
-        self._practice, self._files, self._drive = practice_url.rstrip("/"), files_url.rstrip("/"), drive_url.rstrip("/")
+        self._practice, self._files, self._drive, self._mail = practice_url.rstrip("/"), files_url.rstrip("/"), drive_url.rstrip("/"), mail_url.rstrip("/")
         self._drive_ok: bool | None = None
 
     async def _get(self, url: str, **params: Any) -> httpx.Response:
@@ -51,6 +51,43 @@ class HttpDataGateway(DataGateway):
         if table not in TABLES:
             raise AiError("That collection can't be read.")
         return await self._all(f"{self._practice}{TABLES[table]}")
+
+    async def _mail_error(self, r: httpx.Response) -> AiError:
+        try:
+            message = r.json()["error"]["message"]
+        except (ValueError, KeyError, TypeError):
+            message = f"The mail service answered {r.status_code}."
+        return AiError(message)
+
+    async def mail_page(self, account_id: str, folder: str, before: int | None) -> dict[str, Any]:
+        try:
+            r = await self._get(f"{self._mail}/v1/mail/accounts/{account_id}/messages", folder=folder, before=before, limit=100)
+        except AiError:
+            raise AiError("Couldn't reach the mail service. Try again in a moment.") from None
+        if r.status_code != 200:
+            raise await self._mail_error(r)
+        return r.json()
+
+    async def mail_correspondents(self, account_id: str) -> list[str]:
+        try:
+            r = await self._get(f"{self._mail}/v1/mail/accounts/{account_id}/correspondents")
+        except AiError:
+            raise AiError("Couldn't reach the mail service. Try again in a moment.") from None
+        if r.status_code != 200:
+            raise await self._mail_error(r)
+        return r.json()
+
+    async def mail_trash(self, account_id: str, folder: str, uids: list[int]) -> int:
+        moved = 0
+        for start in range(0, len(uids), 100):
+            try:
+                r = await self._http.post(f"{self._mail}/v1/mail/accounts/{account_id}/messages/trash", headers=self._headers, json={"folder": folder, "uids": uids[start : start + 100]})
+            except httpx.HTTPError as exc:
+                raise AiError("Couldn't reach the mail service. Try again in a moment.") from exc
+            if r.status_code != 200:
+                raise await self._mail_error(r)
+            moved += r.json().get("moved", 0)
+        return moved
 
     async def drive_available(self) -> bool:
         if self._drive_ok is None:

@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     practice_url: str = "http://practice:8000"
     files_url: str = "http://files:8000"
     drive_url: str = "http://drive:8000"
+    mail_url: str = "http://mail:8000"
 
     timeout_seconds: float = 60.0
     max_steps: int = 8

@@ -127,6 +127,11 @@ class MessageOut(DomainModel):
         )  # fmt: skip
 
 
+class TrashIn(DomainModel):
+    folder: str = Field("INBOX", max_length=300)
+    uids: list[int] = Field(min_length=1, max_length=200)
+
+
 class MarkIn(DomainModel):
     seen: bool | None = None
     flagged: bool | None = None
