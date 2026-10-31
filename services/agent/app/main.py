@@ -41,6 +41,8 @@ def create_app(settings: Settings | None = None, *, registry=None, llm_factory=N
     app.state.registry = registry or default_registry()
     # Its own sessions (the factory exists once the app starts), so a failed run is still kept.
     app.state.runs = SqlRunLog(lambda: app.state.session_factory())
+    #: Ids of the agents being run right now (the service runs as one process, so this is shared by every request).
+    app.state.running = set()
     app.state.llm_factory = llm_factory or (lambda provider, key: GeminiClient(key, http) if provider == "gemini" else OpenAiCompatibleClient(provider, key, http))
     app.state.decision_factory = decision_factory or (lambda key: JevClient(key, http))
     app.state.data_factory = data_factory or (lambda token: HttpDataGateway(http, token, settings.practice_url, settings.files_url, settings.drive_url, settings.mail_url))

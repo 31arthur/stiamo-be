@@ -56,7 +56,7 @@ def build_services(app: FastAPI, session: AsyncSession) -> tuple[AgentService, C
 
 def workflow_service(request: Request, session: Session) -> WorkflowService:
     s = request.app.state
-    return WorkflowService(SqlWorkflowRepository(session), SqlSettingsRepository(session, s.box), s.runs, s.llm_factory, s.decision_factory, s.data_factory)
+    return WorkflowService(SqlWorkflowRepository(session), SqlSettingsRepository(session, s.box), s.runs, s.llm_factory, s.decision_factory, s.data_factory, s.running)
 
 
 def agent_service(request: Request, session: Session) -> AgentService:

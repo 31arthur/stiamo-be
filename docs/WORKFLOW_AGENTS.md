@@ -254,3 +254,10 @@ the owner wrote:
    `DELETE .../refinements/{index}` forgets a point.
 
 The decision also records the reason (`You said it isn't spam: …`) on the item in its execution.
+
+### One run of an agent at a time
+
+`POST .../run` is refused with `409` ("This agent is already running") while that agent is running. Without it, two runs (two
+tabs, or a manual run during "Run through the whole inbox") would judge the same emails twice, move them twice, and collide
+writing the same ledger rows, losing the record of the run that finished second. Different agents run side by side, each with its
+own ledger, and test runs are not limited. The lock is held in the agent service's memory, so run **one replica** of `agent`.
