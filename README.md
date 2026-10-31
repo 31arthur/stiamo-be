@@ -12,6 +12,7 @@ Backend for [Stiamo](https://github.com/31arthur/stiamo), built with **FastAPI**
 | `services/drive` | Searches the contents of your Google Drive letters without copying them |
 | `services/agent` | AI providers and models (OpenAI, Gemini, OpenRouter), the editable case agent, the Jev decision model, and the Telegram and WhatsApp channels |
 | `docs/AI_AGENTS.md` | How the agent service is built: agents, tool packs, prompts, channels, security, testing |
+| `docs/WORKFLOW_AGENTS.md` | Design for agents that read a source (email, tables), decide, and act on a schedule |
 | `docs/ADDING_AN_AGENT.md` | The recipe for a new agent, tool pack, provider or channel |
 | `docs/AGENT_SETUP.md` | Running the agent service: keys, Telegram, WhatsApp (Twilio) |
 | `docs/DRIVE_SETUP.md` | Connecting Google Drive (service account, sharing, server settings) |

@@ -171,7 +171,8 @@ one scripted question end to end.
 | A new model provider | an `LlmClient` in `infrastructure/llm/`, one line in the factory in `main.py`, the id in `PROVIDER_IDS`. |
 | A new place people talk to agents (Slack, email) | a channel in `ChannelService` + its webhook; it already picks an agent by id. |
 | Agents that call agents | a pack whose tool runs another agent through `AgentService.chat` with a depth limit (not built yet). |
-| Runs longer than ~60 s, scheduled runs, or heavy fan-out | a job queue and a `runs` table; return a run id and poll. Until then keep the step and result limits. |
+| Agents a person builds that watch a source (email, a table) and act on a schedule | workflow agents: see [WORKFLOW_AGENTS.md](WORKFLOW_AGENTS.md). |
+| Runs longer than ~60 s or heavy fan-out | a job queue and workers; return a run id and poll. Until then keep the step and result limits. |
 | One agent with its own data, secrets or deploy cadence | its own service, still using `stiamo_common`. Until then packs give the same separation inside one process. |
 
 Known limits to revisit as use grows: chat memory for channels is in process memory (resets on restart, single replica);
