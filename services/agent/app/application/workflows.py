@@ -29,6 +29,7 @@ from app.application.ports import (
     WorkflowRepository,
 )
 from app.application.services import Memo, Who, selection_of
+from app.domain.agents import clean_workspaces
 from app.domain.llm import DECISION_MODELS, AiError, Message
 from app.domain.workflows import (
     TEST_ITEMS,
@@ -119,16 +120,21 @@ class WorkflowService:
         w = await self._mine(who, workflow_id)
         return workflow_json(w, await self._repo.counts(w.id))
 
-    async def create(self, who: Who, name: str, description: str, config: dict[str, Any]) -> dict[str, Any]:
+    async def create(self, who: Who, name: str, description: str, config: dict[str, Any], workspaces: list[str] | None = None) -> dict[str, Any]:
         name = name.strip()
         if not name:
             raise ValidationFailed("Give the agent a name.")
         if len(await self._repo.all(who.user_id)) >= MAX_WORKFLOWS:
             raise ValidationFailed(f"That's the most agents you can build ({MAX_WORKFLOWS}). Delete one first.")
         cfg = self._config(config)
+        chosen = clean_workspaces(workspaces or [])
         w = Workflow(f"wf-{uuid.uuid4().hex[:12]}", who.user_id, name[:100], description.strip()[:300], cfg.model_dump(by_alias=True), 1, datetime.now(UTC))
         await self._repo.save(w)
-        return workflow_json(w)
+        if chosen:
+            s = await self._settings.get(who.user_id) or UserSettings(who.user_id, who.email)
+            s.workspaces = {**s.workspaces, w.id: chosen}
+            await self._settings.save(s)
+        return {**workflow_json(w), "workspaces": chosen}
 
     async def update(self, who: Who, workflow_id: str, name: str, description: str, config: dict[str, Any]) -> dict[str, Any]:
         w = await self._mine(who, workflow_id)
@@ -146,6 +152,11 @@ class WorkflowService:
         await self._mine(who, workflow_id)
         await self._repo.delete(who.user_id, workflow_id)
         await self._runs.clear(who.user_id, workflow_id)
+        s = await self._settings.get(who.user_id)
+        if s and (workflow_id in s.workspaces or workflow_id in s.selections):
+            s.workspaces = {k: v for k, v in s.workspaces.items() if k != workflow_id}
+            s.selections = {k: v for k, v in s.selections.items() if k != workflow_id}
+            await self._settings.save(s)
 
     # --- deciding ----------------------------------------------------------------------------------------------
 

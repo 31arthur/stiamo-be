@@ -95,7 +95,7 @@ they are checked, sealed and never returned (only `last4`). `{agent}` is an agen
 
 | Call | Meaning |
 | --- | --- |
-| `GET /v1/agent/settings` | `{providers, decision, decisionModels, thinkingLevels, agents[], defaultAgent}`; each agent has `{id, name, description, suggestions, selection, selectionInherited, customPrompt}` |
+| `GET /v1/agent/settings` | `{providers, decision, decisionModels, thinkingLevels, agents[], defaultAgent}`; each agent has `{id, kind, name, description, suggestions, selection, selectionInherited, customPrompt, workspaces}` |
 | `PUT /v1/agent/providers/{openai\|gemini\|openrouter}` `{apiKey}` | checks the key with the provider, then keeps it; `{connected, last4, models[]}` (`422` if refused) |
 | `DELETE /v1/agent/providers/{id}` | forgets the key and any model choice that used it |
 | `GET /v1/agent/providers/{id}/models` | `{items: [{id, name, thinking[]}]}`, asked of the provider live |
@@ -108,6 +108,7 @@ they are checked, sealed and never returned (only `last4`). `{agent}` is an agen
 | --- | --- |
 | `GET /v1/agent/agents/{agent}` | the summary plus `{prompt, defaults, variables, packs}` for the prompt editor |
 | `PUT /v1/agent/agents/{agent}/selection` `{providerId, modelId, thinking}` | the model for this agent; a thinking level the model doesn't take is replaced |
+| `PUT /v1/agent/agents/{agent}/workspaces` `{workspaces[]}` | the workspaces (`personal`, `sb`, `fsa`, `media`) an agent is shown in; it can belong to several, or none (then only "all workspaces" shows it). The case agent starts in `sb`. |
 | `PUT /v1/agent/agents/{agent}/prompt` `{system, inputTemplate, tools}` | saves the person's prompt (`422` for unknown `{{variables}}` or a missing `{{input}}`) |
 | `DELETE /v1/agent/agents/{agent}/prompt` | back to the agent's default |
 | `POST /v1/agent/agents/{agent}/prompt/preview` `{question, prompt?}` | `{system, user, tools[]}`: exactly what would be sent, with unsaved edits if `prompt` is given |
@@ -159,7 +160,7 @@ The **setup** (`config`, camelCase):
 
 | Call | Meaning |
 | --- | --- |
-| `GET /v1/agent/workflows` · `POST` `{name, description, config}` | list · build (`422` explains what is wrong: fewer than 2 labels, a repeated or badly written label name, an unknown collection…) |
+| `GET /v1/agent/workflows` · `POST` `{name, description, config, workspaces?}` | list · build (`422` explains what is wrong: fewer than 2 labels, a repeated or badly written label name, an unknown collection…) |
 | `GET/PUT/DELETE /v1/agent/workflows/{id}` | read `{id, name, description, version, config, ledger{status:n}, pending, lastRunAt}` · change · delete |
 | `POST /v1/agent/workflows/test` `{config, manual?}` | try an unsaved setup on a sample; nothing is kept |
 | `POST /v1/agent/workflows/{id}/test` `{manual?}` | test run (max 20 items); one `trigger: "test"` line in the history; no ledger |

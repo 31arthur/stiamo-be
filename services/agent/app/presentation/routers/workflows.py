@@ -14,6 +14,8 @@ class WorkflowBody(DomainModel):
     description: Annotated[str, Field(max_length=300)] = ""
     #: The setup: source, filters, prompt, labels, decider. Validated by the server; see docs/WORKFLOW_AGENTS.md.
     config: dict[str, Any]
+    #: The workspaces it is shown in, when it is built.
+    workspaces: list[Annotated[str, Field(max_length=20)]] = Field(default_factory=list, max_length=10)
 
 
 class TestBody(DomainModel):
@@ -39,7 +41,7 @@ async def list_workflows(workflows: deps.Workflows, me: deps.Me) -> dict[str, An
 
 @router.post("", status_code=status.HTTP_201_CREATED, summary="Build an agent")
 async def create(body: WorkflowBody, workflows: deps.Workflows, me: deps.Me) -> dict[str, Any]:
-    return await workflows.create(me, body.name, body.description, body.config)
+    return await workflows.create(me, body.name, body.description, body.config, body.workspaces)
 
 
 @router.post("/test", summary="Try a setup that isn't saved yet on a sample (nothing is kept)")

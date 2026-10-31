@@ -24,7 +24,7 @@ from app.application.ports import (
 from app.application.registry import AgentRegistry
 from app.application.runner import AgentRun, Tool, run_agent
 from app.application.toolpacks import PackContext
-from app.domain.agents import AgentDefinition, UnknownAgent
+from app.domain.agents import AgentDefinition, UnknownAgent, clean_workspaces
 from app.domain.llm import DECISION_MODELS, PROVIDER_IDS, THINKING_LEVELS, AiError, Message, ModelInfo, clamp_thinking
 from app.domain.prompt import Package, PromptConfig, build_package
 
@@ -223,11 +223,11 @@ class AgentService:
 
     def _summary(self, agent: AgentDefinition, s: UserSettings) -> dict[str, Any]:
         selection, inherited = self._selection(s, agent.id)
-        return {"id": agent.id, "kind": "chat", "name": agent.name, "description": agent.description, "suggestions": list(agent.suggestions), "selection": selection, "selectionInherited": inherited and selection is not None, "customPrompt": agent.id in s.prompts}
+        return {"id": agent.id, "kind": "chat", "name": agent.name, "description": agent.description, "suggestions": list(agent.suggestions), "selection": selection, "selectionInherited": inherited and selection is not None, "customPrompt": agent.id in s.prompts, "workspaces": s.workspaces.get(agent.id, list(agent.workspaces))}
 
     def _workflow_summary(self, w: Workflow, s: UserSettings) -> dict[str, Any]:
         selection, inherited = self._selection(s, w.id)
-        return {"id": w.id, "kind": "workflow", "name": w.name, "description": w.description, "suggestions": [], "selection": selection, "selectionInherited": inherited and selection is not None, "customPrompt": False}
+        return {"id": w.id, "kind": "workflow", "name": w.name, "description": w.description, "suggestions": [], "selection": selection, "selectionInherited": inherited and selection is not None, "customPrompt": False, "workspaces": s.workspaces.get(w.id, [])}
 
     async def agent(self, who: Who, agent_id: str) -> dict[str, Any]:
         """Everything the prompt editor needs for one agent."""
@@ -259,6 +259,13 @@ class AgentService:
             thinking = clamp_thinking(known.thinking, thinking)
         choice = {"providerId": provider, "modelId": model_id.strip(), "thinking": thinking}
         s.selections = {**s.selections, agent_id: choice, ANY: choice}
+        await self._repo.save(s)
+
+    async def set_workspaces(self, who: Who, agent_id: str, workspaces: list[str]) -> None:
+        """Which workspaces an agent is shown in. It can belong to several; "all workspaces" always shows every agent."""
+        await self._known(who, agent_id)
+        s = await self._load(who)
+        s.workspaces = {**s.workspaces, agent_id: clean_workspaces(workspaces)}
         await self._repo.save(s)
 
     async def set_prompt(self, who: Who, agent_id: str, prompt: PromptConfig) -> None:
