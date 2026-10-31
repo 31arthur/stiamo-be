@@ -10,6 +10,7 @@ Backend for [Stiamo](https://github.com/31arthur/stiamo), built with **FastAPI**
 | `services/practice` | The working domain, typed and relational: tasks, meetings, follow-ups, cases, hearings, plans, goals, clients, counsel, links, history |
 | `services/files` | Attachments: uploaded files and linked documents |
 | `services/drive` | Searches the contents of your Google Drive letters without copying them |
+| `services/agent` | AI providers and models (OpenAI, Gemini, OpenRouter), the editable case agent, the Jev decision model, and the Telegram and WhatsApp channels |
 | `docs/DRIVE_SETUP.md` | Connecting Google Drive (service account, sharing, server settings) |
 | `docs/ARCHITECTURE.md` | Layers, service boundaries, auth flow |
 | `docs/API.md` | Every endpoint, mapped to the frontend's use cases |

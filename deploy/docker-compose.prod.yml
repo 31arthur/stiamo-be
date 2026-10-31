@@ -6,6 +6,7 @@
 #   /v1/tasks, /v1/cases, /v1/plans, ... (the working domain) -> practice
 #   /v1/attachments/*, /v1/files/*  -> files
 #   /v1/drive/*              -> drive (searches your Google Drive; copies nothing)
+#   /v1/agent/*              -> agent (AI providers, the case agent, Telegram and WhatsApp webhooks)
 name: stiamo-be
 
 x-logging: &logging
@@ -182,6 +183,44 @@ services:
       - "traefik.http.services.stiamo-drive.loadbalancer.healthcheck.interval=30s"
       - "traefik.http.services.stiamo-drive.loadbalancer.healthcheck.timeout=10s"
 
+  agent:
+    image: ghcr.io/${GHCR_OWNER:?set GHCR_OWNER}/stiamo-be-agent:${IMAGE_TAG:-latest}
+    pull_policy: always
+    restart: unless-stopped
+    expose: ["8000"]
+    environment:
+      AGENT_ENV: production
+      AGENT_DATABASE_URL: postgresql+asyncpg://stiamo_agent:${AGENT_DB_PASSWORD:?set AGENT_DB_PASSWORD}@db:5432/stiamo_agent
+      AGENT_JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET}
+      # Encrypts the AI keys and channel tokens stored in the database. Losing it means entering them again.
+      AGENT_SECRET_KEY: ${AGENT_SECRET_KEY:?set AGENT_SECRET_KEY (docs/AGENT_SETUP.md)}
+      # Where Telegram and Twilio send messages: this host's public https address.
+      AGENT_PUBLIC_URL: ${AGENT_PUBLIC_URL:-https://stiamo-be.fullstackarthur.com}
+      AGENT_CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
+      AGENT_PRACTICE_URL: http://practice:8000
+      AGENT_FILES_URL: http://files:8000
+      AGENT_DRIVE_URL: http://drive:8000
+    depends_on:
+      db: { condition: service_healthy }
+    networks: [stiamo-net, traefik-proxy]
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 512M }
+        reservations: { memory: 128M }
+    logging: *logging
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik-proxy"
+      - "traefik.http.routers.stiamo-agent.rule=Host(`stiamo-be.fullstackarthur.com`) && PathPrefix(`/v1/agent`)"
+      - "traefik.http.routers.stiamo-agent.entrypoints=websecure"
+      - "traefik.http.routers.stiamo-agent.tls=true"
+      - "traefik.http.routers.stiamo-agent.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.stiamo-agent.middlewares=stiamo-retry"
+      - "traefik.http.services.stiamo-agent.loadbalancer.server.port=8000"
+      - "traefik.http.services.stiamo-agent.loadbalancer.healthcheck.path=/health"
+      - "traefik.http.services.stiamo-agent.loadbalancer.healthcheck.interval=30s"
+      - "traefik.http.services.stiamo-agent.loadbalancer.healthcheck.timeout=10s"
+
   db:
     image: postgres:16-alpine
     restart: unless-stopped
@@ -193,6 +232,7 @@ services:
       RECORDS_DB_PASSWORD: ${RECORDS_DB_PASSWORD}
       PRACTICE_DB_PASSWORD: ${PRACTICE_DB_PASSWORD}
       FILES_DB_PASSWORD: ${FILES_DB_PASSWORD}
+      AGENT_DB_PASSWORD: ${AGENT_DB_PASSWORD}
     volumes:
       - stiamo-pgdata:/var/lib/postgresql/data
       - ./init-databases.sh:/docker-entrypoint-initdb.d/init-databases.sh:ro
