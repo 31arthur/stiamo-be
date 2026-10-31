@@ -48,4 +48,16 @@ replace it). The two services talk over HTTP with the caller's own token: `files
 "attached/removed" lines to a record's history, and `practice` tells `files` to clear or move attachments when a record
 is deleted or merged. Both calls are best-effort and never fail the user's change.
 
+`drive` searches the owner's Google Drive (names and contents) with a read-only service account and copies nothing; it
+also streams a file's bytes so the app can show it without a Google sign-in (see [DRIVE_SETUP.md](DRIVE_SETUP.md)).
+
+## AI agents
+
+`agent` is the one service that talks to AI providers (OpenAI, Gemini, OpenRouter, and the Jev decision model) and to the
+chat channels (Telegram, WhatsApp). It reads the practice's data from `practice`, `files` and `drive` with the caller's own
+token, so it has no special access. Several agents live in it, each a small definition built from reusable **tool packs**;
+what a person chooses (keys, models, prompts, channels) is stored per person, sealed where it is secret. How it is
+structured, the rules, and how to add an agent: [AI_AGENTS.md](AI_AGENTS.md) and [ADDING_AN_AGENT.md](ADDING_AN_AGENT.md);
+running it: [AGENT_SETUP.md](AGENT_SETUP.md).
+
 See [API.md](API.md) for every endpoint.

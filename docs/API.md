@@ -16,6 +16,8 @@ and `id` is the client's UUID when given (`PUT`), otherwise generated (`POST`).
 | practice | the working domain | everything in the sections below except attachments |
 | files | attachments + bytes | `/v1/attachments/*`, `/v1/files/*` |
 | records | generic document store (legacy; retire once the frontend uses `practice`) | `/v1/collections/*` |
+| drive | search and bytes of the owner's Google Drive letters | `/v1/drive/*` |
+| agent | AI providers and models, agents and their prompts, chat channels | `/v1/agent/*` |
 
 ## Every record type (`practice`)
 
@@ -82,3 +84,47 @@ offline mode. These need no database and no server round trip.
 
 The server's clock is UTC. Anything that depends on "today" or "now" in the user's day accepts it from the client
 (`today=`, `at: {date, minute}`); otherwise the UTC date is used.
+
+## AI agents (`agent`)
+
+How the service is built: [AI_AGENTS.md](AI_AGENTS.md). Every call needs the bearer token. Provider keys are write-only:
+they are checked, sealed and never returned (only `last4`). `{agent}` is an agent id from `GET /v1/agent/settings`
+(unknown ids are `404`).
+
+**Shared by every agent**
+
+| Call | Meaning |
+| --- | --- |
+| `GET /v1/agent/settings` | `{providers, decision, decisionModels, thinkingLevels, agents[], defaultAgent}`; each agent has `{id, name, description, suggestions, selection, selectionInherited, customPrompt}` |
+| `PUT /v1/agent/providers/{openai\|gemini\|openrouter}` `{apiKey}` | checks the key with the provider, then keeps it; `{connected, last4, models[]}` (`422` if refused) |
+| `DELETE /v1/agent/providers/{id}` | forgets the key and any model choice that used it |
+| `GET /v1/agent/providers/{id}/models` | `{items: [{id, name, thinking[]}]}`, asked of the provider live |
+| `PUT /v1/agent/decision` `{enabled, modelId}` | lets agents that use the decisions pack ask Jev (needs an OpenRouter key) |
+| `POST /v1/agent/decide` `{state, questions, modelId?}` | asks Jev typed questions (`choice`, `noul`, `score`); `{answers, model, cost}` |
+
+**One agent**
+
+| Call | Meaning |
+| --- | --- |
+| `GET /v1/agent/agents/{agent}` | the summary plus `{prompt, defaults, variables, packs}` for the prompt editor |
+| `PUT /v1/agent/agents/{agent}/selection` `{providerId, modelId, thinking}` | the model for this agent; a thinking level the model doesn't take is replaced |
+| `PUT /v1/agent/agents/{agent}/prompt` `{system, inputTemplate, tools}` | saves the person's prompt (`422` for unknown `{{variables}}` or a missing `{{input}}`) |
+| `DELETE /v1/agent/agents/{agent}/prompt` | back to the agent's default |
+| `POST /v1/agent/agents/{agent}/prompt/preview` `{question, prompt?}` | `{system, user, tools[]}`: exactly what would be sent, with unsaved edits if `prompt` is given |
+| `POST /v1/agent/agents/{agent}/chat` `{message, messages?}` | `{answer, steps[], found[], messages[]}`; send `messages` back to continue the conversation |
+
+**Channels** (`/v1/agent/channels`)
+
+| Call | Meaning |
+| --- | --- |
+| `GET /v1/agent/channels` | connected channels (never their tokens) |
+| `POST /v1/agent/channels/telegram` `{botToken, agent?}` | validates the bot, sets its webhook, returns a pairing code and link |
+| `POST /v1/agent/channels/whatsapp` `{accountSid, authToken, sender, allowed[], agent?}` | validates the Twilio account; returns the `webhookUrl` to paste into Twilio |
+| `POST /v1/agent/channels/{id}/pairing` · `DELETE …/pairing/{chatId}` | new Telegram pairing code · unlink a chat |
+| `PUT /v1/agent/channels/{id}/agent` `{agent}` | which agent answers on this channel |
+| `PUT /v1/agent/channels/{id}/allowed` `{allowed[]}` | the WhatsApp numbers that may use it |
+| `POST /v1/agent/channels/{id}/test` | sends a hello to the linked chat or numbers |
+| `DELETE /v1/agent/channels/{id}` | disconnects (removes the Telegram webhook) |
+
+`POST /v1/agent/webhooks/telegram/{id}` and `/whatsapp/{id}` are called by Telegram and Twilio, not by the app: they are
+authenticated by Telegram's secret header and Twilio's signature, not a bearer token.

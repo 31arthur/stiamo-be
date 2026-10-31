@@ -54,9 +54,12 @@ class UserSettings:
     email: str = ""
     #: provider id -> API key (decrypted).
     keys: dict[str, str] = field(default_factory=dict)
-    selection: dict[str, Any] | None = None
+    #: agent id -> {providerId, modelId, thinking}. The key "*" is the choice made last anywhere, which an agent
+    #: that has none of its own starts from.
+    selections: dict[str, dict[str, Any]] = field(default_factory=dict)
     decision: dict[str, Any] | None = None
-    prompt: dict[str, Any] | None = None
+    #: agent id -> the prompt this person wrote for it. An agent with no entry uses its own default.
+    prompts: dict[str, dict[str, Any]] = field(default_factory=dict)
     updated_at: datetime | None = None
 
 

@@ -17,8 +17,10 @@ class SettingsModel(Base):
     user_id: Mapped[str] = mapped_column(String(36), primary_key=True)
     email: Mapped[str] = mapped_column(String(320), default="")
     keys_sealed: Mapped[str | None] = mapped_column(Text)
+    #: agent id -> the provider, model and thinking level chosen for it.
     selection: Mapped[dict[str, Any] | None] = mapped_column(Json)
     decision: Mapped[dict[str, Any] | None] = mapped_column(Json)
+    #: agent id -> the prompt the person wrote for it.
     prompt: Mapped[dict[str, Any] | None] = mapped_column(Json)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime)
 

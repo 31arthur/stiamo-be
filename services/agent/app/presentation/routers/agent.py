@@ -44,7 +44,7 @@ class PromptBody(DomainModel):
 
 
 class PreviewBody(DomainModel):
-    question: Annotated[str, Field(max_length=4000)] = "Which cases have a hearing this week?"
+    question: Annotated[str, Field(max_length=4000)] = ""
     #: Judge a prompt before saving it; without this, the saved prompt is shown.
     prompt: PromptBody | None = None
 
@@ -61,7 +61,10 @@ class DecideBody(DomainModel):
     model_id: str | None = None
 
 
-@router.get("/settings", summary="What is set: connected providers, the model, the decision model and the prompt")
+# --- shared by every agent: the providers and the decision model --------------------------------------------
+
+
+@router.get("/settings", summary="The providers, the decision model, and a line on each agent")
 async def get_settings(agent: deps.Agent, me: deps.Me) -> dict[str, Any]:
     return await agent.view(me)
 
@@ -83,40 +86,48 @@ async def models(provider: str, agent: deps.Agent, me: deps.Me) -> dict[str, Any
     return {"items": [model_json(m) for m in await agent.models(me, provider)]}
 
 
-@router.put("/selection", status_code=status.HTTP_204_NO_CONTENT, summary="Choose the provider, model and thinking level")
-async def set_selection(body: SelectionBody, agent: deps.Agent, me: deps.Me) -> Response:
-    await agent.set_selection(me, body.provider_id, body.model_id, body.thinking)
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
-
-
-@router.put("/decision", status_code=status.HTTP_204_NO_CONTENT, summary="Turn the decision model (Jev) on or off for the agent")
+@router.put("/decision", status_code=status.HTTP_204_NO_CONTENT, summary="Turn the decision model (Jev) on or off for the agents")
 async def set_decision(body: DecisionBody, agent: deps.Agent, me: deps.Me) -> Response:
     await agent.set_decision(me, body.enabled, body.model_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-@router.put("/prompt", status_code=status.HTTP_204_NO_CONTENT, summary="Save the prompt, the input wrapper and the tool overrides")
-async def set_prompt(body: PromptBody, agent: deps.Agent, me: deps.Me) -> Response:
-    await agent.set_prompt(me, body.config())
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
-
-
-@router.delete("/prompt", status_code=status.HTTP_204_NO_CONTENT, summary="Back to the default prompt")
-async def reset_prompt(agent: deps.Agent, me: deps.Me) -> Response:
-    await agent.reset_prompt(me)
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
-
-
-@router.post("/prompt/preview", summary="Exactly what would be sent to the model for a question")
-async def preview(body: PreviewBody, agent: deps.Agent, me: deps.Me, token: deps.Token) -> dict[str, Any]:
-    return await agent.preview(me, token, body.question, body.prompt.config() if body.prompt else None)
-
-
-@router.post("/chat", summary="Ask the case agent")
-async def chat(body: ChatBody, agent: deps.Agent, me: deps.Me, token: deps.Token) -> dict[str, Any]:
-    return run_json(await agent.chat(me, token, body.message, body.messages))
-
-
 @router.post("/decide", summary="Ask the decision model (Jev) typed questions about some text")
 async def decide(body: DecideBody, agent: deps.Agent, me: deps.Me) -> dict[str, Any]:
     return await agent.decide(me, body.state, body.questions, body.model_id)
+
+
+# --- one agent: its model, its prompt, and asking it ------------------------------------------------------------
+
+
+@router.get("/agents/{agent_id}", summary="One agent: its prompt, the defaults, the variables it offers and the model it uses")
+async def get_agent(agent_id: str, agent: deps.Agent, me: deps.Me) -> dict[str, Any]:
+    return await agent.agent(me, agent_id)
+
+
+@router.put("/agents/{agent_id}/selection", status_code=status.HTTP_204_NO_CONTENT, summary="Choose the provider, model and thinking level for an agent")
+async def set_selection(agent_id: str, body: SelectionBody, agent: deps.Agent, me: deps.Me) -> Response:
+    await agent.set_selection(me, agent_id, body.provider_id, body.model_id, body.thinking)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.put("/agents/{agent_id}/prompt", status_code=status.HTTP_204_NO_CONTENT, summary="Save an agent's prompt, input wrapper and tool overrides")
+async def set_prompt(agent_id: str, body: PromptBody, agent: deps.Agent, me: deps.Me) -> Response:
+    await agent.set_prompt(me, agent_id, body.config())
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.delete("/agents/{agent_id}/prompt", status_code=status.HTTP_204_NO_CONTENT, summary="Back to the agent's default prompt")
+async def reset_prompt(agent_id: str, agent: deps.Agent, me: deps.Me) -> Response:
+    await agent.reset_prompt(me, agent_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/agents/{agent_id}/prompt/preview", summary="Exactly what would be sent to the model for a question")
+async def preview(agent_id: str, body: PreviewBody, agent: deps.Agent, me: deps.Me, token: deps.Token) -> dict[str, Any]:
+    return await agent.preview(me, token, agent_id, body.question, body.prompt.config() if body.prompt else None)
+
+
+@router.post("/agents/{agent_id}/chat", summary="Ask an agent")
+async def chat(agent_id: str, body: ChatBody, agent: deps.Agent, me: deps.Me, token: deps.Token) -> dict[str, Any]:
+    return run_json(await agent.chat(me, token, agent_id, body.message, body.messages))

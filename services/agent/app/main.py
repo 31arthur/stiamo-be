@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from stiamo_common.db import make_engine, make_session_factory
 from stiamo_common.errors import install_error_handlers
 
+from app.agents import default_registry
 from app.config import Settings, get_settings
 from app.infrastructure.data import HttpDataGateway
 from app.infrastructure.llm.gemini import GeminiClient
@@ -16,7 +17,7 @@ from app.infrastructure.security import JwtAccessTokens, SecretBox
 from app.presentation.routers import agent, channels, webhooks
 
 
-def create_app(settings: Settings | None = None, *, llm_factory=None, decision_factory=None, data_factory=None, telegram=None, twilio=None, tokens=None) -> FastAPI:
+def create_app(settings: Settings | None = None, *, registry=None, llm_factory=None, decision_factory=None, data_factory=None, telegram=None, twilio=None, tokens=None) -> FastAPI:
     """Application factory. Run with: uvicorn app.main:create_app --factory
 
     The keyword arguments swap in fakes for tests; in production they are the real thing.
@@ -36,6 +37,7 @@ def create_app(settings: Settings | None = None, *, llm_factory=None, decision_f
     app = FastAPI(title="Stiamo Agent", version="0.1.0", lifespan=lifespan)
     app.state.settings = settings
     app.state.box = SecretBox(settings.encryption_key)
+    app.state.registry = registry or default_registry()
     app.state.llm_factory = llm_factory or (lambda provider, key: GeminiClient(key, http) if provider == "gemini" else OpenAiCompatibleClient(provider, key, http))
     app.state.decision_factory = decision_factory or (lambda key: JevClient(key, http))
     app.state.data_factory = data_factory or (lambda token: HttpDataGateway(http, token, settings.practice_url, settings.files_url, settings.drive_url))
