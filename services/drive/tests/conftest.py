@@ -3,9 +3,9 @@ import uuid
 
 import jwt
 import pytest
-from app.application.ports import DriveGateway, DriveUnavailable, NotConnected, Page
+from app.application.ports import DriveGateway, DriveUnavailable, FileNotFound, NotConnected, Page
 from app.config import Settings
-from app.domain.search import DriveFile
+from app.domain.search import Content, DriveFile
 from app.main import create_app
 from httpx import ASGITransport, AsyncClient
 
@@ -48,6 +48,16 @@ class FakeGateway(DriveGateway):
         words = [w.strip('"').lower() for w in re.findall(r"fullText contains '((?:[^'\\]|\\.)*)'", query)]
         hits = [f for f in self.files if all(w in f.name.lower() for w in words)]
         return Page(hits[:limit], "next-page" if len(hits) > limit else None)
+
+    async def content(self, file_id):
+        if not self._configured:
+            raise NotConnected()
+        if self.fail:
+            raise DriveUnavailable(self.fail)
+        found = next((f for f in self.files if f.id == file_id), None)
+        if found is None:
+            raise FileNotFound(file_id)
+        return Content(name=found.name, mime_type=found.mime_type, data=b"%PDF-bytes-of-" + file_id.encode())
 
     async def folder_name(self, folder_id):
         return "Letters" if self._configured else None

@@ -10,8 +10,8 @@ from typing import Any
 import httpx
 import jwt
 
-from app.application.ports import DriveGateway, DriveUnavailable, NotConnected, Page
-from app.domain.search import DriveFile
+from app.application.ports import DriveGateway, DriveUnavailable, FileNotFound, FileTooLarge, NotConnected, Page
+from app.domain.search import EXPORTS, MAX_CONTENT_BYTES, Content, DriveFile
 
 log = logging.getLogger(__name__)
 
@@ -110,3 +110,30 @@ class GoogleDriveGateway(DriveGateway):
         except (DriveUnavailable, NotConnected):
             return None
         return r.json().get("name") if r.status_code == 200 else None
+
+    async def content(self, file_id: str) -> Content:
+        meta = await self._get(f"/files/{file_id}", {"fields": "id,name,mimeType,size,trashed", "supportsAllDrives": "true"})
+        if meta.status_code in (403, 404):
+            raise FileNotFound(file_id)
+        if meta.status_code != 200:
+            log.warning("Drive metadata failed (%s): %s", meta.status_code, meta.text[:200])
+            raise DriveUnavailable(f"Google Drive answered {meta.status_code}")
+        info = meta.json()
+        if info.get("trashed"):
+            raise FileNotFound(file_id)
+        if int(info.get("size") or 0) > MAX_CONTENT_BYTES:
+            raise FileTooLarge(file_id)
+        mime = info.get("mimeType", "application/octet-stream")
+        if mime in EXPORTS:
+            mime = EXPORTS[mime]
+            r = await self._get(f"/files/{file_id}/export", {"mimeType": mime})
+        else:
+            r = await self._get(f"/files/{file_id}", {"alt": "media", "supportsAllDrives": "true"})
+        if r.status_code in (403, 404):
+            raise FileNotFound(file_id)
+        if r.status_code != 200:
+            log.warning("Drive download failed (%s): %s", r.status_code, r.text[:200])
+            raise DriveUnavailable(f"Google Drive answered {r.status_code}")
+        if len(r.content) > MAX_CONTENT_BYTES:
+            raise FileTooLarge(file_id)
+        return Content(name=info.get("name", ""), mime_type=mime, data=r.content)
