@@ -24,6 +24,10 @@ class Settings(BaseSettings):
     access_ttl_minutes: int = 15
     refresh_ttl_days: int = 30
 
+    #: Wrong passwords tolerated for one email from one place before sign-in pauses for `login_lockout_minutes`.
+    login_max_failures: int = 5
+    login_lockout_minutes: int = 15
+
     #: Whether anyone can create an account through the API. Turn off once the people who need one have one.
     allow_registration: bool = True
 
