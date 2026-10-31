@@ -199,3 +199,16 @@ the model sees, inside `<item>` tags, and it is told never to follow anything in
   waits in Review as a proposal and is moved when approved. Everything else judged fine is `kept`. Test runs never move.
 - Ledger statuses added: `kept` and `applied`. Nothing is ever deleted: the only mail action is "move to Trash".
 - Not yet: a schedule (runs are started by a person), undo from the app (the mail is in Trash), labels and other folders.
+
+### Several mailboxes, batches, the decision model, the prompt
+
+- `source.accountIds`: one or several mailboxes, each read newest first, protected by its own Sent folder, and moved from on its
+  own. Item ids are `mailbox:UIDVALIDITY:UID`.
+- `batchSize` (default 1, up to 50): how many items go to the model in one request. A batch sends the instructions once and
+  the items numbered `1…n`; the model answers with a JSON array. Fewer requests and less repeated text cost less. An item the
+  model leaves out is asked about alone; an unreadable batch is retried once. With the decision model the same idea is one
+  typed question per item in one request. Token use is shared out across the items, so totals stay exact.
+- `decisionModel`: which Jev model decides (through OpenRouter); empty uses the person's default.
+- A run reports `stats`: messages scanned, protected, judged, requests, batch size, model, mailboxes and cost.
+- `POST /v1/agent/workflows/prompt-preview {config}` returns exactly what would be sent (system text, example items, or the
+  decision model's state and questions) without asking any model, so the prompt can be read before anything runs.
