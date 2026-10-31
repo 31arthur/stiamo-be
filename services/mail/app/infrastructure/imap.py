@@ -103,12 +103,11 @@ class ImapGateway(MailGateway):
             if before is not None:
                 uids = [u for u in uids if u < before]
             chosen = uids[-limit:]
-            rows = c.fetch(chosen, ["FLAGS", "BODYSTRUCTURE", f"BODY.PEEK[]<0.{_PEEK}>"]) if chosen else {}
+            rows = c.fetch(chosen, ["FLAGS", "BODYSTRUCTURE", "ENVELOPE", f"BODY.PEEK[]<0.{_PEEK}>"]) if chosen else {}
             messages = []
             for uid in sorted(rows, reverse=True):
                 data = rows[uid]
-                raw = next((v for k, v in data.items() if k.startswith(b"BODY[")), b"")
-                messages.append(parse.summary(uid, raw, data.get(b"FLAGS", ()), data.get(b"BODYSTRUCTURE")))
+                messages.append(parse.summary(uid, _raw(data), data.get(b"FLAGS", ()), data.get(b"BODYSTRUCTURE"), data.get(b"ENVELOPE")))
             return Page(messages=messages, total=matches, next_before=chosen[0] if len(uids) > len(chosen) else None, uid_validity=int(info.get(b"UIDVALIDITY", 0)))
 
     def message(self, creds: Credentials, folder: str, uid: int) -> Message:
@@ -131,8 +130,7 @@ class ImapGateway(MailGateway):
             if uid not in rows:
                 raise MailError("That message isn’t in the mailbox any more.")
             data = rows[uid]
-            raw = next((v for k, v in data.items() if k.startswith(b"BODY[")), b"")
-            return parse.message(uid, raw, data.get(b"FLAGS", ()))
+            return parse.message(uid, _raw(data), data.get(b"FLAGS", ()))
 
     # -- the only changes it can make -----------------------------------------------------------------------------------------
 
@@ -187,6 +185,12 @@ class ImapGateway(MailGateway):
             if stop.wait(delay):
                 return
             delay = min(delay * 2, 120.0)
+
+
+def _raw(data: dict) -> bytes:
+    """The message text out of a FETCH answer, whatever the server called the item (BODY[], BODY[]<0>, RFC822...)."""
+    found = [v for v in data.values() if isinstance(v, (bytes, bytearray))]
+    return bytes(max(found, key=len)) if found else b""
 
 
 def _select(client: IMAPClient, folder: str, *, readonly: bool) -> dict:

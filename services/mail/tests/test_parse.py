@@ -92,3 +92,18 @@ def test_private_servers_are_refused(host):
 
 def test_private_servers_can_be_allowed_for_development():
     check_host("127.0.0.1", allow_private=True)
+
+
+def test_the_servers_envelope_fills_in_a_list_row_when_the_text_gave_nothing():
+    from datetime import datetime
+    from types import SimpleNamespace as NS
+
+    from app.infrastructure.imap import _raw
+
+    envelope = NS(subject=b"=?UTF-8?B?U2VjdXJpdHkgYWxlcnQ=?=", from_=[NS(name=b"Google", mailbox=b"no-reply", host=b"accounts.google.com")], date=datetime(2026, 11, 1, 2, 45))
+    s = parse.summary(7, b"", (), None, envelope)
+    assert (s.subject, s.sender.name, s.sender.address) == ("Security alert", "Google", "no-reply@accounts.google.com")
+    assert s.date.isoformat() == "2026-11-01T02:45:00+00:00"
+    # Whatever the server calls the item, the message text is found.
+    assert _raw({b"BODY[]<0>": b"From: a@b.co\r\n\r\nhi", b"FLAGS": (b"\Seen",)}) == b"From: a@b.co\r\n\r\nhi"
+    assert _raw({b"FLAGS": ()}) == b""
