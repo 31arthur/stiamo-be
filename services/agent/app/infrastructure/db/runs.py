@@ -4,8 +4,8 @@ from datetime import datetime
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.application.ports import RunLog, RunRecord
-from app.infrastructure.db.models import RunModel
+from app.application.ports import RunLog, RunRecord, UsageRow
+from app.infrastructure.db.models import RunModel, UsageModel
 
 #: A person's history of one agent is kept to this many runs; older ones go as new ones arrive.
 KEEP = 500
@@ -21,6 +21,10 @@ def _entity(r: RunModel, *, light: bool = False) -> RunRecord:
     )
 
 
+def _usage(m: UsageModel) -> UsageRow:
+    return UsageRow(m.id, m.agent_id, m.agent_name, m.kind, m.trigger, m.status, m.at, m.duration_ms, m.provider, m.model, m.input_tokens, m.output_tokens, m.cost, m.items)
+
+
 class SqlRunLog(RunLog):
     """Each call uses its own session and commits, so a run that failed is kept even though its request was rolled back."""
 
@@ -34,6 +38,14 @@ class SqlRunLog(RunLog):
                 duration_ms=rec.duration_ms, provider=rec.provider, model=rec.model, thinking=rec.thinking, input=rec.input,
                 user_message=rec.user_message, system_prompt=rec.system_prompt, tools=rec.tools, steps=rec.steps, steps_count=len(rec.steps), output=rec.output,
                 found_count=rec.found_count, error=rec.error, usage=rec.usage, channel=rec.channel, version=rec.version,
+            ))
+            u = rec.usage or {}
+            cost = u.get("cost")
+            s.add(UsageModel(
+                id=rec.id, user_id=rec.user_id, agent_id=rec.agent_id, agent_name=rec.agent_name[:100], kind="workflow" if rec.agent_id.startswith("wf-") else "chat",
+                trigger=rec.trigger, status=rec.status, at=rec.started_at, duration_ms=rec.duration_ms, provider=rec.provider, model=rec.model[:200],
+                input_tokens=int(u.get("inputTokens", 0) or 0), output_tokens=int(u.get("outputTokens", 0) or 0), cost=float(cost) if isinstance(cost, (int, float)) else None,
+                items=len(rec.steps) if rec.agent_id.startswith("wf-") else 0,
             ))
             await s.flush()
             # Prune: everything beyond the newest KEEP for this person and agent.
@@ -69,3 +81,14 @@ class SqlRunLog(RunLog):
             n = (await s.execute(delete(RunModel).where(RunModel.user_id == user_id, RunModel.agent_id == agent_id))).rowcount or 0
             await s.commit()
             return n
+
+    async def usage_rows(self, user_id: str, *, since: datetime | None = None, agent_id: str | None = None, before: datetime | None = None, limit: int = 50_000) -> list[UsageRow]:
+        async with self._factory() as s:
+            q = select(UsageModel).where(UsageModel.user_id == user_id)
+            if since is not None:
+                q = q.where(UsageModel.at >= since)
+            if before is not None:
+                q = q.where(UsageModel.at < before)
+            if agent_id:
+                q = q.where(UsageModel.agent_id == agent_id)
+            return [_usage(m) for m in (await s.execute(q.order_by(UsageModel.at.desc()).limit(limit))).scalars()]

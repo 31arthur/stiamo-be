@@ -191,3 +191,18 @@ from the IMAP server on request. Setup and rules: [MAIL_SETUP.md](MAIL_SETUP.md)
 | `GET .../correspondents` | addresses the mailbox has written to (from Sent), lower case |
 | `POST .../messages/trash` `{folder?, uids[]}` | moves messages to Trash (never deletes); `{moved}` |
 | `GET .../events?folder=` | server-sent events: `state` (`connecting`, `live`, `down`, `auth`) and `changed` |
+
+### Usage (`agent`)
+
+What every run of every agent used. It is kept in its own table (`agent_usage`, migration 0006, which carries over what the
+runs already kept), so it is not lost when a run history is cleared or pruned, or an agent is deleted.
+
+| Endpoint | |
+|---|---|
+| `GET /v1/agent/usage/summary?days=30&agent=` | `{total, allTime, byAgent[], byModel[], daily[]}`; each is `{runs, errors, inputTokens, outputTokens, items, cost, pricedRuns}`. `days` leaves out older runs (omit for everything). |
+| `GET /v1/agent/usage/transactions?days=&agent=&before=&limit=50` | `{items[], nextBefore}`: every run, newest first: `{id, at, agentId, agentName, kind, trigger, status, provider, model, inputTokens, outputTokens, cost, items, durationMs}` |
+| `GET /v1/agent/agents/{agent}/stats` | also `cost` (30 days) and `allTime` (the same totals for this agent) |
+
+`cost` is in US dollars and is **only known when the provider says what it charged**: the decision model (Jev) and OpenRouter
+do (it is asked for with `usage: {include: true}`). OpenAI and Gemini report tokens only, so their runs have `cost: null`; a
+total with no priced run is `null`, not 0. Test runs are included: they cost the same.

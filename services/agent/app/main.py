@@ -15,7 +15,7 @@ from app.infrastructure.llm.jev import JevClient
 from app.infrastructure.llm.openai_compat import OpenAiCompatibleClient
 from app.infrastructure.messaging import HttpTelegramApi, HttpTwilioApi
 from app.infrastructure.security import JwtAccessTokens, SecretBox
-from app.presentation.routers import agent, channels, webhooks, workflows
+from app.presentation.routers import agent, channels, usage, webhooks, workflows
 
 
 def create_app(settings: Settings | None = None, *, registry=None, llm_factory=None, decision_factory=None, data_factory=None, telegram=None, twilio=None, tokens=None) -> FastAPI:
@@ -56,6 +56,7 @@ def create_app(settings: Settings | None = None, *, registry=None, llm_factory=N
     install_error_handlers(app)
     app.include_router(agent.router)
     app.include_router(channels.router)
+    app.include_router(usage.router)
     app.include_router(workflows.router)
     app.include_router(webhooks.router)
 

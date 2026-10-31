@@ -346,10 +346,10 @@ class WorkflowService:
                     usage[k] = usage.get(k, 0) + v
                 parsed = parse_decision(reply.text, names)
                 if parsed:
-                    return Verdict(parsed.label, parsed.confidence, parsed.reason, usage)
+                    return Verdict(parsed.label, parsed.confidence, parsed.reason, usage, float(usage.pop("cost", 0)))
                 if attempt == 1:  # one more try, told what was wrong
                     messages = [*messages, Message("assistant", reply.text), Message("user", "That wasn't valid. Answer again with the JSON only, using one of the label names.")]
-            return Verdict(None, 0.0, "The model's answer couldn't be read.", usage)
+            return Verdict(None, 0.0, "The model's answer couldn't be read.", usage, float(usage.pop("cost", 0)))
 
         async def many(items: list[Item]) -> list[Verdict | None]:
             usage = {"inputTokens": 0, "outputTokens": 0}
@@ -365,9 +365,10 @@ class WorkflowService:
                 if attempt == 1:
                     messages = [*messages, Message("assistant", reply.text), Message("user", "That wasn't valid. Answer again with the JSON array only, one object per item, using one of the label names.")]
             n = len(items)
+            cost = float(usage.pop("cost", 0)) / n
             # What the one request used is shared out, so the totals add up whatever the batch size.
             share = [{k: v // n + (v % n if i == 0 else 0) for k, v in usage.items()} for i in range(n)]
-            return [Verdict(p.label, p.confidence, p.reason, share[i]) if (p := parsed.get(i + 1)) else None for i in range(n)]
+            return [Verdict(p.label, p.confidence, p.reason, share[i], cost) if (p := parsed.get(i + 1)) else None for i in range(n)]
 
         return Decider(one, many, sel["providerId"], model)
 
@@ -431,7 +432,9 @@ class WorkflowService:
             counts.update(kept=0, applied=0, protected=protected)
         for o in outcomes:
             counts[{"proposed": "proposed", "needs_review": "needsReview", "failed": "failed", "kept": "kept", "applied": "applied"}[o.status]] += 1
-        usage = {"inputTokens": sum(o.usage.get("inputTokens", 0) for o in outcomes), "outputTokens": sum(o.usage.get("outputTokens", 0) for o in outcomes)}
+        usage: dict[str, Any] = {"inputTokens": sum(o.usage.get("inputTokens", 0) for o in outcomes), "outputTokens": sum(o.usage.get("outputTokens", 0) for o in outcomes)}
+        if any(o.cost for o in outcomes):
+            usage["cost"] = round(sum(o.cost for o in outcomes), 6)
         cost = sum(o.cost for o in outcomes)
         stats = {
             "scanned": fetched.scanned, "protected": protected, "judged": len(outcomes), "requests": batches, "batchSize": cfg.batch_size,
@@ -473,7 +476,7 @@ class WorkflowService:
                 thinking=(sel or {}).get("thinking", "off") if cfg.decider == "model" else "off", input=f"{counts['items']} items from {'the mailbox' if cfg.source.kind == 'mail' else cfg.source.table or 'pasted text'}",
                 user_message=cfg.prompt, system_prompt=system_prompt(cfg, who.name, cfg.batch_size > 1), steps=[self._step(o) for o in outcomes], steps_count=len(outcomes),
                 output=summary, found_count=counts["proposed"] + counts["needsReview"] + counts.get("applied", 0), error=next((o.error for o in outcomes if o.error), None) if counts["failed"] == len(outcomes) and outcomes else None,
-                usage=usage, version=workflow.version,
+                usage=usage, version=workflow.version, agent_name=workflow.name,
             ))
         return {
             "runId": run_id if workflow else None, "mode": mode, "counts": counts, "matched": matched, "usage": usage, "stats": stats, "summary": summary,

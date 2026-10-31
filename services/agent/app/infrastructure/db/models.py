@@ -74,6 +74,34 @@ class RunModel(Base):
     __table_args__ = (Index("ix_agent_runs_agent", "user_id", "agent_id", "started_at"),)
 
 
+class UsageModel(Base):
+    """What one run of an agent used: kept apart from the run's own record, so history pruned or cleared doesn't take the totals with it."""
+
+    __tablename__ = "agent_usage"
+
+    #: The run's id.
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(36))
+    agent_id: Mapped[str] = mapped_column(String(64))
+    #: The agent's name when it ran, so the line still reads right after the agent is renamed or deleted.
+    agent_name: Mapped[str] = mapped_column(String(100), default="")
+    kind: Mapped[str] = mapped_column(String(8), default="chat")
+    trigger: Mapped[str] = mapped_column(String(16), default="")
+    status: Mapped[str] = mapped_column(String(8), default="ok")
+    at: Mapped[datetime] = mapped_column(UTCDateTime)
+    duration_ms: Mapped[int] = mapped_column(Integer, default=0)
+    provider: Mapped[str] = mapped_column(String(16), default="")
+    model: Mapped[str] = mapped_column(String(200), default="")
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    #: US dollars, when the provider says what it charged (OpenRouter and the decision model do); empty otherwise.
+    cost: Mapped[float | None] = mapped_column(Float)
+    #: How many emails or records a workflow run judged.
+    items: Mapped[int] = mapped_column(Integer, default=0)
+
+    __table_args__ = (Index("ix_agent_usage_user", "user_id", "at"), Index("ix_agent_usage_agent", "user_id", "agent_id", "at"))
+
+
 class WorkflowModel(Base):
     """An agent a person built."""
 

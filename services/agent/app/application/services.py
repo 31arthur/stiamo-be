@@ -24,6 +24,7 @@ from app.application.ports import (
 from app.application.registry import AgentRegistry
 from app.application.runner import AgentRun, Tool, run_agent
 from app.application.toolpacks import PackContext
+from app.application.usage_totals import Bucket
 from app.domain.agents import AgentDefinition, UnknownAgent, clean_workspaces
 from app.domain.llm import DECISION_MODELS, PROVIDER_IDS, THINKING_LEVELS, AiError, Message, ModelInfo, clamp_thinking
 from app.domain.prompt import Package, PromptConfig, build_package
@@ -351,7 +352,7 @@ class AgentService:
         record = RunRecord(
             id=str(uuid.uuid4()), user_id=who.user_id, agent_id=agent.id, trigger=trigger, status="ok", started_at=datetime.now(UTC),
             provider=sel["providerId"], model=sel["modelId"], thinking=sel.get("thinking", "off"), input=message[:MAX_INPUT_CHARS],
-            user_message=pkg.user[:MAX_INPUT_CHARS * 2], system_prompt=pkg.system, tools=[t.name for t in pkg.tools], channel=channel_id,
+            user_message=pkg.user[:MAX_INPUT_CHARS * 2], system_prompt=pkg.system, tools=[t.name for t in pkg.tools], channel=channel_id, agent_name=agent.name,
         )
         began = time.monotonic()
         try:
@@ -429,7 +430,11 @@ class AgentService:
                 d["runs"] += 1
                 d["errors"] += r.status != "ok"
         last = (await self._runs.recent(who.user_id, agent_id, limit=1)) or []
+        everything = Bucket()
+        for u in await self._runs.usage_rows(who.user_id, agent_id=agent_id):
+            everything.add(u)
         return {
+            "allTime": everything.json(),
             "totalRuns": await self._runs.count(who.user_id, agent_id),
             "windowDays": STATS_DAYS,
             "runs": len(rows),
@@ -438,6 +443,7 @@ class AgentService:
             "avgDurationMs": int(sum(r.duration_ms for r in ok) / len(ok)) if ok else 0,
             "inputTokens": sum(r.usage.get("inputTokens", 0) for r in rows),
             "outputTokens": sum(r.usage.get("outputTokens", 0) for r in rows),
+            "cost": round(sum(float(r.usage.get("cost", 0) or 0) for r in rows), 6) if any(r.usage.get("cost") is not None for r in rows) else None,
             "byTrigger": by_trigger,
             "daily": [{"date": k, **v} for k, v in daily.items()],
             "lastRun": self._run_summary(last[0]) if last else None,
