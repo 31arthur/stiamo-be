@@ -81,5 +81,5 @@ async def review(workflow_id: str, workflows: deps.Workflows, me: deps.Me) -> di
 
 
 @router.post("/{workflow_id}/review", summary="Approve or dismiss items (approving may correct the label)")
-async def decide_review(workflow_id: str, body: ReviewBody, workflows: deps.Workflows, me: deps.Me) -> dict[str, int]:
-    return await workflows.decide_review(me, workflow_id, body.item_ids, body.action, body.label)
+async def decide_review(workflow_id: str, body: ReviewBody, workflows: deps.Workflows, me: deps.Me, token: deps.Token) -> dict[str, int]:
+    return await workflows.decide_review(me, token, workflow_id, body.item_ids, body.action, body.label)

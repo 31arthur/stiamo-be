@@ -63,6 +63,13 @@ class FakeDecisions(DecisionClient):
 
 class FakeData(DataGateway):
     def __init__(self) -> None:
+        self.trashed: list[int] = []
+        self.mail = [
+            {"uid": 4, "subject": "Partnership opportunity", "sender": {"name": "Lead", "address": "lead@client.io"}, "snippet": "We would like a quote for a new app", "date": "2026-10-04T10:00:00Z"},
+            {"uid": 3, "subject": "50% off everything", "sender": {"name": "Shop", "address": "deals@shop.com"}, "snippet": "Huge sale", "date": "2026-10-03T10:00:00Z"},
+            {"uid": 2, "subject": "Re: workshop", "sender": {"name": "Friend", "address": "friend@elsewhere.org"}, "snippet": "see you", "date": "2026-10-02T10:00:00Z"},
+            {"uid": 1, "subject": "Newsletter", "sender": {"name": "BWI", "address": "news@bwint.org"}, "snippet": "union news", "date": "2026-10-01T10:00:00Z"},
+        ]
         self._cases = [
             {"id": "c1", "reference": "SA-2026-001", "title": "Alur NHAI wages", "status": "active", "client": "Alur workers", "opposingParty": "NHAI", "courtNumber": "WP 1290/2026"},
             {"id": "c2", "reference": "SA-2026-002", "title": "Brick kiln", "status": "closed"},
@@ -85,6 +92,19 @@ class FakeData(DataGateway):
                 {"id": "t3", "title": "Old filing", "workspace": "sb", "updatedAt": "2001-01-01T00:00:00Z"},
             ]
         return []
+
+    async def mail_page(self, account_id, folder, before):
+        if account_id == "down":
+            raise AiError("The server didn't accept that username and password.")
+        rows = [m for m in self.mail if before is None or m["uid"] < before]
+        return {"messages": rows, "nextBefore": None, "uidValidity": 5}
+
+    async def mail_correspondents(self, account_id):
+        return ["friend@elsewhere.org"]
+
+    async def mail_trash(self, account_id, folder, uids):
+        self.trashed.extend(uids)
+        return len(uids)
 
     async def drive_available(self):
         return True
@@ -153,8 +173,8 @@ def test_registry() -> AgentRegistry:
 class Rig:
     """Everything a test needs: the app, a client and the fakes."""
 
-    def __init__(self, app, client, script, llm_log, decision_log, telegram, twilio):
-        self.app, self.client, self.script, self.llm_log, self.decision_log, self.telegram, self.twilio = app, client, script, llm_log, decision_log, telegram, twilio
+    def __init__(self, app, client, script, llm_log, decision_log, telegram, twilio, data):
+        self.app, self.client, self.script, self.llm_log, self.decision_log, self.telegram, self.twilio, self.data = app, client, script, llm_log, decision_log, telegram, twilio, data
 
 
 @pytest.fixture
@@ -163,14 +183,14 @@ async def rig():
     llm_log: list[dict[str, Any]] = []
     decision_log: list[dict[str, Any]] = []
     models = [ModelInfo("o3", "o3", ("low", "medium", "high")), ModelInfo("gpt-4o", "gpt-4o", ())]
-    telegram, twilio = FakeTelegram(), FakeTwilio()
+    telegram, twilio, data = FakeTelegram(), FakeTwilio(), FakeData()
     settings = Settings(database_url="sqlite+aiosqlite:///:memory:", public_url=PUBLIC)
     app = create_app(
         settings,
         registry=test_registry(),
         llm_factory=lambda provider, key: FakeLlm(key, script, models, llm_log),
         decision_factory=lambda key: FakeDecisions(decision_log),
-        data_factory=lambda token: FakeData(),
+        data_factory=lambda token: data,
         telegram=telegram,
         twilio=twilio,
         tokens=FakeTokens(),
@@ -179,4 +199,4 @@ async def rig():
         async with app.state.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            yield Rig(app, client, script, llm_log, decision_log, telegram, twilio)
+            yield Rig(app, client, script, llm_log, decision_log, telegram, twilio, data)

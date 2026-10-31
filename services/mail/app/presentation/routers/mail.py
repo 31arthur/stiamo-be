@@ -10,7 +10,7 @@ from stiamo_common.errors import ValidationFailed
 from app.application.accounts import MailService
 from app.infrastructure.db.repositories import SqlAccountRepository
 from app.presentation.deps import CurrentPrincipal, Mail
-from app.presentation.schemas import AccountOut, ConnectIn, EditIn, FolderOut, MarkIn, MessageOut, PageOut
+from app.presentation.schemas import AccountOut, ConnectIn, EditIn, FolderOut, MarkIn, MessageOut, PageOut, TrashIn
 
 router = APIRouter(prefix="/v1/mail", tags=["mail"])
 
@@ -72,6 +72,18 @@ async def mark(account_id: str, uid: int, body: MarkIn, me: CurrentPrincipal, ma
         raise ValidationFailed("Say what to change: seen or flagged.")
     await mail.mark(me.user_id, account_id, folder, uid, seen=body.seen, flagged=body.flagged)
     return Response(status_code=204)
+
+
+@router.get("/accounts/{account_id}/correspondents", response_model=list[str])
+async def correspondents(account_id: str, me: CurrentPrincipal, mail: Mail):
+    """Addresses this mailbox has written to: the people a filter should never treat as junk."""
+    return await mail.correspondents(me.user_id, account_id)
+
+
+@router.post("/accounts/{account_id}/messages/trash")
+async def trash(account_id: str, body: TrashIn, me: CurrentPrincipal, mail: Mail):
+    """Moves messages to the Trash folder. They are not deleted: the mail provider keeps them there."""
+    return {"moved": await mail.trash(me.user_id, account_id, body.folder, body.uids)}
 
 
 @router.get("/accounts/{account_id}/messages/{uid}/attachments/{index}")

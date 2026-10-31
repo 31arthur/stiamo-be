@@ -26,7 +26,7 @@ _TAGS = {
 }  # fmt: skip
 _COMMON = {"style", "class", "dir", "lang", "title", "align", "valign", "width", "height", "bgcolor", "color", "border", "cellpadding", "cellspacing"}
 _ATTRS = {"*": _COMMON, "a": {"href"}, "img": {"src", "alt"}, "td": {"colspan", "rowspan"}, "th": {"colspan", "rowspan"}, "font": {"face", "size"}}
-_SNIPPET = 160
+_SNIPPET = 300
 _INLINE_LIMIT = 4_000_000  # of inline images turned into data: URLs, per message
 _CID = re.compile(r"""(["'(])cid:([^"')\s]+)""", re.IGNORECASE)
 _REMOTE = re.compile(r"""(?:src|url\()\s*=?\s*["']?\s*https?://""", re.IGNORECASE)
@@ -173,7 +173,7 @@ def _has_attachment_in(structure) -> bool:
     return False
 
 
-def _word(value: bytes | str | None) -> str:
+def word(value: bytes | str | None) -> str:
     """An envelope field: bytes that may be an encoded word (=?UTF-8?B?...?=)."""
     if value is None:
         return ""
@@ -188,8 +188,8 @@ def _envelope_sender(envelope) -> Person:
     first = (getattr(envelope, "from_", None) or [None])[0]
     if first is None:
         return Person("", "")
-    mailbox, host = _word(first.mailbox), _word(first.host)
-    return Person(_word(first.name), f"{mailbox}@{host}" if mailbox and host else mailbox)
+    mailbox, host = word(first.mailbox), word(first.host)
+    return Person(word(first.name), f"{mailbox}@{host}" if mailbox and host else mailbox)
 
 
 def summary(uid: int, raw: bytes, flags: tuple, structure=None, envelope=None) -> MessageSummary:
@@ -208,7 +208,7 @@ def summary(uid: int, raw: bytes, flags: tuple, structure=None, envelope=None) -
     if envelope is not None:
         if not sender.address:
             sender = _envelope_sender(envelope)
-        subject = subject or _word(envelope.subject)
+        subject = subject or word(envelope.subject)
         if date is None and envelope.date is not None:
             date = envelope.date.replace(tzinfo=UTC) if envelope.date.tzinfo is None else envelope.date.astimezone(UTC)
     return MessageSummary(

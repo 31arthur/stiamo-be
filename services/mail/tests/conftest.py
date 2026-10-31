@@ -31,6 +31,7 @@ class FakeMail(MailGateway):
         self.states: list[Callable[[str], None]] = []
         self.idling = 0
         self.checked: list[Credentials] = []
+        self.trashed: list[tuple[str, int]] = []
 
     def check(self, creds: Credentials) -> None:
         self.checked.append(creds)
@@ -72,6 +73,15 @@ class FakeMail(MailGateway):
 
     def attachment(self, creds, folder, uid, index):
         return Download("brief ü.pdf", "application/pdf", b"%PDF")
+
+    def correspondents(self, creds):
+        return ["partner@fsa.example.com", "ada@example.com"]
+
+    def move_to_trash(self, creds, folder, uids):
+        if folder == "Nope":
+            raise MailError("That folder isn't on the server.")
+        self.trashed.extend((folder, u) for u in uids)
+        return len(uids)
 
     def idle(self, creds, folder, stop: Event, on_change, on_state):
         self.idling += 1

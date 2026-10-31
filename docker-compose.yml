@@ -65,6 +65,7 @@ services:
       AGENT_PRACTICE_URL: http://practice:8000
       AGENT_FILES_URL: http://files:8000
       AGENT_DRIVE_URL: http://drive:8000
+      AGENT_MAIL_URL: http://mail:8000
       # Telegram and Twilio can only call an https address on the internet: use a tunnel (e.g. ngrok) in development.
       AGENT_PUBLIC_URL: ${AGENT_PUBLIC_URL:-}
     depends_on: { postgres: { condition: service_healthy } }

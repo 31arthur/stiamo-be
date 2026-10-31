@@ -18,8 +18,10 @@ browser over server-sent events (`GET /v1/mail/accounts/{id}/events?folder=`), a
 
 ## Safety rules it keeps
 
-- Read-only apart from the two flags it can set: seen and flagged. It cannot delete or move mail. Bodies are fetched with
-  `BODY.PEEK`, so reading never marks anything seen on its own.
+- Apart from two flags (seen, flagged) the only change it can make is **moving messages to the Trash folder** (used by the
+  spam-filter agent, below). It can never delete mail for good or move it anywhere else: the provider keeps Trash for a
+  while, so anything moved by mistake can be put back from the mailbox. Bodies are fetched with `BODY.PEEK`, so reading
+  never marks anything seen on its own.
 - Passwords are sealed with `MAIL_SECRET_KEY` and never returned by the API.
 - Servers on private networks (localhost, 10.x, 192.168.x, link-local) are refused, so the service can't be used to probe
   the machines behind it. `MAIL_ALLOW_PRIVATE_HOSTS=true` is for development and refused in production.
@@ -44,3 +46,19 @@ Use the provider's IMAP address, port 993 with SSL (or 143 with STARTTLS) and an
    `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`).
 2. Re-download `docker-compose.yml`, `add-databases.sh`, `deploy.sh`; then `./add-databases.sh && ./deploy.sh`.
 3. Losing `MAIL_SECRET_KEY` only means entering the mailbox passwords again.
+
+## Filtering a mailbox with an agent
+
+A workflow agent can read a mailbox (source `mail`: the mailbox and folder), keep what matters and move the rest to Trash.
+It is built in the app (Agents, New agent, "Mailbox spam filter") and works like the others in
+[WORKFLOW_AGENTS.md](WORKFLOW_AGENTS.md):
+
+1. **Rules in code first.** Mail from protected domains, mail mentioning protected phrases, and mail from anyone the person
+   has written to (read from the Sent folder) is never judged: it stays.
+2. **The decision model (Jev) or the agent's own model** judges the rest as `keep` or `spam` and says how sure it is.
+3. **Only when confident** (the threshold, 85% by default) is the mail moved to Trash. Unsure mail stays and waits in
+   Review. Moving can be set to wait for approval instead.
+4. A **test run never moves anything**. Mail already judged is not judged again. Each run looks at a limited number of
+   new messages (50 by default), newest first.
+
+The agent service reaches this service at `AGENT_MAIL_URL` (default `http://mail:8000`) with the owner's own access token.

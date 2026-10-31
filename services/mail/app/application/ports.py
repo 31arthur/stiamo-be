@@ -33,6 +33,14 @@ class MailGateway(Protocol):
 
     def attachment(self, creds: Credentials, folder: str, uid: int, index: int) -> Download: ...
 
+    def correspondents(self, creds: Credentials) -> list[str]:
+        """Addresses the person has written to (From their Sent folder), lower case."""
+        ...
+
+    def move_to_trash(self, creds: Credentials, folder: str, uids: list[int]) -> int:
+        """Moves messages to the Trash folder (never deletes them). Returns how many were moved."""
+        ...
+
     def idle(self, creds: Credentials, folder: str, stop: Event, on_change: Callable[[], None], on_state: Callable[[str], None]) -> None:
         """Holds the folder open with IDLE and calls on_change whenever the server says something changed, until stop is set."""
         ...

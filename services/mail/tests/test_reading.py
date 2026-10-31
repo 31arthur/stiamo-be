@@ -91,3 +91,15 @@ async def test_removing_a_mailbox_ends_its_feeds(client, mail):
         while not events or events[-1] is not None:
             events.append(await asyncio.wait_for(q.get(), 2))
         assert events[-1] is None
+
+
+async def test_correspondents_and_trash_are_for_the_owner_only(client, mail):
+    a = await account(client)
+    assert (await client.get(f"/v1/mail/accounts/{a}/correspondents", headers=headers())).json() == ["partner@fsa.example.com", "ada@example.com"]
+    r = await client.post(f"/v1/mail/accounts/{a}/messages/trash", json={"folder": "INBOX", "uids": [1, 2]}, headers=headers())
+    assert r.json() == {"moved": 2} and mail.trashed == [("INBOX", 1), ("INBOX", 2)]
+    other = headers("u2", "other@example.com")
+    assert (await client.get(f"/v1/mail/accounts/{a}/correspondents", headers=other)).status_code == 404
+    assert (await client.post(f"/v1/mail/accounts/{a}/messages/trash", json={"uids": [1]}, headers=other)).status_code == 404
+    assert len(mail.trashed) == 2
+    assert (await client.post(f"/v1/mail/accounts/{a}/messages/trash", json={"uids": []}, headers=headers())).status_code == 422

@@ -82,6 +82,15 @@ class Memo(DataGateway):
     async def records(self, table):
         return await self._once(f"records:{table}", lambda: self._inner.records(table))
 
+    async def mail_page(self, account_id, folder, before):
+        return await self._inner.mail_page(account_id, folder, before)
+
+    async def mail_correspondents(self, account_id):
+        return await self._once(f"correspondents:{account_id}", lambda: self._inner.mail_correspondents(account_id))
+
+    async def mail_trash(self, account_id, folder, uids):
+        return await self._inner.mail_trash(account_id, folder, uids)
+
     async def drive_available(self):
         return await self._once("drive", self._inner.drive_available)
 
