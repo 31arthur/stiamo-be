@@ -89,6 +89,16 @@ async def run(workflow_id: str, body: TestBody, workflows: deps.Workflows, me: d
     return await workflows.run(me, token, workflow_id, body.manual)
 
 
+@router.get("/{workflow_id}/executions", summary="Every real run of the agent, newest first")
+async def executions(workflow_id: str, workflows: deps.Workflows, me: deps.Me) -> dict[str, Any]:
+    return await workflows.executions(me, workflow_id)
+
+
+@router.get("/{workflow_id}/executions/{run_id}", summary="One run: what it read and every item it decided, as it stands now")
+async def execution(workflow_id: str, run_id: str, workflows: deps.Workflows, me: deps.Me) -> dict[str, Any]:
+    return await workflows.execution(me, workflow_id, run_id)
+
+
 @router.get("/{workflow_id}/review", summary="What the agent proposed or wasn't sure about")
 async def review(workflow_id: str, workflows: deps.Workflows, me: deps.Me) -> dict[str, Any]:
     return await workflows.review(me, workflow_id)

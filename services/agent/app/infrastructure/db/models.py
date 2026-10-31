@@ -92,6 +92,26 @@ class WorkflowModel(Base):
     __table_args__ = (Index("ix_workflow_agents_user", "user_id"),)
 
 
+class ExecutionModel(Base):
+    """One real run of a workflow agent: what it read, what it decided, and how it went. The items are in the ledger, under the run's id."""
+
+    __tablename__ = "workflow_executions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    agent_id: Mapped[str] = mapped_column(String(64))
+    user_id: Mapped[str] = mapped_column(String(36))
+    started_at: Mapped[datetime] = mapped_column(UTCDateTime)
+    duration_ms: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[str] = mapped_column(String(8), default="ok")
+    summary: Mapped[str] = mapped_column(Text, default="")
+    counts: Mapped[dict[str, Any]] = mapped_column(Json, default=dict)
+    stats: Mapped[dict[str, Any]] = mapped_column(Json, default=dict)
+    error: Mapped[str | None] = mapped_column(Text)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+
+    __table_args__ = (Index("ix_workflow_executions_agent", "agent_id", "started_at"),)
+
+
 class WorkflowVersionModel(Base):
     """Every configuration a workflow has had, so a change can be traced and rolled back."""
 
