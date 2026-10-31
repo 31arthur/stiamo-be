@@ -1,6 +1,6 @@
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Response
 from pydantic import Field
 from stiamo_common.models import DomainModel
 
@@ -33,6 +33,12 @@ async def find(
     if page.next_page_token:
         out["nextPageToken"] = page.next_page_token
     return out
+
+
+@router.get("/files/{file_id}/content", summary="The file itself, fetched with the service account (Google's documents come as PDF or xlsx)")
+async def content(file_id: str, principal: CurrentPrincipal, search: Search) -> Response:
+    c = await search.content(principal.email, file_id)
+    return Response(content=c.data, media_type=c.mime_type, headers={"Cache-Control": "private, max-age=300", "X-Content-Type-Options": "nosniff"})
 
 
 class SuggestBody(DomainModel):

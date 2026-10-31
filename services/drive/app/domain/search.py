@@ -25,6 +25,27 @@ class DriveFile(DomainModel):
     size: int | None = None
 
 
+FILE_ID = re.compile(r"^[A-Za-z0-9_-]{10,100}$")
+
+#: Google's own documents have no bytes; they are exported to a format the app can show.
+EXPORTS = {
+    "application/vnd.google-apps.document": "application/pdf",
+    "application/vnd.google-apps.presentation": "application/pdf",
+    "application/vnd.google-apps.drawing": "application/pdf",
+    "application/vnd.google-apps.spreadsheet": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+}
+
+MAX_CONTENT_BYTES = 40 * 1024 * 1024
+
+
+class Content(DomainModel):
+    """A file's bytes, as the app can show them."""
+
+    name: str
+    mime_type: str
+    data: bytes
+
+
 class Match(DriveFile):
     """A file found for a suggestion, with the search terms it matched."""
 

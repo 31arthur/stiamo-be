@@ -146,3 +146,44 @@ def test_credentials_come_from_a_file_or_the_environment(tmp_path, key):
     assert load_credentials() is None and load_credentials(file=str(tmp_path / "missing.json")) is None
     with pytest.raises(ValueError):
         load_credentials(inline='{"client_email": "x"}')
+
+
+async def test_content_exports_google_documents_and_downloads_the_rest(key):
+    pem, _ = key
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "oauth2.test":
+            return httpx.Response(200, json={"access_token": "tok", "expires_in": 3600})
+        seen.append(request.url)
+        path = request.url.path
+        if path.endswith("/export"):
+            assert request.url.params["mimeType"] == "application/pdf"
+            return httpx.Response(200, content=b"PDF")
+        if request.url.params.get("alt") == "media":
+            return httpx.Response(200, content=b"XLSX-BYTES")
+        mime = "application/vnd.google-apps.document" if "gdoc" in path else "application/octet-stream"
+        return httpx.Response(200, json={"id": "x", "name": "Note", "mimeType": mime, "size": "10"})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    gw = GoogleDriveGateway(ServiceAccountTokens(credentials(pem), client, SCOPE), client)
+    doc = await gw.content("gdoc-0123456789")
+    assert (doc.mime_type, doc.data) == ("application/pdf", b"PDF")
+    raw = await gw.content("plain-0123456789")
+    assert (raw.mime_type, raw.data) == ("application/octet-stream", b"XLSX-BYTES")
+
+
+async def test_content_of_a_file_google_will_not_show_is_not_found(key):
+    from app.application.ports import FileNotFound
+
+    pem, _ = key
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "oauth2.test":
+            return httpx.Response(200, json={"access_token": "tok", "expires_in": 3600})
+        return httpx.Response(404, json={})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    gw = GoogleDriveGateway(ServiceAccountTokens(credentials(pem), client, SCOPE), client)
+    with pytest.raises(FileNotFound):
+        await gw.content("missing-0123456789")

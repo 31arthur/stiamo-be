@@ -5,7 +5,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
-from app.domain.search import DriveFile
+from app.domain.search import Content, DriveFile
 
 
 @dataclass(frozen=True)
@@ -22,6 +22,14 @@ class DriveUnavailable(Exception):
     """Google could not be reached, or refused the request."""
 
 
+class FileNotFound(Exception):
+    """No such file, or it isn't shared with the service account."""
+
+
+class FileTooLarge(Exception):
+    """The file is bigger than the app will stream."""
+
+
 class DriveGateway(ABC):
     @property
     @abstractmethod
@@ -34,3 +42,7 @@ class DriveGateway(ABC):
     @abstractmethod
     async def folder_name(self, folder_id: str) -> str | None:
         """The shared folder's name, for display; None when it can't be read."""
+
+    @abstractmethod
+    async def content(self, file_id: str) -> Content:
+        """The file's bytes (Google's own documents exported). Raises FileNotFound / FileTooLarge / NotConnected / DriveUnavailable."""

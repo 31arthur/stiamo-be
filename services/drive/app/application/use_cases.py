@@ -3,10 +3,10 @@
 import asyncio
 from dataclasses import dataclass
 
-from stiamo_common.errors import AppError, Forbidden
+from stiamo_common.errors import AppError, Forbidden, NotFound, ValidationFailed
 
-from app.application.ports import DriveGateway, DriveUnavailable, NotConnected, Page
-from app.domain.search import DriveFile, Match, clean_terms, files_query, parse_terms
+from app.application.ports import DriveGateway, DriveUnavailable, FileNotFound, FileTooLarge, NotConnected, Page
+from app.domain.search import FILE_ID, Content, DriveFile, Match, clean_terms, files_query, parse_terms
 
 
 class DriveNotConnected(AppError):
@@ -66,6 +66,22 @@ class DriveSearch:
         self.require(email)
         terms = parse_terms(text)
         return await self._run(files_query(terms), limit=limit, page_token=page_token, newest_first=not terms)
+
+    async def content(self, email: str, file_id: str) -> Content:
+        """The file's bytes, fetched with the service account so no Google sign-in is needed to view it."""
+        self.require(email)
+        if not FILE_ID.match(file_id):
+            raise NotFound("No such file.")
+        try:
+            return await self._gateway.content(file_id)
+        except FileNotFound as exc:
+            raise NotFound("That file isn't in the shared Drive folder.") from exc
+        except FileTooLarge as exc:
+            raise ValidationFailed("That file is too large to show here. Open it in Drive.") from exc
+        except NotConnected as exc:
+            raise DriveNotConnected() from exc
+        except DriveUnavailable as exc:
+            raise DriveDown() from exc
 
     async def suggest(self, email: str, terms: list[str], *, limit_per_term: int = 8) -> list[Match]:
         """Files that mention any of the given details (a case number, a court number, a party's name…), best first:
