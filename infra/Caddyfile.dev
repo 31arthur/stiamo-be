@@ -12,6 +12,9 @@
 	handle /v1/files/* {
 		reverse_proxy files:8000
 	}
+	handle /v1/agent/* {
+		reverse_proxy agent:8000
+	}
 	handle /v1/drive/* {
 		reverse_proxy drive:8000
 	}

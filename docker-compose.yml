@@ -57,11 +57,24 @@ services:
     volumes: ["./secrets:/run/secrets:ro"]
     ports: ["8005:8000"]
 
+  agent:
+    build: { context: ., dockerfile: services/agent/Dockerfile }
+    environment:
+      AGENT_DATABASE_URL: postgresql+asyncpg://stiamo:stiamo@postgres:5432/stiamo_agent
+      AGENT_JWT_SECRET: ${JWT_SECRET:-dev-only-secret-change-me-0123456789abcdef}
+      AGENT_PRACTICE_URL: http://practice:8000
+      AGENT_FILES_URL: http://files:8000
+      AGENT_DRIVE_URL: http://drive:8000
+      # Telegram and Twilio can only call an https address on the internet: use a tunnel (e.g. ngrok) in development.
+      AGENT_PUBLIC_URL: ${AGENT_PUBLIC_URL:-}
+    depends_on: { postgres: { condition: service_healthy } }
+    ports: ["8006:8000"]
+
   gateway:
     image: caddy:2-alpine
     volumes: ["./infra/Caddyfile.dev:/etc/caddy/Caddyfile:ro"]
     ports: ["8080:80"]
-    depends_on: [identity, practice, files, records, drive]
+    depends_on: [identity, practice, files, records, drive, agent]
 
 volumes:
   pgdata:

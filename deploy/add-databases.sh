@@ -16,6 +16,7 @@ declare -A passwords=(
   [records]="${RECORDS_DB_PASSWORD:?missing RECORDS_DB_PASSWORD}"
   [practice]="${PRACTICE_DB_PASSWORD:?add PRACTICE_DB_PASSWORD to .env (openssl rand -hex 24)}"
   [files]="${FILES_DB_PASSWORD:?add FILES_DB_PASSWORD to .env (openssl rand -hex 24)}"
+  [agent]="${AGENT_DB_PASSWORD:?add AGENT_DB_PASSWORD to .env (openssl rand -hex 24)}"
 )
 
 for service in "${!passwords[@]}"; do
