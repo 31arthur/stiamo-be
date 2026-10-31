@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "stiamo-mail"
+version = "0.1.0"
+description = "Stiamo mail service: IMAP mailboxes per workspace, read live from the server and kept current with IMAP IDLE."
+requires-python = ">=3.11"
+dependencies = [
+  "stiamo-common",
+  "fastapi>=0.110",
+  "uvicorn[standard]>=0.29",
+  "sqlalchemy[asyncio]>=2.0",
+  "asyncpg>=0.29",
+  "alembic>=1.13",
+  "pydantic>=2.6",
+  "pydantic-settings>=2.2",
+  "pyjwt[crypto]>=2.8",
+  "cryptography>=42",
+  "imapclient>=3.0",
+  "nh3>=0.2.18",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-asyncio>=0.23", "aiosqlite>=0.20", "httpx>=0.27"]
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]

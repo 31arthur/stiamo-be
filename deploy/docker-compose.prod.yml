@@ -6,6 +6,7 @@
 #   /v1/tasks, /v1/cases, /v1/plans, ... (the working domain) -> practice
 #   /v1/attachments/*, /v1/files/*  -> files
 #   /v1/drive/*              -> drive (searches your Google Drive; copies nothing)
+#   /v1/mail/*               -> mail (IMAP mailboxes per workspace; live updates by IDLE)
 #   /v1/agent/*              -> agent (AI providers, the case agent, Telegram and WhatsApp webhooks)
 name: stiamo-be
 
@@ -220,6 +221,39 @@ services:
       - "traefik.http.services.stiamo-agent.loadbalancer.healthcheck.path=/health"
       - "traefik.http.services.stiamo-agent.loadbalancer.healthcheck.interval=30s"
       - "traefik.http.services.stiamo-agent.loadbalancer.healthcheck.timeout=10s"
+
+  mail:
+    image: ghcr.io/${GHCR_OWNER:?set GHCR_OWNER}/stiamo-be-mail:${IMAGE_TAG:-latest}
+    pull_policy: always
+    restart: unless-stopped
+    expose: ["8000"]
+    environment:
+      MAIL_ENV: production
+      MAIL_DATABASE_URL: postgresql+asyncpg://stiamo_mail:${MAIL_DB_PASSWORD:?set MAIL_DB_PASSWORD}@db:5432/stiamo_mail
+      MAIL_JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET}
+      # Encrypts the stored mailbox passwords. Losing it means entering them again.
+      MAIL_SECRET_KEY: ${MAIL_SECRET_KEY:?set MAIL_SECRET_KEY (docs/MAIL_SETUP.md)}
+      MAIL_CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
+    depends_on:
+      db: { condition: service_healthy }
+    networks: [stiamo-net, traefik-proxy]
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 512M }
+        reservations: { memory: 128M }
+    logging: *logging
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik-proxy"
+      - "traefik.http.routers.stiamo-mail.rule=Host(`stiamo-be.fullstackarthur.com`) && PathPrefix(`/v1/mail`)"
+      - "traefik.http.routers.stiamo-mail.entrypoints=websecure"
+      - "traefik.http.routers.stiamo-mail.tls=true"
+      - "traefik.http.routers.stiamo-mail.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.stiamo-mail.middlewares=stiamo-retry"
+      - "traefik.http.services.stiamo-mail.loadbalancer.server.port=8000"
+      - "traefik.http.services.stiamo-mail.loadbalancer.healthcheck.path=/health"
+      - "traefik.http.services.stiamo-mail.loadbalancer.healthcheck.interval=30s"
+      - "traefik.http.services.stiamo-mail.loadbalancer.healthcheck.timeout=10s"
 
   db:
     image: postgres:16-alpine
