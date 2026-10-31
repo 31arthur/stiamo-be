@@ -54,9 +54,29 @@ def build_services(app: FastAPI, session: AsyncSession) -> tuple[AgentService, C
     return agent, channels
 
 
+def build_workflow_service(app: FastAPI, session: AsyncSession) -> WorkflowService:
+    s = app.state
+    return WorkflowService(SqlWorkflowRepository(session), SqlSettingsRepository(session, s.box), s.runs, s.llm_factory, s.decision_factory, s.data_factory, s.running, s.sweeps.is_active)
+
+
 def workflow_service(request: Request, session: Session) -> WorkflowService:
-    s = request.app.state
-    return WorkflowService(SqlWorkflowRepository(session), SqlSettingsRepository(session, s.box), s.runs, s.llm_factory, s.decision_factory, s.data_factory, s.running)
+    return build_workflow_service(request.app, session)
+
+
+def sweep_run(app: FastAPI, who: Who, workflow_id: str):
+    """One run for a background sweep: its own session, and a fresh token for the owner (the browser's expires in minutes)."""
+
+    async def run_once():
+        async with app.state.session_factory() as session:
+            try:
+                result = await build_workflow_service(app, session).run(who, app.state.tokens.mint(who.user_id, who.email), workflow_id, None, via_sweep=True)
+                await session.commit()
+                return result
+            except Exception:
+                await session.rollback()
+                raise
+
+    return run_once
 
 
 def agent_service(request: Request, session: Session) -> AgentService:

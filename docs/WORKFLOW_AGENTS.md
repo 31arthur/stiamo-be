@@ -261,3 +261,17 @@ The decision also records the reason (`You said it isn't spam: …`) on the item
 tabs, or a manual run during "Run through the whole inbox") would judge the same emails twice, move them twice, and collide
 writing the same ledger rows, losing the record of the run that finished second. Different agents run side by side, each with its
 own ledger, and test runs are not limited. The lock is held in the agent service's memory, so run **one replica** of `agent`.
+
+### Running through a whole inbox in the background
+
+`POST .../sweep` runs the agent again and again (real runs, a batch of `filters.limit` each) until nothing is left in range, it is
+stopped, or something fails. It runs inside the agent service, so closing or refreshing the page doesn't stop it, and a fresh
+token is minted for the owner for every run (the browser's lasts minutes). Each run is an ordinary execution.
+
+- `GET .../sweep`: `{sweep: {state: running|done|stopped|failed, runs, judged, moved, kept, toReview, protected, failedItems,
+  inRange, remaining, lastRunId, error, stopRequested, startedAt, finishedAt}}` (null if there never was one).
+- `POST .../sweep/stop`: stops after the run in progress, never half way through one.
+- One sweep per agent. While it runs, a run started by hand is refused (`409`), and a sweep waits (up to two minutes) if a hand-started
+  run is finishing. It ends if every item of a run fails (a provider refusing everything), instead of retrying forever.
+- The state is held in memory. If the service restarts the sweep ends (what its runs did is kept) and is started again by hand.
+  Run **one replica** of `agent`.
