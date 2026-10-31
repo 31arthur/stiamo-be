@@ -212,3 +212,17 @@ the model sees, inside `<item>` tags, and it is told never to follow anything in
 - A run reports `stats`: messages scanned, protected, judged, requests, batch size, model, mailboxes and cost.
 - `POST /v1/agent/workflows/prompt-preview {config}` returns exactly what would be sent (system text, example items, or the
   decision model's state and questions) without asking any model, so the prompt can be read before anything runs.
+
+### Working through a whole inbox, and the safe-senders shield
+
+- **Which mail:** `filters.after` / `filters.before` (dates; start inclusive, end exclusive) or `filters.sinceDays` (up to 10 years);
+  with none of them the whole folder is in range. The mail service lists the uids in range first (`GET .../uids`, no mail
+  read), the agent drops those already in its ledger, and reads the rest a hundred at a time (`POST .../messages/summaries`)
+  until it has `filters.limit` (up to 500) to decide about. So a run costs one listing and one read of what it will use,
+  however large the inbox.
+- **A few at a time:** a run decides at most `limit` new messages and reports `stats.remaining`; running again carries on
+  with the next ones. Messages kept by a rule are written to the ledger with status `protected`, so they are never read
+  again and never stand in the way. Test runs remember nothing.
+- **Safe senders** (`rules.protectCorrespondents`, on by default): anyone you have written to from the mailbox, read from its Sent
+  folder (up to the last 5,000 sent messages), is never judged. `rules.protectedAddresses` adds addresses by hand.
+  `POST /v1/agent/workflows/safe-senders {accountIds}` shows who it would protect.

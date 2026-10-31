@@ -1,7 +1,7 @@
 import time
 import uuid
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from threading import Event
 
 import jwt
@@ -73,6 +73,16 @@ class FakeMail(MailGateway):
 
     def attachment(self, creds, folder, uid, index):
         return Download("brief ü.pdf", "application/pdf", b"%PDF")
+
+    def uids(self, creds, folder, *, since, before):
+        if folder == "Nope":
+            raise MailError("That folder isn't on the server.")
+        days = {u: date(2026, 1, u) for u in (3, 2, 1)}
+        found = [u for u, d in days.items() if (since is None or d >= since) and (before is None or d < before)]
+        return 7, sorted(found, reverse=True)
+
+    def summaries(self, creds, folder, uids):
+        return [self._summary(u) for u in sorted(uids, reverse=True)]
 
     def correspondents(self, creds):
         return ["partner@fsa.example.com", "ada@example.com"]

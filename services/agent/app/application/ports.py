@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from app.domain.llm import ChatResult, Message, ModelInfo, ToolSpec
@@ -43,8 +43,12 @@ class DataGateway(ABC):
         """Every record of a Stiamo collection (see `TABLES`), as the practice service gives them."""
 
     @abstractmethod
-    async def mail_page(self, account_id: str, folder: str, before: int | None) -> dict[str, Any]:
-        """One page of a mailbox folder, newest first, as the mail service lists it: {messages, nextBefore, uidValidity}."""
+    async def mail_uids(self, account_id: str, folder: str, since: date | None, before: date | None) -> dict[str, Any]:
+        """{uidValidity, uids}: the messages of a folder in a date range, newest first. Reads no mail."""
+
+    @abstractmethod
+    async def mail_summaries(self, account_id: str, folder: str, uids: list[int]) -> list[dict[str, Any]]:
+        """List rows (sender, subject, date, start of the text) for up to 100 messages, newest first."""
 
     @abstractmethod
     async def mail_correspondents(self, account_id: str) -> list[str]: ...

@@ -1,5 +1,6 @@
 import asyncio
 import json
+from datetime import date
 from typing import Annotated
 from urllib.parse import quote
 
@@ -10,7 +11,18 @@ from stiamo_common.errors import ValidationFailed
 from app.application.accounts import MailService
 from app.infrastructure.db.repositories import SqlAccountRepository
 from app.presentation.deps import CurrentPrincipal, Mail
-from app.presentation.schemas import AccountOut, ConnectIn, EditIn, FolderOut, MarkIn, MessageOut, PageOut, TrashIn
+from app.presentation.schemas import (
+    AccountOut,
+    ConnectIn,
+    EditIn,
+    FolderOut,
+    MarkIn,
+    MessageOut,
+    PageOut,
+    SummariesIn,
+    SummaryOut,
+    TrashIn,
+)
 
 router = APIRouter(prefix="/v1/mail", tags=["mail"])
 
@@ -72,6 +84,19 @@ async def mark(account_id: str, uid: int, body: MarkIn, me: CurrentPrincipal, ma
         raise ValidationFailed("Say what to change: seen or flagged.")
     await mail.mark(me.user_id, account_id, folder, uid, seen=body.seen, flagged=body.flagged)
     return Response(status_code=204)
+
+
+@router.get("/accounts/{account_id}/uids")
+async def uids(account_id: str, me: CurrentPrincipal, mail: Mail, folder: FolderParam = "INBOX", since: date | None = None, before: date | None = None):
+    """The uids of a folder's messages in a date range, newest first, without reading any mail. For tools that work through a mailbox."""
+    validity, found = await mail.uids(me.user_id, account_id, folder, since, before)
+    return {"uidValidity": validity, "uids": found}
+
+
+@router.post("/accounts/{account_id}/messages/summaries")
+async def summaries(account_id: str, body: SummariesIn, me: CurrentPrincipal, mail: Mail):
+    """List rows (sender, subject, date, the start of the text) for specific messages."""
+    return {"messages": [SummaryOut.of(m).model_dump(by_alias=True) for m in await mail.summaries(me.user_id, account_id, body.folder, body.uids)]}
 
 
 @router.get("/accounts/{account_id}/correspondents", response_model=list[str])

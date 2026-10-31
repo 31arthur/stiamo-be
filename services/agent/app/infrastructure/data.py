@@ -1,5 +1,6 @@
 """The practice's data, fetched from the other services with the owner's own access token."""
 
+from datetime import date
 from typing import Any
 
 import httpx
@@ -59,14 +60,23 @@ class HttpDataGateway(DataGateway):
             message = f"The mail service answered {r.status_code}."
         return AiError(message)
 
-    async def mail_page(self, account_id: str, folder: str, before: int | None) -> dict[str, Any]:
+    async def mail_uids(self, account_id: str, folder: str, since: date | None, before: date | None) -> dict[str, Any]:
         try:
-            r = await self._get(f"{self._mail}/v1/mail/accounts/{account_id}/messages", folder=folder, before=before, limit=100)
+            r = await self._get(f"{self._mail}/v1/mail/accounts/{account_id}/uids", folder=folder, since=since.isoformat() if since else None, before=before.isoformat() if before else None)
         except AiError:
             raise AiError("Couldn't reach the mail service. Try again in a moment.") from None
         if r.status_code != 200:
             raise await self._mail_error(r)
         return r.json()
+
+    async def mail_summaries(self, account_id: str, folder: str, uids: list[int]) -> list[dict[str, Any]]:
+        try:
+            r = await self._http.post(f"{self._mail}/v1/mail/accounts/{account_id}/messages/summaries", headers=self._headers, json={"folder": folder, "uids": uids[:100]})
+        except httpx.HTTPError as exc:
+            raise AiError("Couldn't reach the mail service. Try again in a moment.") from exc
+        if r.status_code != 200:
+            raise await self._mail_error(r)
+        return r.json().get("messages", [])
 
     async def mail_correspondents(self, account_id: str) -> list[str]:
         try:

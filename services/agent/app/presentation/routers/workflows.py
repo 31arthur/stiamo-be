@@ -27,6 +27,10 @@ class DraftTestBody(TestBody):
     config: dict[str, Any]
 
 
+class SafeSendersBody(DomainModel):
+    account_ids: list[Annotated[str, Field(max_length=36)]] = Field(min_length=1, max_length=10)
+
+
 class ReviewBody(DomainModel):
     item_ids: list[Annotated[str, Field(max_length=200)]] = Field(min_length=1, max_length=200)
     action: str
@@ -52,6 +56,11 @@ async def test_draft(body: DraftTestBody, workflows: deps.Workflows, me: deps.Me
 @router.post("/prompt-preview", summary="Exactly what the model would be sent for a setup, filled with example emails (nothing is asked of any model)")
 async def prompt_preview(body: DraftTestBody, workflows: deps.Workflows, me: deps.Me) -> dict[str, Any]:
     return await workflows.preview(me, body.config)
+
+
+@router.post("/safe-senders", summary="Who the safe-senders shield would protect: the addresses found in each mailbox's Sent folder")
+async def safe_senders(body: SafeSendersBody, workflows: deps.Workflows, token: deps.Token, me: deps.Me) -> dict[str, Any]:
+    return {"items": await workflows.safe_senders(token, body.account_ids)}
 
 
 @router.get("/{workflow_id}", summary="One agent with its setup and ledger counts")
