@@ -154,10 +154,36 @@ class RunRecord:
     channel: str | None = None
     #: Which version of a workflow agent ran (0 for chat agents).
     version: int = 0
+    #: The agent's name at the time, for the usage history.
+    agent_name: str = ""
+
+
+@dataclass
+class UsageRow:
+    """What one run used. See UsageModel."""
+
+    id: str
+    agent_id: str
+    agent_name: str
+    kind: str
+    trigger: str
+    status: str
+    at: datetime
+    duration_ms: int = 0
+    provider: str = ""
+    model: str = ""
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cost: float | None = None
+    items: int = 0
 
 
 class RunLog(ABC):
     """Where runs are kept. Writes never share the request's transaction: a failed run is logged too."""
+
+    @abstractmethod
+    async def usage_rows(self, user_id: str, *, since: datetime | None = None, agent_id: str | None = None, before: datetime | None = None, limit: int = 50_000) -> list[UsageRow]:
+        """What runs used, newest first."""
 
     @abstractmethod
     async def add(self, record: RunRecord) -> None: ...

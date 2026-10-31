@@ -101,6 +101,8 @@ class OpenAiCompatibleClient(LlmClient):
                 body["reasoning"] = {"effort": thinking}
         elif self._flavour == "openrouter":
             body["reasoning"] = {"enabled": False}
+        if self._flavour == "openrouter":
+            body["usage"] = {"include": True}  # asks OpenRouter to say what the call cost
         r = await self._call("POST", "/chat/completions", json=body)
         if r.status_code != 200:
             raise failure(r, self._who)
@@ -111,4 +113,6 @@ class OpenAiCompatibleClient(LlmClient):
         calls = [ToolCall(c.get("id") or f"call_{i}", (c.get("function") or {}).get("name", ""), _args((c.get("function") or {}).get("arguments"))) for i, c in enumerate(message.get("tool_calls") or [])]
         u = r.json().get("usage") or {}
         usage = {"inputTokens": int(u.get("prompt_tokens", 0)), "outputTokens": int(u.get("completion_tokens", 0))} if u else None
+        if usage is not None and isinstance(u.get("cost"), (int, float)):
+            usage["cost"] = float(u["cost"])
         return ChatResult(message.get("content") or "", calls, usage=usage)
