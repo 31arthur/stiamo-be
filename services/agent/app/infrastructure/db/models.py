@@ -61,6 +61,7 @@ class RunModel(Base):
     system_prompt: Mapped[str] = mapped_column(Text, default="")
     tools: Mapped[list[str]] = mapped_column(Json, default=list)
     steps: Mapped[list[dict[str, Any]]] = mapped_column(Json, default=list)
+    steps_count: Mapped[int] = mapped_column(Integer, default=0)
     output: Mapped[str] = mapped_column(Text, default="")
     found_count: Mapped[int] = mapped_column(Integer, default=0)
     error: Mapped[str | None] = mapped_column(Text)

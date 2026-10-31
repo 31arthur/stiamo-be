@@ -124,6 +124,8 @@ class RunRecord:
     tools: list[str] = field(default_factory=list)
     #: What the model did, one entry per tool call (see Step.to_log).
     steps: list[dict[str, Any]] = field(default_factory=list)
+    #: How many steps, kept apart so the history list needn't load the steps themselves.
+    steps_count: int = 0
     output: str = ""
     found_count: int = 0
     error: str | None = None
