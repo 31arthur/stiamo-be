@@ -7,7 +7,7 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Annotated, Any, Literal
 
 from pydantic import Field
@@ -24,13 +24,13 @@ TABLES: dict[str, str] = {
     "projects": "/v1/projects",
 }
 
-MAX_ITEMS = 200
+MAX_ITEMS = 500
 #: How many items a test run looks at: enough to judge a prompt, few enough to be quick and cheap.
 TEST_ITEMS = 20
 MAX_ITEM_CHARS = 1500
 MAX_LABELS = 12
-#: A mail run reads the folder newest first, a page at a time, until it has enough to decide about or has looked this far.
-MAIL_PAGES = 8
+#: Mail is read this many messages at a time, after the list of what is in range.
+MAIL_FETCH = 100
 MAX_RULES = 100
 MAX_MAILBOXES = 10
 MAX_BATCH = 50
@@ -65,7 +65,10 @@ class Filters(DomainModel):
     """Deterministic, applied in code before the model, so fewer items are paid for."""
 
     #: Only records created or changed in the last N days.
-    since_days: int | None = Field(default=None, ge=1, le=365)
+    since_days: int | None = Field(default=None, ge=1, le=3650)
+    #: A date range instead: from the start of `after` up to (not including) `before`. Either may be left out.
+    after: date | None = None
+    before: date | None = None
     #: Skip items that were decided in an earlier run.
     new_only: bool = True
     #: Only items whose text contains this.
@@ -82,6 +85,8 @@ class Rules(DomainModel):
     protected_phrases: list[str] = Field(default_factory=list)
     #: Anyone the person has written to from this mailbox is always kept.
     protect_correspondents: bool = True
+    #: Addresses that are always kept, in addition to the ones found in the Sent folder.
+    protected_addresses: list[str] = Field(default_factory=list)
 
 
 class Action(DomainModel):
@@ -140,6 +145,7 @@ class WorkflowConfig(DomainModel):
         self.rules = self.rules.model_copy(update={
             "protected_domains": _clean_list([d.strip().lower().lstrip("@").removeprefix("*.") for d in self.rules.protected_domains]),
             "protected_phrases": _clean_list([p.strip().lower()[:100] for p in self.rules.protected_phrases]),
+            "protected_addresses": _clean_list([a.strip().lower() for a in self.rules.protected_addresses if "@" in a][:MAX_RULES]),
         })
         return self
 
@@ -206,7 +212,7 @@ def account_of(item_id: str) -> str:
     return item_id.split(":", 1)[0]
 
 
-def protected_by(item: Item, rules: Rules, correspondents: set[str]) -> str | None:
+def protected_by(item: Item, rules: Rules, correspondents: set[str]) -> str | None:  # returns why
     """Why this item must be kept without asking the model, or None when it is up to the model."""
     address = item.meta.get("from", "")
     domain = address.rsplit("@", 1)[-1] if "@" in address else ""
@@ -215,6 +221,8 @@ def protected_by(item: Item, rules: Rules, correspondents: set[str]) -> str | No
     haystack = f"{address} {item.title} {item.text}".lower()
     if any(p in haystack for p in rules.protected_phrases):
         return "protected phrase"
+    if address and address in rules.protected_addresses:
+        return "a safe address"
     if rules.protect_correspondents and address and address in correspondents:
         return "someone you have written to"
     return None
@@ -249,6 +257,12 @@ def apply_filters(items: list[Item], f: Filters, seen: set[str], now: datetime |
     if f.since_days:
         cutoff = now - timedelta(days=f.since_days)
         out = [i for i in out if (_when(i) or now) >= cutoff]
+    if f.after:
+        start = datetime.combine(f.after, datetime.min.time(), UTC)
+        out = [i for i in out if (_when(i) or start) >= start]
+    if f.before:
+        end = datetime.combine(f.before, datetime.min.time(), UTC)
+        out = [i for i in out if (_when(i) or end - timedelta(seconds=1)) < end]
     if f.contains and f.contains.strip():
         needle = f.contains.strip().lower()
         out = [i for i in out if needle in i.text.lower() or needle in i.title.lower()]

@@ -103,3 +103,17 @@ async def test_correspondents_and_trash_are_for_the_owner_only(client, mail):
     assert (await client.post(f"/v1/mail/accounts/{a}/messages/trash", json={"uids": [1]}, headers=other)).status_code == 404
     assert len(mail.trashed) == 2
     assert (await client.post(f"/v1/mail/accounts/{a}/messages/trash", json={"uids": []}, headers=headers())).status_code == 422
+
+
+async def test_uids_and_summaries_let_a_tool_work_through_a_range(client):
+    a = await account(client)
+    everything = (await client.get(f"/v1/mail/accounts/{a}/uids", headers=headers())).json()
+    assert everything == {"uidValidity": 7, "uids": [3, 2, 1]}
+    ranged = (await client.get(f"/v1/mail/accounts/{a}/uids?since=2026-01-02&before=2026-01-03", headers=headers())).json()
+    assert ranged["uids"] == [2]
+    rows = (await client.post(f"/v1/mail/accounts/{a}/messages/summaries", json={"folder": "INBOX", "uids": [1, 3]}, headers=headers())).json()["messages"]
+    assert [m["uid"] for m in rows] == [3, 1] and rows[0]["sender"]["address"] == "ada@example.com"
+    other = headers("u2", "other@example.com")
+    assert (await client.get(f"/v1/mail/accounts/{a}/uids", headers=other)).status_code == 404
+    assert (await client.post(f"/v1/mail/accounts/{a}/messages/summaries", json={"uids": [1]}, headers=other)).status_code == 404
+    assert (await client.post(f"/v1/mail/accounts/{a}/messages/summaries", json={"uids": list(range(1, 102))}, headers=headers())).status_code == 422

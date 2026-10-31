@@ -116,6 +116,12 @@ class MailService:
     async def attachment(self, owner: str, account_id: str, folder: str, uid: int, index: int) -> Download:
         return await self._reading(owner, account_id, lambda a: self.gateway.attachment(a.credentials, folder, uid, index))
 
+    async def uids(self, owner: str, account_id: str, folder: str, since, before):
+        return await self._reading(owner, account_id, lambda a: self.gateway.uids(a.credentials, folder, since=since, before=before))
+
+    async def summaries(self, owner: str, account_id: str, folder: str, uids: list[int]):
+        return await self._reading(owner, account_id, lambda a: self.gateway.summaries(a.credentials, folder, uids))
+
     async def correspondents(self, owner: str, account_id: str) -> list[str]:
         return await self._reading(owner, account_id, lambda a: self.gateway.correspondents(a.credentials))
 

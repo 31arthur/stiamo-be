@@ -12,13 +12,14 @@ import socket
 import ssl
 from collections.abc import Callable
 from contextlib import contextmanager
+from datetime import date
 from threading import Event
 
 from imapclient import IMAPClient
 from imapclient.exceptions import IMAPClientError, LoginError
 
 from app.application.ports import MailError, MailGateway
-from app.domain.mail import Credentials, Download, Folder, Message, Page
+from app.domain.mail import Credentials, Download, Folder, Message, MessageSummary, Page
 from app.infrastructure import parse
 
 log = logging.getLogger("stiamo.mail.imap")
@@ -27,7 +28,7 @@ _ROLES = {b"\\inbox": "inbox", b"\\sent": "sent", b"\\drafts": "drafts", b"\\tra
 _BY_NAME = {"inbox": "inbox", "sent": "sent", "sent items": "sent", "sent mail": "sent", "drafts": "drafts", "trash": "trash", "deleted items": "trash", "bin": "trash", "spam": "junk", "junk": "junk", "junk email": "junk", "archive": "archive"}
 _PEEK = 3000  # bytes of each message fetched for the list: its headers and the start of its body
 _MAX_DOWNLOAD = 30_000_000
-_SENT_LOOKBACK = 1000  # how many sent messages are read to learn who the person writes to
+_SENT_LOOKBACK = 5000  # how many sent messages are read to learn who the person writes to
 
 
 def check_host(host: str, *, allow_private: bool) -> None:
@@ -104,12 +105,24 @@ class ImapGateway(MailGateway):
             if before is not None:
                 uids = [u for u in uids if u < before]
             chosen = uids[-limit:]
-            rows = c.fetch(chosen, ["FLAGS", "BODYSTRUCTURE", "ENVELOPE", f"BODY.PEEK[]<0.{_PEEK}>"]) if chosen else {}
-            messages = []
-            for uid in sorted(rows, reverse=True):
-                data = rows[uid]
-                messages.append(parse.summary(uid, _raw(data), data.get(b"FLAGS", ()), data.get(b"BODYSTRUCTURE"), data.get(b"ENVELOPE")))
+            messages = _summaries(c, chosen)
             return Page(messages=messages, total=matches, next_before=chosen[0] if len(uids) > len(chosen) else None, uid_validity=int(info.get(b"UIDVALIDITY", 0)))
+
+    def uids(self, creds: Credentials, folder: str, *, since: date | None, before: date | None) -> tuple[int, list[int]]:
+        with self._open(creds) as c:
+            info = _select(c, folder, readonly=True)
+            criteria: list = []
+            if since:
+                criteria += ["SINCE", since]
+            if before:
+                criteria += ["BEFORE", before]
+            found = c.search(criteria or ["ALL"])
+            return int(info.get(b"UIDVALIDITY", 0)), sorted(found, reverse=True)
+
+    def summaries(self, creds: Credentials, folder: str, uids: list[int]) -> list[MessageSummary]:
+        with self._open(creds) as c:
+            _select(c, folder, readonly=True)
+            return _summaries(c, uids)
 
     def message(self, creds: Credentials, folder: str, uid: int) -> Message:
         return self._fetch(creds, folder, uid)[0]
@@ -225,6 +238,12 @@ class ImapGateway(MailGateway):
             if stop.wait(delay):
                 return
             delay = min(delay * 2, 120.0)
+
+
+def _summaries(client: IMAPClient, uids: list[int]) -> list[MessageSummary]:
+    """List rows for some messages: the start of each (its headers and first few kilobytes), plus the server's own summary."""
+    rows = client.fetch(uids, ["FLAGS", "BODYSTRUCTURE", "ENVELOPE", f"BODY.PEEK[]<0.{_PEEK}>"]) if uids else {}
+    return [parse.summary(uid, _raw(rows[uid]), rows[uid].get(b"FLAGS", ()), rows[uid].get(b"BODYSTRUCTURE"), rows[uid].get(b"ENVELOPE")) for uid in sorted(rows, reverse=True)]
 
 
 def _raw(data: dict) -> bytes:

@@ -10,7 +10,7 @@ import time
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from pydantic import ValidationError as PydanticValidationError
@@ -32,7 +32,7 @@ from app.application.services import Memo, Who, selection_of
 from app.domain.agents import clean_workspaces
 from app.domain.llm import DECISION_MODELS, AiError, Message
 from app.domain.workflows import (
-    MAIL_PAGES,
+    MAIL_FETCH,
     SAMPLE_ITEMS,
     TEST_ITEMS,
     Item,
@@ -114,10 +114,14 @@ class Fetched:
     items: list[Item]
     #: How many matched the filters before the cap.
     matched: int
-    #: Set aside by the rules, never judged.
-    protected: int
-    #: How many the source had to look through.
+    #: Set aside by the rules, never judged: each with the rule that kept it.
+    protected: list[tuple[Item, str]]
+    #: How many the source had to read.
     scanned: int
+    #: How many are still waiting for a later run (the folder is worked through, a limited number at a time).
+    remaining: int = 0
+    #: How many messages are in the range at all.
+    total: int = 0
 
 
 def workflow_json(w: Workflow, counts: dict[str, int] | None = None) -> dict[str, Any]:
@@ -175,7 +179,7 @@ class WorkflowService:
             raise ValidationFailed(f"That's the most agents you can build ({MAX_WORKFLOWS}). Delete one first.")
         cfg = self._config(config)
         chosen = clean_workspaces(workspaces or [])
-        w = Workflow(f"wf-{uuid.uuid4().hex[:12]}", who.user_id, name[:100], description.strip()[:300], cfg.model_dump(by_alias=True), 1, datetime.now(UTC))
+        w = Workflow(f"wf-{uuid.uuid4().hex[:12]}", who.user_id, name[:100], description.strip()[:300], cfg.model_dump(by_alias=True, mode="json"), 1, datetime.now(UTC))
         await self._repo.save(w)
         if chosen:
             s = await self._settings.get(who.user_id) or UserSettings(who.user_id, who.email)
@@ -188,7 +192,7 @@ class WorkflowService:
         name = name.strip()
         if not name:
             raise ValidationFailed("Give the agent a name.")
-        cfg = self._config(config).model_dump(by_alias=True)
+        cfg = self._config(config).model_dump(by_alias=True, mode="json")
         if cfg != w.config:
             w.version += 1  # a change to the setup is a new version, kept
         w.name, w.description, w.config = name[:100], description.strip()[:300], cfg
@@ -210,56 +214,72 @@ class WorkflowService:
     async def _items(self, token: str, cfg: WorkflowConfig, manual: str | None, seen: set[str], limit: int | None) -> Fetched:
         """The items to decide about (filtered, capped), how many matched before the cap, and what the rules set aside."""
         cap = min(cfg.filters.limit, limit) if limit else cfg.filters.limit
-        protected = scanned = 0
+        protected: list[tuple[Item, str]] = []
+        scanned = total = remaining = 0
         if cfg.source.kind == "manual":
             items = parse_manual(manual or "")
             if not items:
                 raise ValidationFailed("Paste at least one item to try. Separate several with a line of ---.")
-            scanned = len(items)
+            scanned = total = len(items)
         elif cfg.source.kind == "mail":
-            items, protected, scanned = await self._mail_items(token, cfg, seen, cap)
+            items, protected, scanned, total, remaining = await self._mail_items(token, cfg, seen, cap)
         else:
             try:
                 records = await Memo(self._data(token)).records(cfg.source.table or "")
             except AiError as exc:
                 raise ValidationFailed(str(exc)) from exc
             items = [item_from_record(r) for r in records]
-            scanned = len(items)
+            scanned = total = len(items)
         matched = apply_filters(items, cfg.filters.model_copy(update={"limit": 10_000}), seen)
-        return Fetched(matched[:cap], len(matched), protected, scanned)
+        # Whatever was read but not decided this time (the cap) waits for the next run.
+        return Fetched(matched[:cap], len(matched), protected, scanned, remaining + max(0, len(matched) - cap) if cfg.source.kind == "mail" else 0, total)
 
-    async def _mail_items(self, token: str, cfg: WorkflowConfig, seen: set[str], cap: int) -> tuple[list[Item], int, int]:
-        """Reads each mailbox newest first, a page at a time, setting aside what the rules protect, until there is enough to decide
-        about (or it has looked far enough). Returns the items, how many were protected, and how many messages were looked at."""
+    async def _mail_items(self, token: str, cfg: WorkflowConfig, seen: set[str], cap: int) -> tuple[list[Item], list[tuple[Item, str]], int, int, int]:
+        """Works through the mailboxes newest first, in the date range asked for, skipping what an earlier run already judged. It asks
+        the mail service only for the list of messages first, then reads them a hundred at a time until there is enough to decide
+        about. Returns the items, what the rules protected, how many were read, how many were in range, and how many are left."""
         data = Memo(self._data(token))
-        cutoff = datetime.now(UTC).timestamp() - cfg.filters.since_days * 86400 if cfg.filters.since_days else None
+        f = cfg.filters
+        since = f.after or (datetime.now(UTC).date() - timedelta(days=f.since_days) if f.since_days else None)
         items: list[Item] = []
-        protected = scanned = 0
+        protected: list[tuple[Item, str]] = []
+        scanned = total = remaining = 0
         try:
             for account in cfg.source.account_ids:
                 friends = set(await data.mail_correspondents(account)) if cfg.rules.protect_correspondents else set()
-                found, before = 0, None
-                for _ in range(MAIL_PAGES):
-                    page = await data.mail_page(account, cfg.source.folder, before)
-                    messages = page.get("messages", [])
-                    scanned += len(messages)
-                    for m in messages:
-                        item = item_from_mail(m, page.get("uidValidity", 0), account)
-                        if cfg.filters.new_only and item.id in seen:
-                            continue
-                        if protected_by(item, cfg.rules, friends):
-                            protected += 1
-                            continue
-                        items.append(item)
-                        found += 1
-                    before = page.get("nextBefore")
-                    oldest = (messages or [{}])[-1].get("date")
-                    too_old = bool(cutoff and oldest and datetime.fromisoformat(oldest.replace("Z", "+00:00")).timestamp() < cutoff)
-                    if not before or found >= cap or too_old:
-                        break
+                listing = await data.mail_uids(account, cfg.source.folder, since, f.before)
+                validity, everything = listing.get("uidValidity", 0), listing.get("uids", [])
+                total += len(everything)
+                todo = [u for u in everything if not (f.new_only and f"{account}:{validity}:{u}" in seen)]
+                i = 0
+                while i < len(todo) and len(items) < cap:
+                    chunk = todo[i : i + MAIL_FETCH]
+                    i += len(chunk)
+                    for m in await data.mail_summaries(account, cfg.source.folder, chunk):
+                        scanned += 1
+                        item = item_from_mail(m, validity, account)
+                        why = protected_by(item, cfg.rules, friends)
+                        if why:
+                            protected.append((item, why))
+                        else:
+                            items.append(item)
+                remaining += len(todo) - i
         except AiError as exc:
             raise ValidationFailed(str(exc)) from exc
-        return items, protected, scanned
+        return items, protected, scanned, total, remaining
+
+    async def safe_senders(self, token: str, account_ids: list[str]) -> list[dict[str, Any]]:
+        """Who the safe-senders shield would protect in each mailbox: the addresses found in its Sent folder."""
+        data = Memo(self._data(token))
+        out = []
+        for account in dict.fromkeys(account_ids):
+            try:
+                found = sorted(await data.mail_correspondents(account))
+            except AiError as exc:
+                out.append({"accountId": account, "count": 0, "sample": [], "error": str(exc)})
+                continue
+            out.append({"accountId": account, "count": len(found), "sample": found[:30], "error": None})
+        return out
 
     async def _decider(self, who: Who, cfg: WorkflowConfig, s: UserSettings, workflow_id: str | None) -> Decider:
         """What decides, for one item or a batch. Raises ValidationFailed when the model it needs isn't set up."""
@@ -384,7 +404,7 @@ class WorkflowService:
         started, began = datetime.now(UTC), time.monotonic()
         seen = await self._repo.seen(workflow.id) if workflow else set()
         fetched = await self._items(token, cfg, manual, seen, TEST_ITEMS if mode == "test" else None)
-        items, matched, protected = fetched.items, fetched.matched, fetched.protected
+        items, matched, protected = fetched.items, fetched.matched, len(fetched.protected)
         decider = await self._decider(who, cfg, s, workflow.id if workflow else None)
         outcomes, batches = await self._decide_all(cfg, items, decider) if items else ([], 0)
         trash_note = await self._act(token, cfg, outcomes, mode)
@@ -399,6 +419,7 @@ class WorkflowService:
         stats = {
             "scanned": fetched.scanned, "protected": protected, "judged": len(outcomes), "requests": batches, "batchSize": cfg.batch_size,
             "decider": cfg.decider, "provider": decider.provider, "model": decider.model, "mailboxes": len(cfg.source.account_ids), "cost": round(cost, 6) if cost else None,
+            "inRange": fetched.total, "remaining": fetched.remaining,
         }
         run_id = str(uuid.uuid4())
 
@@ -406,6 +427,10 @@ class WorkflowService:
             await self._repo.record([
                 LedgerEntry(str(uuid.uuid4()), workflow.id, who.user_id, o.item.id, o.item.title, o.item.text[:EXCERPT_CHARS], o.label, o.confidence, o.reason, o.status, run_id, workflow.version)
                 for o in outcomes if o.status != "failed"
+            ] + [
+                # Kept by a rule: remembered, so the next run goes on to older mail instead of reading these again.
+                LedgerEntry(str(uuid.uuid4()), workflow.id, who.user_id, item.id, item.title, item.text[:EXCERPT_CHARS], None, 0.0, f"Kept: {why}", "protected", run_id, workflow.version)
+                for item, why in fetched.protected
             ])
             await self._repo.touch(workflow.id, started)
 
@@ -413,6 +438,8 @@ class WorkflowService:
         for key, words in (("applied", "moved to Trash"), ("kept", "kept"), ("protected", "protected")):
             if counts.get(key):
                 summary += f", {counts[key]} {words}"
+        if fetched.remaining:
+            summary += f". {fetched.remaining} more to go"
         summary += trash_note
         if workflow:
             sel, _ = selection_of(s, workflow.id)

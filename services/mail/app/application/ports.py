@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from datetime import date
 from threading import Event
 from typing import Protocol
 
-from app.domain.mail import Account, Credentials, Download, Folder, Message, Page
+from app.domain.mail import Account, Credentials, Download, Folder, Message, MessageSummary, Page
 
 
 class MailError(Exception):
@@ -32,6 +33,14 @@ class MailGateway(Protocol):
     def set_flags(self, creds: Credentials, folder: str, uid: int, *, seen: bool | None, flagged: bool | None) -> None: ...
 
     def attachment(self, creds: Credentials, folder: str, uid: int, index: int) -> Download: ...
+
+    def uids(self, creds: Credentials, folder: str, *, since: date | None, before: date | None) -> tuple[int, list[int]]:
+        """UIDVALIDITY and the uids of the messages in a date range (inclusive start, exclusive end), newest first. Cheap: no mail is read."""
+        ...
+
+    def summaries(self, creds: Credentials, folder: str, uids: list[int]) -> list[MessageSummary]:
+        """List rows for the given messages, newest first."""
+        ...
 
     def correspondents(self, creds: Credentials) -> list[str]:
         """Addresses the person has written to (From their Sent folder), lower case."""

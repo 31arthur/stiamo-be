@@ -185,3 +185,57 @@ async def test_the_prompt_can_be_read_before_anything_is_run(rig):
     single = (await rig.client.post(f"{BASE}/prompt-preview", json={"config": config()}, headers=headers())).json()
     assert single["batched"] is False and "<item>" in single["user"] and "a JSON" not in single["system"]
     assert rig.llm_log == [] and rig.decision_log == []
+
+
+async def test_a_date_range_reads_only_that_range(rig):
+    wid = await make(rig, filters={"sinceDays": None, "after": "2026-10-03", "before": "2026-10-05", "newOnly": True, "limit": 50})
+    rig.script += [answer("keep"), answer("keep")]
+    out = (await rig.client.post(f"{BASE}/{wid}/test", json={}, headers=headers())).json()
+    assert out["stats"]["inRange"] == 2 and out["counts"]["items"] == 2 and out["counts"]["protected"] == 0  # the two protected mails are before the range
+    narrow = (await rig.client.post(f"{BASE}/{wid}/test", json={}, headers=headers())).json()
+    assert narrow["stats"]["scanned"] == 2
+
+
+async def test_the_whole_inbox_is_worked_through_a_few_at_a_time(rig):
+    wid = await make(rig, filters={"sinceDays": None, "newOnly": True, "limit": 1})
+    rig.script += [answer("keep"), answer("keep")]
+    first = (await rig.client.post(f"{BASE}/{wid}/run", json={}, headers=headers())).json()
+    assert first["counts"]["items"] == 1 and first["stats"]["inRange"] == 4 and first["stats"]["remaining"] == 1 and "1 more to go" in first["summary"]
+    second = (await rig.client.post(f"{BASE}/{wid}/run", json={}, headers=headers())).json()
+    assert second["counts"]["items"] == 1 and second["stats"]["remaining"] == 0
+    third = (await rig.client.post(f"{BASE}/{wid}/run", json={}, headers=headers())).json()
+    assert third["counts"]["items"] == 0 and third["stats"]["remaining"] == 0  # done: nothing is read twice
+
+
+async def test_protected_mail_is_remembered_so_it_never_blocks_the_way(rig):
+    wid = await make(rig)
+    rig.script += [answer("keep"), answer("keep")]
+    await rig.client.post(f"{BASE}/{wid}/run", json={}, headers=headers())
+    counts = (await rig.client.get(f"{BASE}/{wid}", headers=headers())).json()["ledger"]
+    assert counts["protected"] == 2 and counts["kept"] == 2
+    assert (await rig.client.get(f"{BASE}/{wid}/review", headers=headers())).json() == {"items": []}  # protected mail is never in Review
+    test_only = await make(rig)
+    await rig.client.post(f"{BASE}/{test_only}/test", json={}, headers=headers())
+    assert "protected" not in (await rig.client.get(f"{BASE}/{test_only}", headers=headers())).json()["ledger"]  # a test remembers nothing
+
+
+async def test_the_safe_senders_shield_can_be_turned_off_and_extended(rig):
+    off = await make(rig, rules={"protectedDomains": [], "protectedPhrases": [], "protectCorrespondents": False})
+    rig.script += [answer("keep")] * 4
+    out = (await rig.client.post(f"{BASE}/{off}/test", json={}, headers=headers())).json()
+    assert out["counts"]["protected"] == 0 and out["counts"]["items"] == 4  # nobody is protected: friend@elsewhere.org is judged too
+    extra = await make(rig, rules={"protectedDomains": [], "protectedPhrases": [], "protectCorrespondents": False, "protectedAddresses": ["Deals@Shop.com", "not an address"]})
+    rig.script += [answer("keep")] * 3
+    out = (await rig.client.post(f"{BASE}/{extra}/test", json={}, headers=headers())).json()
+    assert out["counts"]["protected"] == 1 and out["counts"]["items"] == 3
+    saved = (await rig.client.get(f"{BASE}/{extra}", headers=headers())).json()["config"]["rules"]["protectedAddresses"]
+    assert saved == ["deals@shop.com"]
+
+
+async def test_you_can_see_who_the_shield_protects_before_running(rig):
+    await connect(rig)
+    r = await rig.client.post(f"{BASE}/safe-senders", json={"accountIds": ["acc1", "down"]}, headers=headers())
+    assert r.status_code == 200
+    items = r.json()["items"]
+    assert items[0] == {"accountId": "acc1", "count": 1, "sample": ["friend@elsewhere.org"], "error": None}
+    assert (await rig.client.post(f"{BASE}/safe-senders", json={"accountIds": []}, headers=headers())).status_code == 422

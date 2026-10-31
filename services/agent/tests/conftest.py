@@ -98,11 +98,14 @@ class FakeData(DataGateway):
             ]
         return []
 
-    async def mail_page(self, account_id, folder, before):
+    async def mail_uids(self, account_id, folder, since, before):
         if account_id == "down":
             raise AiError("The server didn't accept that username and password.")
-        rows = [m for m in self.mail if before is None or m["uid"] < before]
-        return {"messages": rows, "nextBefore": None, "uidValidity": 5}
+        rows = [m for m in self.mail if (since is None or m["date"][:10] >= since.isoformat()) and (before is None or m["date"][:10] < before.isoformat())]
+        return {"uidValidity": 5, "uids": sorted((m["uid"] for m in rows), reverse=True)}
+
+    async def mail_summaries(self, account_id, folder, uids):
+        return sorted((m for m in self.mail if m["uid"] in uids), key=lambda m: -m["uid"])
 
     async def mail_correspondents(self, account_id):
         return ["friend@elsewhere.org"]
