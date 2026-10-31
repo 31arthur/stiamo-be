@@ -85,6 +85,8 @@ class ChatResult:
     text: str
     tool_calls: list[ToolCall] = field(default_factory=list)
     raw: Any = None
+    #: Tokens this one call used, when the provider says: {"inputTokens": n, "outputTokens": n}.
+    usage: dict[str, int] | None = None
 
 
 def clamp_thinking(levels: tuple[str, ...], wanted: str) -> str:

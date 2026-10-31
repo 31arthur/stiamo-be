@@ -109,4 +109,6 @@ class OpenAiCompatibleClient(LlmClient):
         if not message:
             raise AiError(f"{self._who} sent back an empty answer.")
         calls = [ToolCall(c.get("id") or f"call_{i}", (c.get("function") or {}).get("name", ""), _args((c.get("function") or {}).get("arguments"))) for i, c in enumerate(message.get("tool_calls") or [])]
-        return ChatResult(message.get("content") or "", calls)
+        u = r.json().get("usage") or {}
+        usage = {"inputTokens": int(u.get("prompt_tokens", 0)), "outputTokens": int(u.get("completion_tokens", 0))} if u else None
+        return ChatResult(message.get("content") or "", calls, usage=usage)

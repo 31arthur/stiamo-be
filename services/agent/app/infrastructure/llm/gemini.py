@@ -149,4 +149,7 @@ class GeminiClient(LlmClient):
             fc = p.get("functionCall")
             if fc and fc.get("name"):
                 calls.append(ToolCall(f"call_{len(calls)}", fc["name"], fc.get("args") or {}))
-        return ChatResult(text, calls, {"role": "model", "parts": parts})
+        u = out.get("usageMetadata") or {}
+        # Thinking tokens are billed as output, so they are counted with it.
+        usage = {"inputTokens": int(u.get("promptTokenCount", 0)), "outputTokens": int(u.get("candidatesTokenCount", 0)) + int(u.get("thoughtsTokenCount", 0))} if u else None
+        return ChatResult(text, calls, {"role": "model", "parts": parts}, usage)

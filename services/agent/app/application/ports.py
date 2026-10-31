@@ -99,6 +99,61 @@ class ChannelRepository(ABC):
     async def delete(self, channel_id: str) -> None: ...
 
 
+@dataclass
+class RunRecord:
+    """One time an agent was asked, kept so a person can see what it was given and what it did."""
+
+    id: str
+    user_id: str
+    agent_id: str
+    #: chat, telegram, whatsapp, test or schedule.
+    trigger: str
+    #: ok or error.
+    status: str
+    started_at: datetime
+    duration_ms: int = 0
+    provider: str = ""
+    model: str = ""
+    thinking: str = "off"
+    #: What was asked, as typed.
+    input: str = ""
+    #: The message as the model got it (the input wrapped by the agent's template) and the system prompt, filled in.
+    user_message: str = ""
+    system_prompt: str = ""
+    #: The tools the model was offered.
+    tools: list[str] = field(default_factory=list)
+    #: What the model did, one entry per tool call (see Step.to_log).
+    steps: list[dict[str, Any]] = field(default_factory=list)
+    output: str = ""
+    found_count: int = 0
+    error: str | None = None
+    usage: dict[str, int] = field(default_factory=dict)
+    channel: str | None = None
+
+
+class RunLog(ABC):
+    """Where runs are kept. Writes never share the request's transaction: a failed run is logged too."""
+
+    @abstractmethod
+    async def add(self, record: RunRecord) -> None: ...
+
+    @abstractmethod
+    async def recent(self, user_id: str, agent_id: str, *, limit: int, before: datetime | None = None) -> list[RunRecord]: ...
+
+    @abstractmethod
+    async def get(self, user_id: str, run_id: str) -> RunRecord | None: ...
+
+    @abstractmethod
+    async def since(self, user_id: str, agent_id: str, since: datetime) -> list[RunRecord]:
+        """Light copies (no prompts or steps) of every run since a time, for statistics."""
+
+    @abstractmethod
+    async def count(self, user_id: str, agent_id: str) -> int: ...
+
+    @abstractmethod
+    async def clear(self, user_id: str, agent_id: str) -> int: ...
+
+
 class TelegramApi(ABC):
     @abstractmethod
     async def get_me(self, token: str) -> dict[str, Any]: ...

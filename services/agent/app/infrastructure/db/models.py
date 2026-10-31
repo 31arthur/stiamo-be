@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, Index, String, Text
+from sqlalchemy import JSON, Index, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 from stiamo_common.db import Base, UTCDateTime
@@ -39,3 +39,32 @@ class ChannelModel(Base):
     created_at: Mapped[datetime] = mapped_column(UTCDateTime)
 
     __table_args__ = (Index("ix_agent_channels_user", "user_id"),)
+
+
+class RunModel(Base):
+    """One time an agent was asked: what it was given, what it did, what it answered."""
+
+    __tablename__ = "agent_runs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(36))
+    agent_id: Mapped[str] = mapped_column(String(64))
+    trigger: Mapped[str] = mapped_column(String(16))
+    status: Mapped[str] = mapped_column(String(8))
+    started_at: Mapped[datetime] = mapped_column(UTCDateTime)
+    duration_ms: Mapped[int] = mapped_column(Integer, default=0)
+    provider: Mapped[str] = mapped_column(String(16), default="")
+    model: Mapped[str] = mapped_column(String(200), default="")
+    thinking: Mapped[str] = mapped_column(String(8), default="off")
+    input: Mapped[str] = mapped_column(Text, default="")
+    user_message: Mapped[str] = mapped_column(Text, default="")
+    system_prompt: Mapped[str] = mapped_column(Text, default="")
+    tools: Mapped[list[str]] = mapped_column(Json, default=list)
+    steps: Mapped[list[dict[str, Any]]] = mapped_column(Json, default=list)
+    output: Mapped[str] = mapped_column(Text, default="")
+    found_count: Mapped[int] = mapped_column(Integer, default=0)
+    error: Mapped[str | None] = mapped_column(Text)
+    usage: Mapped[dict[str, int]] = mapped_column(Json, default=dict)
+    channel: Mapped[str | None] = mapped_column(String(36))
+
+    __table_args__ = (Index("ix_agent_runs_agent", "user_id", "agent_id", "started_at"),)
