@@ -1,6 +1,6 @@
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Response, status
+from fastapi import APIRouter, Query, Response, status
 from pydantic import Field
 from stiamo_common.models import DomainModel
 
@@ -131,3 +131,27 @@ async def preview(agent_id: str, body: PreviewBody, agent: deps.Agent, me: deps.
 @router.post("/agents/{agent_id}/chat", summary="Ask an agent")
 async def chat(agent_id: str, body: ChatBody, agent: deps.Agent, me: deps.Me, token: deps.Token) -> dict[str, Any]:
     return run_json(await agent.chat(me, token, agent_id, body.message, body.messages))
+
+
+# --- what an agent has done -------------------------------------------------------------------------------------
+
+
+@router.get("/agents/{agent_id}/stats", summary="How an agent has been doing: totals, the last 30 days, a count per day and the last run")
+async def stats(agent_id: str, agent: deps.Agent, me: deps.Me) -> dict[str, Any]:
+    return await agent.stats(me, agent_id)
+
+
+@router.get("/agents/{agent_id}/runs", summary="The times an agent was asked, newest first")
+async def runs(agent_id: str, agent: deps.Agent, me: deps.Me, limit: Annotated[int, Query(ge=1, le=100)] = 30, before: str | None = None) -> dict[str, Any]:
+    return await agent.runs(me, agent_id, limit, before)
+
+
+@router.delete("/agents/{agent_id}/runs", status_code=status.HTTP_204_NO_CONTENT, summary="Clear an agent's history")
+async def clear_runs(agent_id: str, agent: deps.Agent, me: deps.Me) -> Response:
+    await agent.clear_runs(me, agent_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get("/runs/{run_id}", summary="One run in full: what it was given, the prompt, each step and the answer")
+async def get_run(run_id: str, agent: deps.Agent, me: deps.Me) -> dict[str, Any]:
+    return await agent.run(me, run_id)

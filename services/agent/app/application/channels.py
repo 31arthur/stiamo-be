@@ -186,7 +186,7 @@ class ChannelService:
         agent_id = c.public.get("agent") or self._agent.registry.default_id
         key = (c.id, f"{agent_id}:{sender}")  # changing the channel's agent starts a fresh conversation
         try:
-            run = await self._agent.chat(who, self._tokens.mint(who.user_id, who.email), agent_id, text, self._memory.get(key), channel_name)
+            run = await self._agent.chat(who, self._tokens.mint(who.user_id, who.email), agent_id, text, self._memory.get(key), channel_name, trigger=channel_name.lower(), channel_id=c.id)
         except (ValidationFailed, AiError) as exc:
             return str(getattr(exc, "message", None) or exc)
         self._memory[key] = [m.to_json() for m in run.messages][-REMEMBER:]

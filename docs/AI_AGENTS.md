@@ -114,6 +114,24 @@ question and each tool's description or on/off state, and can preview exactly wh
 **Changing a default prompt is safe.** A person who never edited keeps following the code; one who did keeps their text
 (`customPrompt: true`) until they press *Reset*. Don't rely on a changed default reaching customised agents.
 
+## Run log: every question leaves a record
+
+Each question that reaches a model is written to `agent_runs`, whether it worked or not, by `SqlRunLog`:
+
+| Kept | Why |
+| --- | --- |
+| who asked, which agent, **trigger** (`chat`, `telegram`, `whatsapp`; later `test`, `schedule`), time, duration | filtering and "last called" |
+| provider, model, thinking level | reproducing a result; comparing models |
+| the input as typed, the message as the model got it, the **filled-in system prompt**, the tools offered | the "whole package", exactly as sent |
+| one entry per tool call: tool, arguments, a shortened result (1 500 chars), found count, ms, error | the trace, without the clutter of whole payloads |
+| the answer, found count, token usage (summed over every call), error | outcome and cost |
+
+Design points: the log writes in **its own session**, so a failed run is kept even though its request rolled back; logging
+**never fails a question**; it is **pruned** to the newest 500 runs per person and agent; a question that never reached a
+model (no model chosen, empty message) is not logged; results are shortened because the log is for people and the
+database should not become a copy of the practice. History belongs to the person: reads check ownership, and it can be
+cleared per agent. Anything that runs an agent **must go through `AgentService.chat`** (with its `trigger`) so it is logged.
+
 ## Security checklist for anything agent-shaped
 
 - **Secrets** (provider keys, bot and Twilio tokens) are sealed with Fernet (`AGENT_SECRET_KEY`) before they reach the

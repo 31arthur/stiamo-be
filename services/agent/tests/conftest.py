@@ -46,7 +46,10 @@ class FakeLlm(LlmClient):
 
     async def chat(self, *, model: str, messages: list[Message], tools: list[ToolSpec], thinking: str) -> ChatResult:
         self.log.append({"model": model, "thinking": thinking, "system": messages[0].content, "roles": [m.role for m in messages], "last": messages[-1].content, "tools": [t.name for t in tools], "tool_descriptions": {t.name: t.description for t in tools}})
-        return self.script.pop(0) if self.script else ChatResult("done")
+        item = self.script.pop(0) if self.script else ChatResult("done")
+        if isinstance(item, Exception):
+            raise item
+        return item
 
 
 class FakeDecisions(DecisionClient):

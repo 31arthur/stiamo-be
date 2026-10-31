@@ -113,6 +113,15 @@ they are checked, sealed and never returned (only `last4`). `{agent}` is an agen
 | `POST /v1/agent/agents/{agent}/prompt/preview` `{question, prompt?}` | `{system, user, tools[]}`: exactly what would be sent, with unsaved edits if `prompt` is given |
 | `POST /v1/agent/agents/{agent}/chat` `{message, messages?}` | `{answer, steps[], found[], messages[]}`; send `messages` back to continue the conversation |
 
+**What an agent has done** (see "Run log" in [AI_AGENTS.md](AI_AGENTS.md))
+
+| Call | Meaning |
+| --- | --- |
+| `GET /v1/agent/agents/{agent}/stats` | `{totalRuns, windowDays, runs, ok, errors, avgDurationMs, inputTokens, outputTokens, byTrigger, daily[14], lastRun}` |
+| `GET /v1/agent/agents/{agent}/runs?limit=&before=` | newest first: `{items[{id, trigger, status, startedAt, durationMs, provider, model, input, output, found, steps, error?}], next}` |
+| `GET /v1/agent/runs/{id}` | one run in full: adds `userMessage`, `systemPrompt`, `tools`, `steps[{tool, label, args, found, ms, result, error?}]`, `usage`, `thinking`, `channel` |
+| `DELETE /v1/agent/agents/{agent}/runs` | clears that agent's history |
+
 **Channels** (`/v1/agent/channels`)
 
 | Call | Meaning |

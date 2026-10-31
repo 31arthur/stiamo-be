@@ -1,13 +1,24 @@
 """Settings, prompts and chat: everything a person does with the agents from the web app. One service, many agents."""
 
+import logging
+import time
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
-from stiamo_common.errors import ValidationFailed
+from stiamo_common.errors import NotFound, ValidationFailed
 
-from app.application.ports import DataGateway, DecisionClient, LlmClient, SettingsRepository, UserSettings
+from app.application.ports import (
+    DataGateway,
+    DecisionClient,
+    LlmClient,
+    RunLog,
+    RunRecord,
+    SettingsRepository,
+    UserSettings,
+)
 from app.application.registry import AgentRegistry
 from app.application.runner import AgentRun, Tool, run_agent
 from app.application.toolpacks import PackContext
@@ -15,7 +26,13 @@ from app.domain.agents import AgentDefinition
 from app.domain.llm import DECISION_MODELS, PROVIDER_IDS, THINKING_LEVELS, AiError, Message, ModelInfo, clamp_thinking
 from app.domain.prompt import Package, PromptConfig, build_package
 
+log = logging.getLogger(__name__)
+
 MAX_HISTORY = 40
+#: What a run keeps of what was typed.
+MAX_INPUT_CHARS = 4000
+STATS_DAYS = 30
+DAILY_DAYS = 14
 #: The selection an agent with none of its own starts from: the choice made last, for any agent.
 ANY = "*"
 
@@ -76,12 +93,13 @@ class AgentService:
         self,
         repo: SettingsRepository,
         registry: AgentRegistry,
+        runs: RunLog,
         llm_factory: Callable[[str, str], LlmClient],
         decision_factory: Callable[[str], DecisionClient],
         data_factory: Callable[[str], DataGateway],
         max_steps: int = 8,
     ) -> None:
-        self._repo, self._registry = repo, registry
+        self._repo, self._registry, self._runs = repo, registry, runs
         self._llm, self._decisions, self._data, self._max_steps = llm_factory, decision_factory, data_factory, max_steps
 
     @property
@@ -266,12 +284,19 @@ class AgentService:
         pkg = build_package(p.config, [t.spec for t in p.tools], p.context, question)
         return {"system": pkg.system, "user": pkg.user, "tools": [{"name": t.name, "description": t.description, "parameters": t.parameters} for t in pkg.tools]}
 
-    async def chat(self, who: Who, token: str, agent_id: str, message: str, history: list[dict[str, Any]] | None = None, channel: str = "the web app") -> AgentRun:
+    async def chat(
+        self, who: Who, token: str, agent_id: str, message: str, history: list[dict[str, Any]] | None = None, channel: str = "the web app",
+        *, trigger: str = "chat", channel_id: str | None = None,
+    ) -> AgentRun:
+        """Asks an agent. Every question that reaches a model is kept in the run log, whether it worked or not."""
         agent = self._registry.get(agent_id)
         message = message.strip()
         if not message:
             raise ValidationFailed("Ask something first.")
-        p = await self._prepare(who, token, agent, channel)
+        try:
+            p = await self._prepare(who, token, agent, channel)
+        except AiError as exc:
+            raise ValidationFailed(str(exc)) from exc
         sel, _ = self._selection(p.settings, agent.id)
         if not sel or not sel.get("modelId"):
             raise ValidationFailed(f"Choose a provider and a model for the {agent.name} first (AI agents → {agent.name}).")
@@ -281,8 +306,99 @@ class AgentService:
             raise ValidationFailed("The earlier conversation couldn't be read. Start a new chat.") from exc
         pkg = build_package(p.config, [t.spec for t in p.tools], p.context, message)
         client = self._llm(sel["providerId"], p.settings.keys[sel["providerId"]])
+
+        record = RunRecord(
+            id=str(uuid.uuid4()), user_id=who.user_id, agent_id=agent.id, trigger=trigger, status="ok", started_at=datetime.now(UTC),
+            provider=sel["providerId"], model=sel["modelId"], thinking=sel.get("thinking", "off"), input=message[:MAX_INPUT_CHARS],
+            user_message=pkg.user[:MAX_INPUT_CHARS * 2], system_prompt=pkg.system, tools=[t.name for t in pkg.tools], channel=channel_id,
+        )
+        began = time.monotonic()
         try:
-            return await run_agent(client=client, model=sel["modelId"], thinking=sel.get("thinking", "off"), system=pkg.system, user=pkg.user, tools=self._tools_for(pkg, p.tools), history=past, max_steps=self._max_steps)
+            run = await run_agent(client=client, model=sel["modelId"], thinking=record.thinking, system=pkg.system, user=pkg.user, tools=self._tools_for(pkg, p.tools), history=past, max_steps=self._max_steps)
         except AiError as exc:
+            record.status, record.error = "error", str(exc)
             raise ValidationFailed(str(exc)) from exc
+        except Exception as exc:
+            record.status, record.error = "error", "Something went wrong inside the agent."
+            log.exception("agent %s failed", agent.id)
+            raise exc
+        else:
+            record.steps, record.output, record.found_count, record.usage = [s.to_log() for s in run.steps], run.answer, len(run.found), run.usage
+            return run
+        finally:
+            record.duration_ms = int((time.monotonic() - began) * 1000)
+            await self._keep(record)
+
+    async def _keep(self, record: RunRecord) -> None:
+        """Logging is for people to look back on: it must never be the reason a question fails."""
+        try:
+            await self._runs.add(record)
+        except Exception:  # noqa: BLE001
+            log.exception("could not keep the run log for %s", record.agent_id)
+
+    # --- what an agent has done ---------------------------------------------------------------------------------
+
+    @staticmethod
+    def _iso(dt: datetime) -> str:
+        return dt.astimezone(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+    def _run_summary(self, r: RunRecord) -> dict[str, Any]:
+        out: dict[str, Any] = {
+            "id": r.id, "agentId": r.agent_id, "trigger": r.trigger, "status": r.status, "startedAt": self._iso(r.started_at), "durationMs": r.duration_ms,
+            "provider": r.provider, "model": r.model, "input": r.input[:200], "output": r.output[:200], "found": r.found_count,
+        }
+        if r.error:
+            out["error"] = r.error
+        return out
+
+    async def runs(self, who: Who, agent_id: str, limit: int = 30, before: str | None = None) -> dict[str, Any]:
+        self._registry.get(agent_id)
+        cut = datetime.fromisoformat(before.replace("Z", "+00:00")) if before else None
+        rows = await self._runs.recent(who.user_id, agent_id, limit=limit + 1, before=cut)
+        more = len(rows) > limit
+        rows = rows[:limit]
+        return {"items": [{**self._run_summary(r), "steps": r.steps and len(r.steps)} for r in rows], "next": self._iso(rows[-1].started_at) if more and rows else None}
+
+    async def run(self, who: Who, run_id: str) -> dict[str, Any]:
+        r = await self._runs.get(who.user_id, run_id)
+        if r is None:
+            raise NotFound("No such run.")
+        return {
+            **self._run_summary(r), "input": r.input, "output": r.output, "thinking": r.thinking, "userMessage": r.user_message,
+            "systemPrompt": r.system_prompt, "tools": r.tools, "steps": r.steps, "usage": r.usage, "channel": r.channel,
+        }
+
+    async def clear_runs(self, who: Who, agent_id: str) -> int:
+        self._registry.get(agent_id)
+        return await self._runs.clear(who.user_id, agent_id)
+
+    async def stats(self, who: Who, agent_id: str) -> dict[str, Any]:
+        """How an agent has been doing: totals, the last 30 days, and a day-by-day count for the last 14."""
+        self._registry.get(agent_id)
+        now = datetime.now(UTC)
+        rows = await self._runs.since(who.user_id, agent_id, now - timedelta(days=STATS_DAYS))
+        ok = [r for r in rows if r.status == "ok"]
+        by_trigger: dict[str, int] = {}
+        for r in rows:
+            by_trigger[r.trigger] = by_trigger.get(r.trigger, 0) + 1
+        daily = {(now - timedelta(days=i)).date().isoformat(): {"runs": 0, "errors": 0} for i in range(DAILY_DAYS - 1, -1, -1)}
+        for r in rows:
+            d = daily.get(r.started_at.astimezone(UTC).date().isoformat())
+            if d:
+                d["runs"] += 1
+                d["errors"] += r.status != "ok"
+        last = (await self._runs.recent(who.user_id, agent_id, limit=1)) or []
+        return {
+            "totalRuns": await self._runs.count(who.user_id, agent_id),
+            "windowDays": STATS_DAYS,
+            "runs": len(rows),
+            "ok": len(ok),
+            "errors": len(rows) - len(ok),
+            "avgDurationMs": int(sum(r.duration_ms for r in ok) / len(ok)) if ok else 0,
+            "inputTokens": sum(r.usage.get("inputTokens", 0) for r in rows),
+            "outputTokens": sum(r.usage.get("outputTokens", 0) for r in rows),
+            "byTrigger": by_trigger,
+            "daily": [{"date": k, **v} for k, v in daily.items()],
+            "lastRun": self._run_summary(last[0]) if last else None,
+        }
 

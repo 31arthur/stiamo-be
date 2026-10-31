@@ -9,6 +9,7 @@ from stiamo_common.errors import install_error_handlers
 from app.agents import default_registry
 from app.config import Settings, get_settings
 from app.infrastructure.data import HttpDataGateway
+from app.infrastructure.db.runs import SqlRunLog
 from app.infrastructure.llm.gemini import GeminiClient
 from app.infrastructure.llm.jev import JevClient
 from app.infrastructure.llm.openai_compat import OpenAiCompatibleClient
@@ -38,6 +39,8 @@ def create_app(settings: Settings | None = None, *, registry=None, llm_factory=N
     app.state.settings = settings
     app.state.box = SecretBox(settings.encryption_key)
     app.state.registry = registry or default_registry()
+    # Its own sessions (the factory exists once the app starts), so a failed run is still kept.
+    app.state.runs = SqlRunLog(lambda: app.state.session_factory())
     app.state.llm_factory = llm_factory or (lambda provider, key: GeminiClient(key, http) if provider == "gemini" else OpenAiCompatibleClient(provider, key, http))
     app.state.decision_factory = decision_factory or (lambda key: JevClient(key, http))
     app.state.data_factory = data_factory or (lambda token: HttpDataGateway(http, token, settings.practice_url, settings.files_url, settings.drive_url))
