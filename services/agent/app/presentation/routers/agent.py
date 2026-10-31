@@ -29,6 +29,10 @@ class SelectionBody(DomainModel):
     thinking: str = "off"
 
 
+class WorkspacesBody(DomainModel):
+    workspaces: list[Annotated[str, Field(max_length=20)]] = Field(max_length=10)
+
+
 class DecisionBody(DomainModel):
     enabled: bool
     model_id: str
@@ -108,6 +112,12 @@ async def get_agent(agent_id: str, agent: deps.Agent, me: deps.Me) -> dict[str, 
 @router.put("/agents/{agent_id}/selection", status_code=status.HTTP_204_NO_CONTENT, summary="Choose the provider, model and thinking level for an agent")
 async def set_selection(agent_id: str, body: SelectionBody, agent: deps.Agent, me: deps.Me) -> Response:
     await agent.set_selection(me, agent_id, body.provider_id, body.model_id, body.thinking)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.put("/agents/{agent_id}/workspaces", status_code=status.HTTP_204_NO_CONTENT, summary="The workspaces an agent is shown in (it can belong to several)")
+async def set_workspaces(agent_id: str, body: WorkspacesBody, agent: deps.Agent, me: deps.Me) -> Response:
+    await agent.set_workspaces(me, agent_id, body.workspaces)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

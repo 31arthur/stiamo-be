@@ -20,6 +20,7 @@ CASE_AGENT = AgentDefinition(
     description="Finds cases and the letters and documents that go with them.",
     system=SYSTEM,
     packs=("cases", "drive", "decisions"),
+    workspaces=("sb",),
     suggestions=(
         "Which cases have a hearing in the next two weeks?",
         "Find the open cases against NHAI",

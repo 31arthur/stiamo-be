@@ -22,6 +22,8 @@ class SettingsModel(Base):
     decision: Mapped[dict[str, Any] | None] = mapped_column(Json)
     #: agent id -> the prompt the person wrote for it.
     prompt: Mapped[dict[str, Any] | None] = mapped_column(Json)
+    #: agent id -> the workspaces it is shown in.
+    workspaces: Mapped[dict[str, list[str]] | None] = mapped_column(Json)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime)
 
 

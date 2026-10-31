@@ -64,6 +64,8 @@ class UserSettings:
     decision: dict[str, Any] | None = None
     #: agent id -> the prompt this person wrote for it. An agent with no entry uses its own default.
     prompts: dict[str, dict[str, Any]] = field(default_factory=dict)
+    #: agent id -> the workspaces it is shown in. An agent with no entry uses its own default.
+    workspaces: dict[str, list[str]] = field(default_factory=dict)
     updated_at: datetime | None = None
 
 
