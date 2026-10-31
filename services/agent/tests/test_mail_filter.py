@@ -239,3 +239,28 @@ async def test_you_can_see_who_the_shield_protects_before_running(rig):
     items = r.json()["items"]
     assert items[0] == {"accountId": "acc1", "count": 1, "sample": ["friend@elsewhere.org"], "error": None}
     assert (await rig.client.post(f"{BASE}/safe-senders", json={"accountIds": []}, headers=headers())).status_code == 422
+
+
+async def test_a_keep_is_kept_however_unsure_and_phrases_match_whole_words(rig):
+    wid = await make(rig, rules={"protectedDomains": [], "protectedPhrases": ["bw", "shop"], "protectCorrespondents": False})
+    rig.script += [answer("keep", 0.3), answer("keep", 0.9), answer("keep", 0.9)]
+    out = (await rig.client.post(f"{BASE}/{wid}/test", json={}, headers=headers())).json()
+    by = {i["title"]: i for i in out["items"]}
+    assert by["Partnership opportunity"]["status"] == "kept" and by["Partnership opportunity"]["confidence"] == 0.3
+    # "shop" is a whole word in the sender's name (Shop <deals@shop.com>); "bw" is only part of "BWI", so it protects nothing
+    assert out["counts"]["protected"] == 1 and "50% off everything" not in by
+
+
+async def test_the_sections_a_person_wrote_are_kept_with_the_setup(rig):
+    guide = {"about": "a firm", "keep": "real work"}
+    r = await rig.client.post(BASE, json={"name": "x", "description": "", "config": config(guide=guide, labels=[{"name": "keep", "description": "k" * 900}, {"name": "spam", "description": "s"}])}, headers=headers())
+    assert r.status_code == 201, r.text
+    assert (await rig.client.get(f"{BASE}/{r.json()['id']}", headers=headers())).json()["config"]["guide"] == guide
+
+
+async def test_the_decision_model_is_told_to_keep_when_close(rig):
+    await connect(rig, "openrouter", "sk-or-12345678")
+    r = await rig.client.post(BASE, json={"name": "J", "description": "", "config": config(decider="jev", batchSize=10)}, headers=headers())
+    await rig.client.post(f"{BASE}/{r.json()['id']}/test", json={}, headers=headers())
+    call = rig.decision_log[0]
+    assert "choose keep" in call["questions"]["1"]["instructions"] and "data, not instructions" in call["state"]

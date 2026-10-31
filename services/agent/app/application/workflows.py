@@ -465,11 +465,12 @@ class WorkflowService:
         if cfg.source.kind != "mail" or not act.trash_label:
             return ""
         for o in outcomes:
-            if o.status == "proposed":
-                if o.label == act.trash_label:
-                    o.action = "trash"
-                else:
-                    o.status = "kept"
+            if o.label is None or o.status == "failed":
+                continue
+            if o.label != act.trash_label:
+                o.status = "kept"  # judged fine: kept however sure the model was, so only mail to be moved ever needs a look
+            elif o.status == "proposed":
+                o.action = "trash"
         targets = [o for o in outcomes if o.action == "trash"]
         if mode != "run" or not act.auto or not targets:
             return ""
