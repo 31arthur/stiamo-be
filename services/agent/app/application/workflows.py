@@ -14,7 +14,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from pydantic import ValidationError as PydanticValidationError
-from stiamo_common.errors import NotFound, ValidationFailed
+from stiamo_common.errors import Conflict, NotFound, ValidationFailed
 
 from app.application.ports import (
     DataGateway,
@@ -157,8 +157,11 @@ class WorkflowService:
         llm_factory: Callable[[str, str], LlmClient],
         decision_factory: Callable[[str], DecisionClient],
         data_factory: Callable[[str], DataGateway],
+        running: set[str] | None = None,
     ) -> None:
         self._repo, self._settings, self._runs = repo, settings, runs
+        #: Agents being run right now, shared by every request of this process. One run of an agent at a time.
+        self._running = running if running is not None else set()
         self._llm, self._decisions, self._data = llm_factory, decision_factory, data_factory
 
     # --- the agents themselves -----------------------------------------------------------------------------------
@@ -533,7 +536,15 @@ class WorkflowService:
     async def run(self, who: Who, token: str, workflow_id: str, manual: str | None) -> dict[str, Any]:
         """Decides the new items and keeps each decision in the ledger for review."""
         w = await self._mine(who, workflow_id)
-        return await self._execute(who, token, workflow=w, cfg=self._config(w.config), manual=manual, mode="run")
+        # Two runs of one agent would judge the same emails twice, move them twice, and write the same ledger rows at once. So one at a time
+        # (check and add happen with nothing awaited between them, so two requests can't both get in).
+        if workflow_id in self._running:
+            raise Conflict("This agent is already running. Wait for it to finish, then run it again.")
+        self._running.add(workflow_id)
+        try:
+            return await self._execute(who, token, workflow=w, cfg=self._config(w.config), manual=manual, mode="run")
+        finally:
+            self._running.discard(workflow_id)
 
     # --- executions: every real run, and what it decided -------------------------------------------------------
 

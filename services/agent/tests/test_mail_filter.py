@@ -399,3 +399,35 @@ async def test_the_reason_is_kept_with_the_decision(rig):
     done = next(i for i in detail["items"] if i["id"] == item["id"])
     assert done["status"] == "approved" and done["label"] == "keep" and done["reason"] == "You said it isn't spam: A partner of ours"
     assert rig.data.trashed == []
+
+
+async def test_two_runs_of_the_same_agent_at_once_do_not_collide(rig):
+    import asyncio
+
+    wid = await make(rig)
+    rig.script += [answer("keep"), answer("spam"), answer("keep"), answer("spam")]
+    a, b = await asyncio.gather(
+        rig.client.post(f"{BASE}/{wid}/run", json={}, headers=headers()),
+        rig.client.post(f"{BASE}/{wid}/run", json={}, headers=headers()),
+    )
+    codes = sorted([a.status_code, b.status_code])
+    assert codes == [200, 409]  # one runs; the other is told to wait
+    assert rig.data.trashed == [3]  # nothing is moved twice
+    assert "already running" in (a.text if a.status_code == 409 else b.text)
+    # and once it has finished it can be run again
+    assert (await rig.client.post(f"{BASE}/{wid}/run", json={}, headers=headers())).status_code == 200
+
+
+async def test_different_agents_run_side_by_side_and_a_failed_run_frees_its_agent(rig):
+    import asyncio
+
+    one = await make(rig, source={"kind": "mail", "accountIds": ["acc1"], "folder": "INBOX"})
+    two = await make(rig, source={"kind": "mail", "accountIds": ["acc2"], "folder": "INBOX"})
+    rig.script += [answer("keep"), answer("spam"), answer("keep"), answer("spam")]
+    a, b = await asyncio.gather(rig.client.post(f"{BASE}/{one}/run", json={}, headers=headers()), rig.client.post(f"{BASE}/{two}/run", json={}, headers=headers()))
+    assert (a.status_code, b.status_code) == (200, 200)
+    assert sorted(rig.data.trashed_by) == [("acc1", 3), ("acc2", 3)]  # each moved from its own mailbox, once
+
+    broken = await make(rig, source={"kind": "mail", "accountIds": ["down"], "folder": "INBOX"})
+    assert (await rig.client.post(f"{BASE}/{broken}/run", json={}, headers=headers())).status_code == 422
+    assert (await rig.client.post(f"{BASE}/{broken}/run", json={}, headers=headers())).status_code == 422  # not "already running"
