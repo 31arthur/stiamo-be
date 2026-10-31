@@ -12,6 +12,7 @@ Backend for [Stiamo](https://github.com/31arthur/stiamo), built with **FastAPI**
 | `services/drive` | Searches the contents of your Google Drive letters without copying them |
 | `services/agent` | AI providers and models (OpenAI, Gemini, OpenRouter), the editable case agent, the Jev decision model, and the Telegram and WhatsApp channels |
 | `services/mail` | IMAP mailboxes per workspace, read live from the server and kept current with IMAP IDLE (no polling) |
+| `docs/SPAM_FILTER_SETUP.md` | Setting up the mailbox Spam filter agent, step by step |
 | `docs/MAIL_SETUP.md` | Connecting mailboxes, how live updates work, safety rules, deployment |
 | `docs/AI_AGENTS.md` | How the agent service is built: agents, tool packs, prompts, channels, security, testing |
 | `docs/WORKFLOW_AGENTS.md` | Design for agents that read a source (email, tables), decide, and act on a schedule |
