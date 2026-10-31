@@ -1,8 +1,10 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Response, status
+from fastapi import APIRouter, Depends, Request, Response, status
+from stiamo_common.errors import Unauthorized
 
 from app.application.dto import AuthResult
+from app.application.throttle import LoginThrottle
 from app.application.use_cases.auth import GetProfile, LoginUser, LogoutSession, RefreshSession, RegisterUser
 from app.presentation import deps
 from app.presentation.schemas import (
@@ -31,8 +33,19 @@ async def register(body: RegisterRequest, uc: Annotated[RegisterUser, Depends(de
 
 
 @router.post("/auth/login", response_model=AuthOut)
-async def login(body: LoginRequest, uc: Annotated[LoginUser, Depends(deps.login_uc)]):
-    return _auth_out(await uc(email=body.email, password=body.password))
+async def login(body: LoginRequest, request: Request, uc: Annotated[LoginUser, Depends(deps.login_uc)]):
+    throttle: LoginThrottle = request.app.state.login_throttle
+    # Behind the reverse proxy the real address is the last one it appended; a client can't forge that one.
+    forwarded = request.headers.get("x-forwarded-for", "").split(",")[-1].strip()
+    key = f"{body.email.strip().lower()}|{forwarded or (request.client.host if request.client else '')}"
+    throttle.check(key)
+    try:
+        result = await uc(email=body.email, password=body.password)
+    except Unauthorized:
+        throttle.failed(key)
+        raise
+    throttle.succeeded(key)
+    return _auth_out(result)
 
 
 @router.post("/auth/refresh", response_model=AuthOut)
