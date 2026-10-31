@@ -27,7 +27,7 @@ async def test_a_question_is_kept_with_what_it_was_given_what_it_did_and_what_it
     assert len(listed["items"]) == 1
     summary = listed["items"][0]
     assert (summary["trigger"], summary["status"], summary["input"], summary["output"], summary["model"]) == ("chat", "ok", "NHAI cases", "One case.", "gpt-4o")
-    assert summary["found"] == 1 and summary["durationMs"] >= 0 and "systemPrompt" not in summary
+    assert summary["found"] == 1 and summary["steps"] == 1 and summary["durationMs"] >= 0 and "systemPrompt" not in summary
 
     full = (await rig.client.get(f"/v1/agent/runs/{summary['id']}", headers=headers())).json()
     assert full["userMessage"] == "Q: NHAI cases" and full["systemPrompt"].startswith("Terse.")

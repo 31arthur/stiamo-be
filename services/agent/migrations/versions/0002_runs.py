@@ -32,6 +32,7 @@ def upgrade() -> None:
     sa.Column('system_prompt', sa.Text(), nullable=False),
     sa.Column('tools', JSON, nullable=False),
     sa.Column('steps', JSON, nullable=False),
+    sa.Column('steps_count', sa.Integer(), nullable=False),
     sa.Column('output', sa.Text(), nullable=False),
     sa.Column('found_count', sa.Integer(), nullable=False),
     sa.Column('error', sa.Text(), nullable=True),

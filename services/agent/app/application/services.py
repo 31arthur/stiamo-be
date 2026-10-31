@@ -345,7 +345,7 @@ class AgentService:
     def _run_summary(self, r: RunRecord) -> dict[str, Any]:
         out: dict[str, Any] = {
             "id": r.id, "agentId": r.agent_id, "trigger": r.trigger, "status": r.status, "startedAt": self._iso(r.started_at), "durationMs": r.duration_ms,
-            "provider": r.provider, "model": r.model, "input": r.input[:200], "output": r.output[:200], "found": r.found_count,
+            "provider": r.provider, "model": r.model, "input": r.input[:200], "output": r.output[:200], "found": r.found_count, "steps": r.steps_count,
         }
         if r.error:
             out["error"] = r.error
@@ -357,7 +357,7 @@ class AgentService:
         rows = await self._runs.recent(who.user_id, agent_id, limit=limit + 1, before=cut)
         more = len(rows) > limit
         rows = rows[:limit]
-        return {"items": [{**self._run_summary(r), "steps": r.steps and len(r.steps)} for r in rows], "next": self._iso(rows[-1].started_at) if more and rows else None}
+        return {"items": [self._run_summary(r) for r in rows], "next": self._iso(rows[-1].started_at) if more and rows else None}
 
     async def run(self, who: Who, run_id: str) -> dict[str, Any]:
         r = await self._runs.get(who.user_id, run_id)
