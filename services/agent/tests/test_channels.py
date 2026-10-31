@@ -8,7 +8,7 @@ KEY = "sk-test-1234567890"
 
 async def ready(rig):
     await rig.client.put("/v1/agent/providers/openai", json={"apiKey": KEY}, headers=headers())
-    await rig.client.put("/v1/agent/selection", json={"providerId": "openai", "modelId": "gpt-4o", "thinking": "off"}, headers=headers())
+    await rig.client.put("/v1/agent/agents/cases/selection", json={"providerId": "openai", "modelId": "gpt-4o", "thinking": "off"}, headers=headers())
 
 
 async def telegram(rig):
@@ -165,3 +165,28 @@ async def test_the_allowed_numbers_can_be_changed_and_a_test_message_sent(rig):
     assert new["allowed"] == ["whatsapp:+447700900123", "whatsapp:+919876543210"]
     assert (await rig.client.post(f"/v1/agent/channels/{c['id']}/test", headers=headers())).status_code == 204
     assert [t for _, t, _ in rig.twilio.sent] == ["whatsapp:+447700900123", "whatsapp:+919876543210"]
+
+
+async def test_a_channel_is_answered_by_the_agent_it_was_given_and_can_be_switched(rig):
+    await ready(rig)
+    r = await rig.client.post("/v1/agent/channels/telegram", json={"botToken": "123:abc", "agent": "librarian"}, headers=headers())
+    c = r.json()
+    assert c["agent"] == "librarian"
+    await send(rig, c, f"/start {c['pairingCode']}", update=1)
+    rig.script += [ChatResult("From the library.")]
+    await send(rig, c, "newest letters?", update=2)
+    assert rig.llm_log[-1]["tools"] == ["find_documents"] and rig.llm_log[-1]["system"].startswith("You find documents")
+
+    switched = await rig.client.put(f"/v1/agent/channels/{c['id']}/agent", json={"agent": "cases"}, headers=headers())
+    assert switched.json()["agent"] == "cases"
+    rig.script += [ChatResult("From the cases.")]
+    await send(rig, c, "and cases?", update=3)
+    # A different agent starts a fresh conversation: the earlier exchange isn't carried over.
+    assert "search_cases" in rig.llm_log[-1]["tools"] and rig.llm_log[-1]["roles"] == ["system", "user"]
+
+    bad = await rig.client.put(f"/v1/agent/channels/{c['id']}/agent", json={"agent": "nope"}, headers=headers())
+    assert bad.status_code == 404
+
+
+async def test_a_channel_starts_with_the_first_agent_when_none_is_named(rig):
+    assert (await telegram(rig))["agent"] == "cases"

@@ -9,6 +9,8 @@ Telegram ────► /v1/agent/webhooks/telegram/{id} ──┤
 WhatsApp ────► /v1/agent/webhooks/whatsapp/{id} ──┘      └─► practice, files, drive (your cases and documents)
 ```
 
+How the service is built, and how to add an agent, is in [AI_AGENTS.md](AI_AGENTS.md) and [ADDING_AN_AGENT.md](ADDING_AN_AGENT.md).
+
 Everything below is set from the **AI agents** section of the app. This page is only what has to be done on the server, and
 what to click on the Telegram and Twilio side.
 
@@ -36,7 +38,7 @@ curl -fsSL https://raw.githubusercontent.com/31arthur/stiamo-be/main/deploy/dock
 
 ## 2. Providers and models
 
-AI agents → **Providers**. Paste a key; it is checked with the provider before it is kept. The models and the thinking levels
+AI agents → **Providers**. Keys and providers are shared by every agent; each agent has its own model and prompt. Paste a key; it is checked with the provider before it is kept. The models and the thinking levels
 each one accepts are asked of the provider, so the list is always current.
 
 **Jev** (a decision model from TypeSafe) is reached through the OpenRouter key: it answers typed questions (pick one of
@@ -48,7 +50,7 @@ these, is this true, where on this scale) with probabilities instead of text. Tu
 2. AI agents → **Channels** → Telegram → paste the token → **Connect**. Stiamo registers the webhook itself.
 3. Press **Open in Telegram** (or send the 8-character code to your bot as `/start CODE`). That chat is now linked.
 
-Only linked chats get answers; anyone else who finds the bot is told it isn't linked, and nothing reaches the model.
+Each channel is answered by one agent, chosen when you connect it and changeable in **Channels**. Only linked chats get answers; anyone else who finds the bot is told it isn't linked, and nothing reaches the model.
 
 ## 4. WhatsApp (through Twilio)
 

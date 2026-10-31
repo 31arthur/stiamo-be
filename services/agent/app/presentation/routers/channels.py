@@ -11,6 +11,8 @@ router = APIRouter(prefix="/v1/agent/channels", tags=["channels"])
 
 class TelegramBody(DomainModel):
     bot_token: Annotated[str, Field(max_length=200)]
+    #: Which agent answers. Without one, the first registered.
+    agent: str | None = None
 
 
 class WhatsAppBody(DomainModel):
@@ -20,6 +22,11 @@ class WhatsAppBody(DomainModel):
     sender: Annotated[str, Field(max_length=40)]
     #: Who may use the agent: your own number(s).
     allowed: list[Annotated[str, Field(max_length=40)]] = Field(max_length=10)
+    agent: str | None = None
+
+
+class AgentBody(DomainModel):
+    agent: str
 
 
 class AllowedBody(DomainModel):
@@ -33,12 +40,12 @@ async def list_channels(channels: deps.Channels, me: deps.Me) -> dict[str, Any]:
 
 @router.post("/telegram", status_code=status.HTTP_201_CREATED, summary="Connect a Telegram bot (sets its webhook)")
 async def connect_telegram(body: TelegramBody, channels: deps.Channels, me: deps.Me) -> dict[str, Any]:
-    return await channels.connect_telegram(me, body.bot_token)
+    return await channels.connect_telegram(me, body.bot_token, body.agent)
 
 
 @router.post("/whatsapp", status_code=status.HTTP_201_CREATED, summary="Connect WhatsApp through Twilio")
 async def connect_whatsapp(body: WhatsAppBody, channels: deps.Channels, me: deps.Me) -> dict[str, Any]:
-    return await channels.connect_whatsapp(me, body.account_sid, body.auth_token, body.sender, body.allowed)
+    return await channels.connect_whatsapp(me, body.account_sid, body.auth_token, body.sender, body.allowed, body.agent)
 
 
 @router.post("/{channel_id}/pairing", summary="A fresh code to pair a Telegram chat")
@@ -49,6 +56,11 @@ async def pairing(channel_id: str, channels: deps.Channels, me: deps.Me) -> dict
 @router.delete("/{channel_id}/pairing/{chat_id}", summary="Unlink a Telegram chat")
 async def unpair(channel_id: str, chat_id: str, channels: deps.Channels, me: deps.Me) -> dict[str, Any]:
     return await channels.unpair(me, channel_id, chat_id)
+
+
+@router.put("/{channel_id}/agent", summary="Which agent answers on a channel")
+async def set_agent(channel_id: str, body: AgentBody, channels: deps.Channels, me: deps.Me) -> dict[str, Any]:
+    return await channels.set_agent(me, channel_id, body.agent)
 
 
 @router.put("/{channel_id}/allowed", summary="Who may use a WhatsApp channel")

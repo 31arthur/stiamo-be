@@ -17,13 +17,14 @@ class SqlSettingsRepository(SettingsRepository):
         if row is None:
             return None
         keys = {k: v for k, v in self._box.open(row.keys_sealed).items() if isinstance(v, str)}
-        return UserSettings(row.user_id, row.email, keys, row.selection, row.decision, row.prompt, row.updated_at)
+        return UserSettings(row.user_id, row.email, keys, dict(row.selection or {}), row.decision, dict(row.prompt or {}), row.updated_at)
 
     async def save(self, s: UserSettings) -> None:
         row = await self._s.get(SettingsModel, s.user_id) or SettingsModel(user_id=s.user_id)
         row.email = s.email
         row.keys_sealed = self._box.seal(s.keys) if s.keys else None
-        row.selection, row.decision, row.prompt = s.selection, s.decision, s.prompt
+        # Reassigned (not mutated) so the change is noticed.
+        row.selection, row.decision, row.prompt = dict(s.selections), s.decision, dict(s.prompts)
         row.updated_at = datetime.now(UTC)
         self._s.add(row)
         await self._s.flush()

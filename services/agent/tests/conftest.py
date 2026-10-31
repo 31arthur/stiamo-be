@@ -4,8 +4,15 @@ from typing import Any
 
 import jwt
 import pytest
+from app.agents import AGENTS
 from app.application.ports import AccessTokens, DataGateway, DecisionClient, LlmClient, TelegramApi, TwilioApi
+from app.application.registry import AgentRegistry
+from app.application.toolpacks import PackRegistry
+from app.application.toolpacks.cases import CasesPack
+from app.application.toolpacks.decisions import DecisionsPack
+from app.application.toolpacks.drive import DrivePack
 from app.config import Settings
+from app.domain.agents import AgentDefinition
 from app.domain.llm import AiError, ChatResult, Message, ModelInfo, ToolSpec
 from app.infrastructure.db import models as _tables  # noqa: F401  (register tables)
 from app.main import create_app
@@ -123,6 +130,14 @@ class FakeTokens(AccessTokens):
         return f"minted-for-{user_id}"
 
 
+#: A second agent, so the tests can show that agents don't share prompts or choices.
+LIBRARIAN = AgentDefinition(id="librarian", name="Librarian", description="Finds documents.", system="You find documents for {{user}}.\n{{tools}}\nDrive: {{drive}}.", packs=("drive",), suggestions=("Newest letters?",))
+
+
+def test_registry() -> AgentRegistry:
+    return AgentRegistry([*AGENTS, LIBRARIAN], PackRegistry([CasesPack(), DrivePack(), DecisionsPack()]))
+
+
 class Rig:
     """Everything a test needs: the app, a client and the fakes."""
 
@@ -140,6 +155,7 @@ async def rig():
     settings = Settings(database_url="sqlite+aiosqlite:///:memory:", public_url=PUBLIC)
     app = create_app(
         settings,
+        registry=test_registry(),
         llm_factory=lambda provider, key: FakeLlm(key, script, models, llm_log),
         decision_factory=lambda key: FakeDecisions(decision_log),
         data_factory=lambda token: FakeData(),

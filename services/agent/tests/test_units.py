@@ -1,7 +1,12 @@
 import httpx
 import pytest
+from app.application.registry import AgentRegistry
 from app.application.runner import Tool, ToolOutput, run_agent
-from app.application.tools import case_search_terms, drive_file_id, match_cases
+from app.application.toolpacks import PackRegistry
+from app.application.toolpacks.cases import CasesPack
+from app.application.toolpacks.common import case_search_terms, drive_file_id, match_cases
+from app.application.toolpacks.drive import DrivePack
+from app.domain.agents import AgentDefinition
 from app.domain.llm import AiError, ChatResult, Message, ToolCall, ToolSpec, clamp_thinking
 from app.domain.prompt import PromptConfig, ToolOverride, build_package, render
 from app.infrastructure.llm.gemini import gemini_models, thinking_config, to_contents
@@ -18,13 +23,14 @@ def test_variables_are_filled_in_and_values_are_never_read_for_more():
 
 
 def test_a_prompt_must_use_known_variables_and_keep_the_input():
+    known = {"input": "", "today": ""}
     with pytest.raises(ValidationFailed, match="unknown variables"):
-        PromptConfig(system="{{wat}}").validated()
+        PromptConfig(system="{{wat}}").validated(known)
     with pytest.raises(ValidationFailed, match="must contain"):
-        PromptConfig(input_template="ask").validated()
+        PromptConfig(system="ok", input_template="ask").validated(known)
     with pytest.raises(ValidationFailed, match="empty"):
-        PromptConfig(system="  ").validated()
-    PromptConfig().validated()
+        PromptConfig(system="  ").validated(known)
+    PromptConfig(system="Today is {{today}}").validated(known)
 
 
 def test_the_package_applies_tool_overrides():
@@ -121,3 +127,26 @@ def test_twilio_signatures_and_numbers():
     sig = twilio_signature("token", url, params)
     assert valid_twilio_signature("token", url, params, sig) and not valid_twilio_signature("other", url, params, sig) and not valid_twilio_signature("token", url, params, None)
     assert as_whatsapp("+91 98765-43210") == "whatsapp:+919876543210" == as_whatsapp("whatsapp:+919876543210")
+
+
+def test_the_registry_fails_at_start_up_on_a_mistake():
+    packs = PackRegistry([CasesPack(), DrivePack()])
+    ok = AgentDefinition(id="a", name="A", description="", system="{{input}}", packs=("cases",))
+    AgentRegistry([ok], packs)
+    with pytest.raises(ValueError, match="don't exist"):
+        AgentRegistry([AgentDefinition(id="b", name="B", description="", system="x", packs=("nope",))], packs)
+    with pytest.raises(ValueError, match="twice"):
+        AgentRegistry([ok, ok], packs)
+    with pytest.raises(ValueError, match="at least one tool pack"):
+        AgentDefinition(id="c", name="C", description="", system="x", packs=())
+    with pytest.raises(ValueError, match="lower case"):
+        AgentDefinition(id="Bad Id", name="X", description="", system="x", packs=("cases",))
+    with pytest.raises(ValueError, match="twice"):
+        PackRegistry([CasesPack(), CasesPack()])
+
+
+def test_an_agents_variables_are_the_base_ones_plus_its_packs():
+    packs = PackRegistry([CasesPack(), DrivePack()])
+    only_drive = AgentDefinition(id="d", name="D", description="", system="x", packs=("drive",))
+    reg = AgentRegistry([only_drive], packs)
+    assert {"input", "today", "user", "channel", "tools", "drive"} == set(reg.variables(only_drive))

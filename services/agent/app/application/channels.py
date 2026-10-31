@@ -64,7 +64,7 @@ class ChannelService:
         return f"{self._public}/v1/agent/webhooks/{kind}/{channel_id}"
 
     def view(self, c: Channel) -> dict[str, Any]:
-        out: dict[str, Any] = {"id": c.id, "kind": c.kind, **{k: v for k, v in c.public.items()}, "createdAt": c.created_at.isoformat() if c.created_at else None}
+        out: dict[str, Any] = {"id": c.id, "kind": c.kind, **{k: v for k, v in c.public.items() if k != "ownerEmail"}, "agent": c.public.get("agent") or self._agent.registry.default_id, "createdAt": c.created_at.isoformat() if c.created_at else None}
         out["webhookUrl"] = f"{self._public}/v1/agent/webhooks/{c.kind}/{c.id}" if self._public else None
         pairing = c.state.get("pairing")
         if c.kind == "telegram" and pairing and datetime.fromisoformat(pairing["expires"]) > datetime.now(UTC):
@@ -86,7 +86,7 @@ class ChannelService:
 
     # --- Telegram --------------------------------------------------------------------------------------
 
-    async def connect_telegram(self, who: Who, bot_token: str) -> dict[str, Any]:
+    async def connect_telegram(self, who: Who, bot_token: str, agent: str | None = None) -> dict[str, Any]:
         bot_token = bot_token.strip()
         if not bot_token:
             raise ValidationFailed("Paste the bot token from @BotFather first.")
@@ -96,7 +96,8 @@ class ChannelService:
                 raise ValidationFailed("That bot is already connected.")
         cid, secret = str(uuid.uuid4()), secrets.token_urlsafe(32)
         await self._tg.set_webhook(bot_token, self._webhook("telegram", cid), secret)
-        c = Channel(cid, who.user_id, "telegram", {"botToken": bot_token, "webhookSecret": secret}, {"ownerEmail": who.email, "botId": me.get("id"), "username": me.get("username", ""), "name": me.get("first_name", ""), "paired": []}, {}, datetime.now(UTC))
+        agent_id = self._agent.registry.get(agent or self._agent.registry.default_id).id
+        c = Channel(cid, who.user_id, "telegram", {"botToken": bot_token, "webhookSecret": secret}, {"agent": agent_id, "ownerEmail": who.email, "botId": me.get("id"), "username": me.get("username", ""), "name": me.get("first_name", ""), "paired": []}, {}, datetime.now(UTC))
         await self._repo.save(c)
         return self.view(await self._new_pairing(c))
 
@@ -119,7 +120,7 @@ class ChannelService:
 
     # --- WhatsApp (Twilio) -----------------------------------------------------------------------------
 
-    async def connect_whatsapp(self, who: Who, account_sid: str, auth_token: str, sender: str, allowed: list[str]) -> dict[str, Any]:
+    async def connect_whatsapp(self, who: Who, account_sid: str, auth_token: str, sender: str, allowed: list[str], agent: str | None = None) -> dict[str, Any]:
         account_sid, auth_token = account_sid.strip(), auth_token.strip()
         numbers = [as_whatsapp(n) for n in allowed if n.strip()]
         if not account_sid or not auth_token or not sender.strip():
@@ -129,7 +130,15 @@ class ChannelService:
         name = await self._tw.check_account(account_sid, auth_token)
         cid = str(uuid.uuid4())
         self._webhook("whatsapp", cid)  # fails early, with an explanation, when the server's address isn't set
-        c = Channel(cid, who.user_id, "whatsapp", {"authToken": auth_token}, {"ownerEmail": who.email, "accountSid": account_sid, "account": name, "from": as_whatsapp(sender), "allowed": numbers}, {}, datetime.now(UTC))
+        agent_id = self._agent.registry.get(agent or self._agent.registry.default_id).id
+        c = Channel(cid, who.user_id, "whatsapp", {"authToken": auth_token}, {"agent": agent_id, "ownerEmail": who.email, "accountSid": account_sid, "account": name, "from": as_whatsapp(sender), "allowed": numbers}, {}, datetime.now(UTC))
+        await self._repo.save(c)
+        return self.view(c)
+
+    async def set_agent(self, who: Who, channel_id: str, agent: str) -> dict[str, Any]:
+        """Which agent answers on this channel."""
+        c = await self._mine(who, channel_id)
+        c.public = {**c.public, "agent": self._agent.registry.get(agent).id}
         await self._repo.save(c)
         return self.view(c)
 
@@ -174,9 +183,10 @@ class ChannelService:
         """Runs the agent for the channel's owner and returns what to say back."""
         settings_email = c.public.get("ownerEmail", "")
         who = Who(c.user_id, settings_email)
-        key = (c.id, sender)
+        agent_id = c.public.get("agent") or self._agent.registry.default_id
+        key = (c.id, f"{agent_id}:{sender}")  # changing the channel's agent starts a fresh conversation
         try:
-            run = await self._agent.chat(who, self._tokens.mint(who.user_id, who.email), text, self._memory.get(key), channel_name)
+            run = await self._agent.chat(who, self._tokens.mint(who.user_id, who.email), agent_id, text, self._memory.get(key), channel_name)
         except (ValidationFailed, AiError) as exc:
             return str(getattr(exc, "message", None) or exc)
         self._memory[key] = [m.to_json() for m in run.messages][-REMEMBER:]
