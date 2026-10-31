@@ -1,8 +1,10 @@
 # Workflow agents: agents that watch a source and act on a schedule
 
-> **Status: design.** Chat agents, the run log and the agent hub exist ([AI_AGENTS.md](AI_AGENTS.md)). This page is the
-> design for the next kind: agents a person builds in the app ("every 3 hours, sort my inbox") from a **source**,
-> **filters**, a **prompt**, **actions** and a **schedule**. It is written to be built in the phases at the end.
+> **Status: phase 2 is built** (see *Build in phases*). Chat agents, the run log and the agent hub exist
+> ([AI_AGENTS.md](AI_AGENTS.md)). This page is the design for agents a person builds in the app ("every 3 hours, sort my
+> inbox") from a **source**, **filters**, a **prompt**, **actions** and a **schedule**. What exists today: build an agent from a
+> pasted-text or Stiamo-collection source, filters, labels and a prompt; **test run** it; **run it now**; **review** what it
+> proposes. Not yet: schedules, IMAP, and actions that change the source.
 
 ## What makes an agent good, and not just working
 
@@ -82,7 +84,7 @@ alike. A definition stores *configuration only*: source, filters, labels, policy
 | `workflow_agents` | id, user_id, name, `config` JSON (source, filters, labels, policy, schedule, prompt), version, enabled, cursor, next_run_at, consecutive_failures |
 | `workflow_agent_versions` | agent id, version, config, who/when: the history of changes, for rollback |
 | `source_accounts` | user_id, kind (`imap`, …), sealed credentials (Fernet, as for channels), a label. A source is connected once and reused. |
-| `ledger` | agent id, item id, run id, decision, confidence, action, status (`applied`, `proposed`, `skipped`, `failed`), before/after for undo. Unique on (agent id, item id, version-independent key) |
+| `workflow_ledger` | agent id, item id, run id, version, label, confidence, reason, status (`proposed`, `needs_review`, `approved`, `dismissed`; later `applied`), before/after for undo. Unique on (agent id, item id) |
 | `agent_runs` *(exists)* | one row per run (`trigger = schedule/test/manual`); the items of a run are its `steps` (or a child table if runs get large) |
 
 **Source connectors** are a port, next to `DataGateway`:
@@ -145,16 +147,21 @@ The sidebar already lists each agent. A **New agent** button will open a short w
 History gains a per-item view for scheduled runs (what was in the inbox, what each message got and why), an **Undo**
 for applied actions, and a **Review** queue for proposals and low-confidence items.
 
-## API sketch (under `/v1/agent`)
+## API (under `/v1/agent/workflows`)
+
+Built in phase 2 (full request/response shapes in [API.md](API.md)):
 
 | Call | Meaning |
 | --- | --- |
-| `POST /sources` · `GET /sources` · `DELETE /sources/{id}` | connect (credentials checked, then sealed), list, remove a source account |
-| `POST /workflows` · `GET /workflows/{id}` · `PUT /workflows/{id}` | create / read / update (each update is a new version) |
-| `POST /workflows/{id}/test` | the test run; returns what would happen, per item |
-| `POST /workflows/{id}/enable` · `…/disable` · `…/run-now` | the schedule's switch, and a manual run |
-| `GET /workflows/{id}/review` · `POST …/review/approve` | proposals and low-confidence items; approve applies them |
-| `POST /workflows/{id}/undo/{runId}` | reverses what a run applied (where the connector can) |
+| `GET` · `POST` | list the agents a person built · build one (the setup is validated and explained) |
+| `GET/PUT/DELETE /{id}` | read · change (a changed setup is a new version; renaming isn't) · delete with its ledger and history |
+| `POST /test` | try an **unsaved** setup on a sample: nothing is kept |
+| `POST /{id}/test` | the test run of the saved setup: up to 20 items, one line in the history, no ledger |
+| `POST /{id}/run` | run now: decide the new items, keep each decision for review |
+| `GET /{id}/review` · `POST /{id}/review` | what was proposed or unsure · approve (optionally correcting the label) or dismiss |
+
+Planned for the later phases: `POST/GET/DELETE /sources` (connected accounts, sealed), `…/enable`, `…/disable` (the
+schedule), `…/undo/{runId}` (reverse what a run applied).
 
 Existing history, stats and the agent hub work unchanged: they read `agent_runs`.
 
@@ -163,7 +170,7 @@ Existing history, stats and the agent hub work unchanged: they read `agent_runs`
 | Phase | Delivers | Not yet |
 | --- | --- | --- |
 | **1** (done) | Registry, packs, per-agent prompt/model/channels, **run log, stats, history, hub** | |
-| **2** | `workflow_agents` + versions, the pipeline (filters → decide → policy), the ledger, **test run**, a *manual* and a *Stiamo-table* source, propose-only actions, the wizard | schedules, IMAP |
+| **2** (done) | `workflow_agents` + versions, the pipeline (filters → decide → policy), the ledger, **test run**, run now, a review queue, a *manual* (pasted) and a *Stiamo-collection* source, the builder in the app | schedules, IMAP, actions on the source: an approval is recorded, nothing is changed anywhere yet |
 | **3** | The scheduler with leases and limits, enable/pause/failure handling, notifications, the review queue, undo | write actions on external systems |
 | **4** | `ImapSource` (read-only first, then label/move with undo), source accounts with sealed credentials | |
 | **5** | Examples and prompt regression checks, more sources (feeds, Drive), batch decisions for cost, agent-calls-agent | |

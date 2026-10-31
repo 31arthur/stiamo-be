@@ -18,11 +18,13 @@ from app.application.ports import (
     RunRecord,
     SettingsRepository,
     UserSettings,
+    Workflow,
+    WorkflowRepository,
 )
 from app.application.registry import AgentRegistry
 from app.application.runner import AgentRun, Tool, run_agent
 from app.application.toolpacks import PackContext
-from app.domain.agents import AgentDefinition
+from app.domain.agents import AgentDefinition, UnknownAgent
 from app.domain.llm import DECISION_MODELS, PROVIDER_IDS, THINKING_LEVELS, AiError, Message, ModelInfo, clamp_thinking
 from app.domain.prompt import Package, PromptConfig, build_package
 
@@ -35,6 +37,13 @@ STATS_DAYS = 30
 DAILY_DAYS = 14
 #: The selection an agent with none of its own starts from: the choice made last, for any agent.
 ANY = "*"
+
+
+def selection_of(s: UserSettings, agent_id: str) -> tuple[dict[str, Any] | None, bool]:
+    """The provider and model an agent uses, and whether that is its own choice (False: it follows the one made last)."""
+    own, shared = s.selections.get(agent_id), s.selections.get(ANY)
+    pick = own or shared
+    return (pick if pick and pick.get("providerId") in s.keys else None), own is None
 
 
 @dataclass(frozen=True)
@@ -70,6 +79,9 @@ class Memo(DataGateway):
     async def attachments(self):
         return await self._once("attachments", self._inner.attachments)
 
+    async def records(self, table):
+        return await self._once(f"records:{table}", lambda: self._inner.records(table))
+
     async def drive_available(self):
         return await self._once("drive", self._inner.drive_available)
 
@@ -94,12 +106,13 @@ class AgentService:
         repo: SettingsRepository,
         registry: AgentRegistry,
         runs: RunLog,
+        workflows: WorkflowRepository,
         llm_factory: Callable[[str, str], LlmClient],
         decision_factory: Callable[[str], DecisionClient],
         data_factory: Callable[[str], DataGateway],
         max_steps: int = 8,
     ) -> None:
-        self._repo, self._registry, self._runs = repo, registry, runs
+        self._repo, self._registry, self._runs, self._workflows = repo, registry, runs, workflows
         self._llm, self._decisions, self._data, self._max_steps = llm_factory, decision_factory, data_factory, max_steps
 
     @property
@@ -122,7 +135,7 @@ class AgentService:
             "decision": {"enabled": bool(decision.get("enabled")), "modelId": decision.get("modelId") or DECISION_MODELS[0]["id"]},
             "decisionModels": list(DECISION_MODELS),
             "thinkingLevels": list(THINKING_LEVELS),
-            "agents": [self._summary(a, s) for a in self._registry.all()],
+            "agents": [self._summary(a, s) for a in self._registry.all()] + [self._workflow_summary(w, s) for w in await self._workflows.all(who.user_id)],
             "defaultAgent": self._registry.default_id,
         }
 
@@ -191,10 +204,15 @@ class AgentService:
     # --- one agent -----------------------------------------------------------------------------------------
 
     def _selection(self, s: UserSettings, agent_id: str) -> tuple[dict[str, Any] | None, bool]:
-        """The provider and model an agent uses, and whether that is its own choice (False: it follows the last one made)."""
-        own, shared = s.selections.get(agent_id), s.selections.get(ANY)
-        pick = own or shared
-        return (pick if pick and pick.get("providerId") in s.keys else None), own is None
+        return selection_of(s, agent_id)
+
+    async def _known(self, who: Who, agent_id: str) -> None:
+        """Agents come in two kinds: the ones in code, and the ones this person built. Either may have a model and a history."""
+        try:
+            self._registry.get(agent_id)
+        except UnknownAgent:
+            if await self._workflows.get(who.user_id, agent_id) is None:
+                raise
 
     def _prompt(self, agent: AgentDefinition, s: UserSettings) -> PromptConfig:
         stored = s.prompts.get(agent.id)
@@ -205,7 +223,11 @@ class AgentService:
 
     def _summary(self, agent: AgentDefinition, s: UserSettings) -> dict[str, Any]:
         selection, inherited = self._selection(s, agent.id)
-        return {"id": agent.id, "name": agent.name, "description": agent.description, "suggestions": list(agent.suggestions), "selection": selection, "selectionInherited": inherited and selection is not None, "customPrompt": agent.id in s.prompts}
+        return {"id": agent.id, "kind": "chat", "name": agent.name, "description": agent.description, "suggestions": list(agent.suggestions), "selection": selection, "selectionInherited": inherited and selection is not None, "customPrompt": agent.id in s.prompts}
+
+    def _workflow_summary(self, w: Workflow, s: UserSettings) -> dict[str, Any]:
+        selection, inherited = self._selection(s, w.id)
+        return {"id": w.id, "kind": "workflow", "name": w.name, "description": w.description, "suggestions": [], "selection": selection, "selectionInherited": inherited and selection is not None, "customPrompt": False}
 
     async def agent(self, who: Who, agent_id: str) -> dict[str, Any]:
         """Everything the prompt editor needs for one agent."""
@@ -221,7 +243,7 @@ class AgentService:
         }
 
     async def set_selection(self, who: Who, agent_id: str, provider: str, model_id: str, thinking: str) -> None:
-        self._registry.get(agent_id)
+        await self._known(who, agent_id)
         self._provider(provider)
         s = await self._load(who)
         if provider not in s.keys:
@@ -352,7 +374,7 @@ class AgentService:
         return out
 
     async def runs(self, who: Who, agent_id: str, limit: int = 30, before: str | None = None) -> dict[str, Any]:
-        self._registry.get(agent_id)
+        await self._known(who, agent_id)
         cut = datetime.fromisoformat(before.replace("Z", "+00:00")) if before else None
         rows = await self._runs.recent(who.user_id, agent_id, limit=limit + 1, before=cut)
         more = len(rows) > limit
@@ -369,12 +391,12 @@ class AgentService:
         }
 
     async def clear_runs(self, who: Who, agent_id: str) -> int:
-        self._registry.get(agent_id)
+        await self._known(who, agent_id)
         return await self._runs.clear(who.user_id, agent_id)
 
     async def stats(self, who: Who, agent_id: str) -> dict[str, Any]:
         """How an agent has been doing: totals, the last 30 days, and a day-by-day count for the last 14."""
-        self._registry.get(agent_id)
+        await self._known(who, agent_id)
         now = datetime.now(UTC)
         rows = await self._runs.since(who.user_id, agent_id, now - timedelta(days=STATS_DAYS))
         ok = [r for r in rows if r.status == "ok"]

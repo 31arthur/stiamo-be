@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, Index, Integer, String, Text
+from sqlalchemy import JSON, Float, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 from stiamo_common.db import Base, UTCDateTime
@@ -67,5 +67,58 @@ class RunModel(Base):
     error: Mapped[str | None] = mapped_column(Text)
     usage: Mapped[dict[str, int]] = mapped_column(Json, default=dict)
     channel: Mapped[str | None] = mapped_column(String(36))
+    version: Mapped[int] = mapped_column(Integer, default=0)
 
     __table_args__ = (Index("ix_agent_runs_agent", "user_id", "agent_id", "started_at"),)
+
+
+class WorkflowModel(Base):
+    """An agent a person built."""
+
+    __tablename__ = "workflow_agents"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(36))
+    name: Mapped[str] = mapped_column(String(100))
+    description: Mapped[str] = mapped_column(String(300), default="")
+    config: Mapped[dict[str, Any]] = mapped_column(Json)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime)
+    last_run_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+
+    __table_args__ = (Index("ix_workflow_agents_user", "user_id"),)
+
+
+class WorkflowVersionModel(Base):
+    """Every configuration a workflow has had, so a change can be traced and rolled back."""
+
+    __tablename__ = "workflow_versions"
+
+    agent_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    version: Mapped[int] = mapped_column(Integer, primary_key=True)
+    config: Mapped[dict[str, Any]] = mapped_column(Json)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime)
+
+
+class LedgerModel(Base):
+    """What was decided about each item of a workflow, and what happened to it."""
+
+    __tablename__ = "workflow_ledger"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    agent_id: Mapped[str] = mapped_column(String(64))
+    user_id: Mapped[str] = mapped_column(String(36))
+    item_id: Mapped[str] = mapped_column(String(200))
+    title: Mapped[str] = mapped_column(String(200), default="")
+    excerpt: Mapped[str] = mapped_column(Text, default="")
+    label: Mapped[str | None] = mapped_column(String(40))
+    confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    reason: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(16))
+    run_id: Mapped[str] = mapped_column(String(36), default="")
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime)
+    decided_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+
+    __table_args__ = (UniqueConstraint("agent_id", "item_id", name="uq_ledger_item"), Index("ix_ledger_status", "agent_id", "status"))

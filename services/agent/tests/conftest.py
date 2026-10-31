@@ -77,6 +77,15 @@ class FakeData(DataGateway):
     async def attachments(self):
         return []
 
+    async def records(self, table):
+        if table == "tasks":
+            return [
+                {"id": "t1", "title": "Pay the court fee", "status": "open", "workspace": "sb", "updatedAt": "2999-01-01T00:00:00Z"},
+                {"id": "t2", "title": "Buy milk", "workspace": "personal", "updatedAt": "2998-01-01T00:00:00Z"},
+                {"id": "t3", "title": "Old filing", "workspace": "sb", "updatedAt": "2001-01-01T00:00:00Z"},
+            ]
+        return []
+
     async def drive_available(self):
         return True
 

@@ -137,3 +137,35 @@ they are checked, sealed and never returned (only `last4`). `{agent}` is an agen
 
 `POST /v1/agent/webhooks/telegram/{id}` and `/whatsapp/{id}` are called by Telegram and Twilio, not by the app: they are
 authenticated by Telegram's secret header and Twilio's signature, not a bearer token.
+
+## Workflow agents (`agent`)
+
+Agents a person builds, as designed in [WORKFLOW_AGENTS.md](WORKFLOW_AGENTS.md). They also appear in
+`GET /v1/agent/settings` (`agents[]`, with `kind: "workflow"`), and `selection`, `stats`, `runs` and `runs/{id}` work for
+their ids (`wf-…`) exactly as for the built-in agents.
+
+The **setup** (`config`, camelCase):
+
+```json
+{
+  "source":  {"kind": "manual | table", "table": "cases | tasks | follow-ups | meetings | clients | projects"},
+  "filters": {"sinceDays": 30, "newOnly": true, "contains": "fee", "limit": 50},
+  "prompt":  "What the sorting is for.",
+  "labels":  [{"name": "urgent", "description": "Needs doing this week.", "threshold": 0.8}, {"name": "routine", "description": "Can wait."}],
+  "decider": "model | jev",
+  "defaultThreshold": 0.7
+}
+```
+
+| Call | Meaning |
+| --- | --- |
+| `GET /v1/agent/workflows` · `POST` `{name, description, config}` | list · build (`422` explains what is wrong: fewer than 2 labels, a repeated or badly written label name, an unknown collection…) |
+| `GET/PUT/DELETE /v1/agent/workflows/{id}` | read `{id, name, description, version, config, ledger{status:n}, pending, lastRunAt}` · change · delete |
+| `POST /v1/agent/workflows/test` `{config, manual?}` | try an unsaved setup on a sample; nothing is kept |
+| `POST /v1/agent/workflows/{id}/test` `{manual?}` | test run (max 20 items); one `trigger: "test"` line in the history; no ledger |
+| `POST /v1/agent/workflows/{id}/run` `{manual?}` | run now; decisions go to the ledger (`trigger: "manual"`); items decided before are skipped while `newOnly` |
+| `GET /v1/agent/workflows/{id}/review` | `{items[{id, title, excerpt, label, confidence, reason, status}]}`: proposed and needs-review |
+| `POST /v1/agent/workflows/{id}/review` `{itemIds[], action: "approve" \| "dismiss", label?}` | `{changed}`; an item with no label can only be approved with one chosen |
+
+A run's result: `{runId, mode, counts{items, proposed, needsReview, failed}, matched, usage, summary, durationMs, items[{id, title, excerpt, label, confidence, reason, status, error?, ms}]}`.
+`manual` is pasted text, items separated by a line of `---`.
