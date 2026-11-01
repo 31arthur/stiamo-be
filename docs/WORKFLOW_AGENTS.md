@@ -275,3 +275,25 @@ token is minted for the owner for every run (the browser's lasts minutes). Each 
   run is finishing. It ends if every item of a run fails (a provider refusing everything), instead of retrying forever.
 - The state is held in memory. If the service restarts the sweep ends (what its runs did is kept) and is started again by hand.
   Run **one replica** of `agent`.
+
+### Reading for what matters: the Attention queue
+
+A second agent can go on from the first. `source.kind = "agent"` with `source.upstreamId` reads the mail another agent has already
+judged and kept (its `kept` and `protected` items, and ones you said weren't spam). With `source.runUpstream` (on by default) a
+run first runs that agent, so new mail has been through its rules, its safe senders and its decision model, and what it trashes never
+reaches this one. A test run doesn't run it (that would move mail). The items keep the upstream ids, so they are the same emails.
+
+Labels have a `route`:
+- `none`: kept, nothing more (informational mail).
+- `attention`: the email is read in full, and a chat model writes a summary, a priority (high, normal, low), a suggested action
+  and a due date. It waits in the **Attention** queue (`status: queued`).
+- `event`: the same, and if the email names a specific date, a calendar event is proposed (`status: event_proposed`).
+
+Reading the email needs a **chat model** (the agent's own, chosen in its Settings): the decision model only chooses between labels.
+The model is told never to invent a date; a date it can't make into a real one leaves the email as a plain queue item.
+
+- `GET /v1/agent/attention?workspace=`: `{items[], count}` across the owner's agents, filtered by each agent's workspaces.
+- `POST /v1/agent/attention/act {agentId, itemId, action, event?}`: `done`, `dismiss`, `skip_event` (keep the email, drop the
+  event) or `approve_event` (the owner may have changed the event; it is checked again, then a meeting is created in the
+  calendar through the practice service). An item is dealt with once (`409` after).
+- Ledger entries carry `data` (migration 0007): the summary, priority, action, due date, event and, once approved, `meetingId`.

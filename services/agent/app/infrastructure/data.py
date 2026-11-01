@@ -78,6 +78,24 @@ class HttpDataGateway(DataGateway):
             raise await self._mail_error(r)
         return r.json().get("messages", [])
 
+    async def mail_message(self, account_id: str, folder: str, uid: int) -> dict[str, Any]:
+        try:
+            r = await self._get(f"{self._mail}/v1/mail/accounts/{account_id}/messages/{uid}", folder=folder)
+        except AiError:
+            raise AiError("Couldn't reach the mail service. Try again in a moment.") from None
+        if r.status_code != 200:
+            raise await self._mail_error(r)
+        return r.json()
+
+    async def create_meeting(self, record: dict[str, Any]) -> str:
+        try:
+            r = await self._http.post(f"{self._practice}/v1/meetings", headers=self._headers, json=record)
+        except httpx.HTTPError as exc:
+            raise AiError("Couldn't reach the calendar. Try again in a moment.") from exc
+        if r.status_code not in (200, 201):
+            raise AiError(f"The calendar didn't accept the event ({r.status_code}).")
+        return str(r.json().get("id") or record["id"])
+
     async def mail_correspondents(self, account_id: str) -> list[str]:
         try:
             r = await self._get(f"{self._mail}/v1/mail/accounts/{account_id}/correspondents")

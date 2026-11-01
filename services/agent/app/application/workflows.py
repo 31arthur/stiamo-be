@@ -41,13 +41,16 @@ from app.domain.workflows import (
     Item,
     WorkflowConfig,
     account_of,
+    analysis_prompt,
     apply_filters,
     decide_status,
     extra_guidance,
     feedback_prompt,
+    item_from_entry,
     item_from_mail,
     item_from_record,
     jev_batch,
+    parse_analysis,
     parse_batch,
     parse_decision,
     parse_feedback,
@@ -81,6 +84,8 @@ class Outcome:
     cost: float = 0.0
     #: What is (or, in a test run, would be) done with the item: `trash`.
     action: str | None = None
+    #: What the agent worked out about it: summary, priority, suggested action, a proposed event.
+    data: dict[str, Any] = field(default_factory=dict)
 
     def to_json(self) -> dict[str, Any]:
         out: dict[str, Any] = {
@@ -91,6 +96,8 @@ class Outcome:
             out["error"] = self.error
         if self.action:
             out["action"] = self.action
+        if self.data:
+            out["data"] = self.data
         return out
 
 
@@ -231,7 +238,7 @@ class WorkflowService:
 
     # --- deciding ----------------------------------------------------------------------------------------------
 
-    async def _items(self, token: str, cfg: WorkflowConfig, manual: str | None, seen: set[str], limit: int | None) -> Fetched:
+    async def _items(self, token: str, cfg: WorkflowConfig, manual: str | None, seen: set[str], limit: int | None, who: Who | None = None, run_upstream: bool = False) -> Fetched:
         """The items to decide about (filtered, capped), how many matched before the cap, and what the rules set aside."""
         cap = min(cfg.filters.limit, limit) if limit else cfg.filters.limit
         protected: list[tuple[Item, str]] = []
@@ -243,6 +250,9 @@ class WorkflowService:
             scanned = total = len(items)
         elif cfg.source.kind == "mail":
             items, protected, scanned, total, remaining = await self._mail_items(token, cfg, seen, cap)
+        elif cfg.source.kind == "agent":
+            items = await self._agent_items(who, token, cfg, seen, run_upstream)
+            scanned = total = len(items)
         else:
             try:
                 records = await Memo(self._data(token)).records(cfg.source.table or "")
@@ -252,7 +262,7 @@ class WorkflowService:
             scanned = total = len(items)
         matched = apply_filters(items, cfg.filters.model_copy(update={"limit": 10_000}), seen)
         # Whatever was read but not decided this time (the cap) waits for the next run.
-        return Fetched(matched[:cap], len(matched), protected, scanned, remaining + max(0, len(matched) - cap) if cfg.source.kind == "mail" else 0, total)
+        return Fetched(matched[:cap], len(matched), protected, scanned, remaining + max(0, len(matched) - cap) if cfg.source.kind in ("mail", "agent") else 0, total)
 
     async def _mail_items(self, token: str, cfg: WorkflowConfig, seen: set[str], cap: int) -> tuple[list[Item], list[tuple[Item, str]], int, int, int]:
         """Works through the mailboxes newest first, in the date range asked for, skipping what an earlier run already judged. It asks
@@ -287,6 +297,28 @@ class WorkflowService:
         except AiError as exc:
             raise ValidationFailed(str(exc)) from exc
         return items, protected, scanned, total, remaining
+
+    async def _agent_items(self, who: Who | None, token: str, cfg: WorkflowConfig, seen: set[str], run_upstream: bool) -> list[Item]:
+        """The mail another agent has already looked at and kept (or you said wasn't spam). It is run first, so new mail has been through
+        it: what that agent trashes never gets here, and its safe senders and rules apply. A test run doesn't run it (that would move mail)."""
+        assert who is not None
+        up_id = cfg.source.upstream_id or ""
+        upstream = await self._repo.get(who.user_id, up_id)
+        if upstream is None:
+            raise ValidationFailed("The agent this one reads from doesn't exist any more. Choose another in Settings.")
+        if run_upstream and cfg.source.run_upstream:
+            try:
+                await self.run(who, token, up_id, None)
+            except Conflict:
+                pass  # it is busy (a run or a sweep): carry on with what it has judged so far
+        trash = self._config(upstream.config).action.trash_label
+        rows = await self._repo.upstream_entries(who.user_id, up_id, ["kept", "protected", "approved"])
+        iso = lambda d: d.astimezone(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z") if d else None  # noqa: E731
+        return [
+            item_from_entry(r.item_id, r.title, r.excerpt, iso(r.created_at))
+            for r in rows
+            if not (r.status == "approved" and trash and r.label == trash) and not (cfg.filters.new_only and r.item_id in seen)
+        ]
 
     async def safe_senders(self, token: str, account_ids: list[str]) -> list[dict[str, Any]]:
         """Who the safe-senders shield would protect in each mailbox: the addresses found in its Sent folder."""
@@ -424,17 +456,21 @@ class WorkflowService:
         s = await self._settings.get(who.user_id) or UserSettings(who.user_id)
         started, began = datetime.now(UTC), time.monotonic()
         seen = await self._repo.seen(workflow.id) if workflow else set()
-        fetched = await self._items(token, cfg, manual, seen, TEST_ITEMS if mode == "test" else None)
+        fetched = await self._items(token, cfg, manual, seen, TEST_ITEMS if mode == "test" else None, who, mode == "run")
         items, matched, protected = fetched.items, fetched.matched, len(fetched.protected)
         decider = await self._decider(who, cfg, s, workflow.id if workflow else None)
         outcomes, batches = await self._decide_all(cfg, items, decider) if items else ([], 0)
         trash_note = await self._act(token, cfg, outcomes, mode)
+        await self._route(who, token, cfg, s, workflow.id if workflow else None, outcomes)
 
         counts = {"items": len(outcomes), "proposed": 0, "needsReview": 0, "failed": 0}
         if cfg.source.kind == "mail":  # what a mailbox agent adds: judged fine, moved to Trash, set aside by the rules
             counts.update(kept=0, applied=0, protected=protected)
+        if any(lb.route != "none" for lb in cfg.labels):  # what an agent that reads for what matters adds
+            counts.update(kept=counts.get("kept", 0), queued=0, events=0)
         for o in outcomes:
-            counts[{"proposed": "proposed", "needs_review": "needsReview", "failed": "failed", "kept": "kept", "applied": "applied"}[o.status]] += 1
+            key = {"proposed": "proposed", "needs_review": "needsReview", "failed": "failed", "kept": "kept", "applied": "applied", "queued": "queued", "event_proposed": "events"}[o.status]
+            counts[key] = counts.get(key, 0) + 1
         usage: dict[str, Any] = {"inputTokens": sum(o.usage.get("inputTokens", 0) for o in outcomes), "outputTokens": sum(o.usage.get("outputTokens", 0) for o in outcomes)}
         if any(o.cost for o in outcomes):
             usage["cost"] = round(sum(o.cost for o in outcomes), 6)
@@ -448,8 +484,8 @@ class WorkflowService:
 
         if mode == "run" and workflow:
             await self._repo.record([
-                LedgerEntry(str(uuid.uuid4()), workflow.id, who.user_id, o.item.id, o.item.title, o.item.text[:MAX_ITEM_CHARS], o.label, o.confidence, o.reason, o.status, run_id, workflow.version)
-                for o in outcomes if o.status != "failed"
+                LedgerEntry(str(uuid.uuid4()), workflow.id, who.user_id, o.item.id, o.item.title, o.item.text[:MAX_ITEM_CHARS], o.label, o.confidence, o.reason, o.status, run_id, workflow.version, data=o.data)
+                for o in outcomes if o.status != "failed" and not (o.error and not o.data)
             ] + [
                 # Kept by a rule: remembered, so the next run goes on to older mail instead of reading these again.
                 LedgerEntry(str(uuid.uuid4()), workflow.id, who.user_id, item.id, item.title, item.text[:MAX_ITEM_CHARS], None, 0.0, f"Kept: {why}", "protected", run_id, workflow.version)
@@ -458,7 +494,7 @@ class WorkflowService:
             await self._repo.touch(workflow.id, started)
 
         summary = f"{counts['items']} item{'s' if counts['items'] != 1 else ''}: {counts['proposed']} proposed, {counts['needsReview']} to review" + (f", {counts['failed']} failed" if counts["failed"] else "")
-        for key, words in (("applied", "moved to Trash"), ("kept", "kept"), ("protected", "protected")):
+        for key, words in (("applied", "moved to Trash"), ("kept", "kept"), ("protected", "protected"), ("queued", "for your attention"), ("events", "events to approve")):
             if counts.get(key):
                 summary += f", {counts[key]} {words}"
         if fetched.remaining:
@@ -485,6 +521,76 @@ class WorkflowService:
             "runId": run_id if workflow else None, "mode": mode, "counts": counts, "matched": matched, "usage": usage, "stats": stats, "summary": summary,
             "durationMs": int((time.monotonic() - began) * 1000), "items": [o.to_json() for o in outcomes],
         }
+
+    async def _analyst(self, who: Who, cfg: WorkflowConfig, s: UserSettings, workflow_id: str | None):
+        """Reads one email that matters and says what it is about. Needs a chat model: the decision model only chooses between labels."""
+        sel, _ = selection_of(s, workflow_id or "draft")
+        if not sel or not sel.get("modelId"):
+            raise ValidationFailed("Choose a provider and a model in this agent's Settings: it reads the emails that matter, and the decision model can't write a summary or find a date.")
+        client = self._llm(sel["providerId"], s.keys[sel["providerId"]])
+        model, thinking = sel["modelId"], sel.get("thinking", "off")
+        today = datetime.now(UTC).date().isoformat()
+
+        async def read(label: str, route: str, email: str) -> tuple[dict[str, Any] | None, dict[str, int], float]:
+            system, user = analysis_prompt(cfg, who.name, label, route, today, email)
+            messages = [Message("system", system), Message("user", user)]
+            usage: dict[str, int] = {}
+            for attempt in (1, 2):
+                reply = await client.chat(model=model, messages=messages, tools=[], thinking=thinking)
+                for k, v in (reply.usage or {}).items():
+                    usage[k] = usage.get(k, 0) + v
+                parsed = parse_analysis(reply.text)
+                if parsed or attempt == 2:
+                    return parsed, usage, float(usage.pop("cost", 0))
+                messages = [*messages, Message("assistant", reply.text), Message("user", "That wasn't valid. Answer again with the JSON only.")]
+            return None, usage, 0.0
+
+        return read
+
+    async def _route(self, who: Who, token: str, cfg: WorkflowConfig, s: UserSettings, workflow_id: str | None, outcomes: list[Outcome]) -> None:
+        """What a label means when it has a route: the email is read in full, summarised and put in the Attention queue; if it names a
+        date, a calendar event is proposed for the owner to approve. A label with no route is simply kept."""
+        routes = {lb.name: lb.route for lb in cfg.labels if lb.route != "none"}
+        if not routes:
+            return
+        for o in outcomes:
+            if o.label and o.label not in routes and o.status in ("proposed", "needs_review"):
+                o.status = "kept"
+        targets = [o for o in outcomes if o.label in routes and o.status in ("proposed", "needs_review")]
+        if not targets:
+            return
+        read = await self._analyst(who, cfg, s, workflow_id)
+        data = Memo(self._data(token))
+        folder = cfg.source.folder
+        if cfg.source.kind == "agent":
+            up = await self._repo.get(who.user_id, cfg.source.upstream_id or "")
+            folder = self._config(up.config).source.folder if up else "INBOX"
+        gate = asyncio.Semaphore(CONCURRENCY)
+
+        async def one(o: Outcome) -> None:
+            async with gate:
+                email = o.item.text
+                try:  # the list only has the start of an email: a date or a deadline may be further down
+                    full = await data.mail_message(account_of(o.item.id), folder, uid_of(o.item.id))
+                    email = f"From: {(full.get('sender') or {}).get('name', '')} <{(full.get('sender') or {}).get('address', '')}>\nSubject: {full.get('subject', '')}\n\n{str(full.get('text') or '')[:4000]}"
+                except (AiError, ValueError):
+                    pass
+                try:
+                    parsed, usage, cost = await read(o.label or "", routes[o.label or ""], email)
+                except AiError as exc:
+                    o.error = str(exc)
+                    return
+                for k, v in usage.items():
+                    o.usage[k] = o.usage.get(k, 0) + v
+                o.cost += cost
+                if parsed is None:
+                    o.data = {"summary": o.item.title, "priority": "normal", "action": None, "due": None, "event": None, "note": "The agent couldn't summarise this one."}
+                    o.status = "queued"
+                    return
+                o.data = parsed
+                o.status = "event_proposed" if routes[o.label or ""] == "event" and parsed.get("event") else "queued"
+
+        await asyncio.gather(*(one(o) for o in targets))
 
     async def _act(self, token: str, cfg: WorkflowConfig, outcomes: list[Outcome], mode: str) -> str:
         """What the labels mean for a mailbox. Confident "trash" items are moved to Trash only in a real run of an agent set to act on

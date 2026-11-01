@@ -170,5 +170,6 @@ class LedgerModel(Base):
     version: Mapped[int] = mapped_column(Integer, default=1)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime)
     decided_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    data: Mapped[dict[str, Any] | None] = mapped_column(Json)
 
     __table_args__ = (UniqueConstraint("agent_id", "item_id", name="uq_ledger_item"), Index("ix_ledger_status", "agent_id", "status"))
