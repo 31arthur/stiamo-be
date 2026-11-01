@@ -89,6 +89,9 @@ class Memo(DataGateway):
     async def mail_summaries(self, account_id, folder, uids):
         return await self._inner.mail_summaries(account_id, folder, uids)
 
+    async def feed_items(self, feeds, since_days, known_ids, limit):
+        return await self._inner.feed_items(feeds, since_days, known_ids, limit)
+
     async def mail_message(self, account_id, folder, uid):
         return await self._inner.mail_message(account_id, folder, uid)
 

@@ -51,6 +51,11 @@ class DataGateway(ABC):
         """List rows (sender, subject, date, start of the text) for up to 100 messages, newest first."""
 
     @abstractmethod
+    async def feed_items(self, feeds: list[dict[str, Any]], since_days: int | None, known_ids: set[str], limit: int) -> tuple[list[dict[str, Any]], int]:
+        """The newest news articles from the feeds that aren't already known (by id), up to `limit`, read from their publishers; and how
+        many new ones there are in all."""
+
+    @abstractmethod
     async def mail_message(self, account_id: str, folder: str, uid: int) -> dict[str, Any]:
         """One whole email as the mail service gives it: {subject, sender, to, date, text, ...}."""
 

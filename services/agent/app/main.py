@@ -9,6 +9,7 @@ from stiamo_common.errors import install_error_handlers
 
 from app.agents import default_registry
 from app.application.listeners import ListenerManager
+from app.application.schedules import ScheduleManager
 from app.application.services import Who
 from app.application.sweeps import SweepManager
 from app.config import Settings, get_settings
@@ -23,7 +24,7 @@ from app.infrastructure.mailevents import HttpMailEvents
 from app.infrastructure.messaging import HttpTelegramApi, HttpTwilioApi
 from app.infrastructure.security import JwtAccessTokens, SecretBox
 from app.presentation.deps import sync_listener
-from app.presentation.routers import agent, attention, channels, usage, webhooks, workflows
+from app.presentation.routers import agent, attention, channels, news, usage, webhooks, workflows
 
 
 async def start_listening(app: FastAPI) -> None:
@@ -60,6 +61,7 @@ def create_app(settings: Settings | None = None, *, mail_events=None, registry=N
         await start_listening(app)
         yield
         await app.state.listeners.close()
+        await app.state.schedules.close()
         await app.state.sweeps.close()
         await http.aclose()
         await engine.dispose()
@@ -74,6 +76,8 @@ def create_app(settings: Settings | None = None, *, mail_events=None, registry=N
     app.state.running = set()
     #: Runs through a whole inbox that are going on in the background (see application/sweeps.py).
     app.state.sweeps = SweepManager()
+    #: Agents that run every so many minutes (see application/schedules.py).
+    app.state.schedules = ScheduleManager()
     #: Agents listening to their mailbox (see application/listeners.py).
     app.state.listeners = ListenerManager(mail_events or HttpMailEvents(http, settings.mail_url))
     app.state.llm_factory = llm_factory or (lambda provider, key: GeminiClient(key, http) if provider == "gemini" else OpenAiCompatibleClient(provider, key, http))
@@ -91,6 +95,7 @@ def create_app(settings: Settings | None = None, *, mail_events=None, registry=N
     app.include_router(channels.router)
     app.include_router(usage.router)
     app.include_router(attention.router)
+    app.include_router(news.router)
     app.include_router(workflows.router)
     app.include_router(webhooks.router)
 

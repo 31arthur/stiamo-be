@@ -50,18 +50,46 @@ class Label(DomainModel):
     threshold: float | None = Field(default=None, ge=0, le=1)
     #: What happens to an item given this label. `attention`: it is read, summarised and put in the Attention queue for the owner.
     #: `event`: the same, and if it names a date a calendar event is proposed for the owner to approve. `none`: nothing more.
-    route: Literal["none", "attention", "event"] = "none"
+    route: Literal["none", "attention", "event", "publish"] = "none"
+
+
+class Feed(DomainModel):
+    """A news feed (RSS) to read."""
+
+    #: Short name for it, used to say where an article came from.
+    key: str = Field(max_length=60)
+    url: str = Field(max_length=1500)
+    #: The language of what it carries (en, hi, ar, te, tl…).
+    lang: str = Field(default="en", max_length=8)
+
+
+class Level(DomainModel):
+    """One step of how much a news story matters, from the least to the most."""
+
+    name: str
+    description: str = Field(max_length=600)
+    #: 1 (least) to 4 (most). Used to rank the stories, together with how recent they are.
+    weight: int = Field(ge=1, le=4)
+
+
+class Importance(DomainModel):
+    """How the stories that are relevant are ranked: asked of the same model, as a second question, only for what passed the first."""
+
+    prompt: str = Field(max_length=2000)
+    levels: list[Level]
 
 
 class Source(DomainModel):
     #: `manual`: items are pasted when a run starts (to try a prompt). `table`: records of a Stiamo collection.
     #: `mail`: the messages of a folder of a mailbox connected in the Mail section.
-    kind: Literal["manual", "table", "mail", "agent"] = "manual"
+    kind: Literal["manual", "table", "mail", "agent", "feed"] = "manual"
     table: str | None = None
     #: The mailboxes to read, for `mail`: one or several, each judged by the same rules.
     #: For `agent`: the agent whose kept mail this one goes on to read, and whether to run it first so new mail is judged by it.
     upstream_id: str | None = Field(default=None, max_length=64)
     run_upstream: bool = True
+    #: For `feed`: the news feeds to read.
+    feeds: list[Feed] = Field(default_factory=list, max_length=60)
     account_ids: list[Annotated[str, Field(max_length=36)]] = Field(default_factory=list, max_length=MAX_MAILBOXES)
     #: The older single-mailbox spelling, still read (and turned into `account_ids`).
     account_id: str | None = Field(default=None, max_length=36)
@@ -125,6 +153,10 @@ class WorkflowConfig(DomainModel):
     #: model: what it reads is `prompt` and the labels.
     #: Listen to the mailbox: run by itself whenever new mail arrives (the mail service's IMAP IDLE says so), instead of only when asked.
     listen: bool = False
+    #: Run by itself every this many minutes (10 to 1,440), whether or not anything is known to be new. For sources that can't say when they change: news feeds.
+    schedule_minutes: int | None = Field(default=None, ge=10, le=1440)
+    #: For news: how the relevant stories are ranked by importance.
+    importance: Importance | None = None
     guide: dict[str, str] | None = None
     #: Points added from the owner's corrections ("this wasn't spam, because…"). They are added to the prompt when it is sent and
     #: never replace anything the person wrote.
@@ -152,6 +184,16 @@ class WorkflowConfig(DomainModel):
             self.source = self.source.model_copy(update={"account_ids": ids, "account_id": None})
         if self.source.kind == "agent" and not self.source.upstream_id:
             raise ValidationFailed("Choose the agent whose kept mail this one reads.")
+        if self.source.kind == "feed":
+            if not self.source.feeds:
+                raise ValidationFailed("Add at least one news feed to read.")
+            bad = [f.url for f in self.source.feeds if not f.url.startswith(("https://", "http://"))]
+            if bad:
+                raise ValidationFailed(f"A feed address must start with https://: {bad[0][:80]}")
+        if self.importance is not None:
+            names = [lv.name for lv in self.importance.levels]
+            if not 2 <= len(names) <= 6 or len(set(names)) != len(names) or any(not _NAME.match(n) for n in names):
+                raise ValidationFailed("Give between 2 and 6 importance levels, each with its own lower case name.")
         if self.action.trash_label:
             if self.source.kind != "mail":
                 raise ValidationFailed("Moving to Trash only makes sense for a mailbox.")
@@ -552,3 +594,44 @@ def event_to_meeting(event: dict[str, Any], *, record_id: str, workspace: str, s
         "mode": event.get("mode") or "in_person", "location": event.get("location"), "link": event.get("link"), "attendees": event.get("attendees") or [],
         "purpose": purpose[:2000], "agenda": [], "confirmations": [],
     }
+
+
+# --- news ------------------------------------------------------------------------------------------------------
+
+
+def article_id(guid: str) -> str:
+    """The id an article is known by in the ledger: its feed guid, shortened to fit and kept stable."""
+    return "feed:" + hashlib.sha1(guid.encode()).hexdigest()[:24]
+
+
+def item_from_article(a: dict[str, Any]) -> Item:
+    """A news article as an item to judge: the headline, the paper, the date and what the publisher's page says."""
+    text = f"{a['title']}\nSource: {a.get('source', '')}\nPublished: {a.get('published_at', '')}\nLanguage: {a.get('lang', '')}\n\n{a.get('description') or ''}"
+    meta = {"guid": a["guid"], "link": a.get("link") or "", "image": a.get("image_url") or "", "source": a.get("source") or "", "lang": a.get("lang") or "", "feed": a.get("feed_key") or "", "description": a.get("description") or ""}
+    return Item(article_id(a["guid"]), a["title"][:120], text[:MAX_ITEM_CHARS], a.get("published_at"), meta)
+
+
+def importance_config(cfg: WorkflowConfig) -> WorkflowConfig:
+    """The second question for news that passed the first: how much does it matter. The same model, batching and way of deciding."""
+    assert cfg.importance is not None
+    return WorkflowConfig(
+        source=Source(), filters=Filters(), prompt=cfg.importance.prompt, labels=[Label(name=lv.name, description=lv.description) for lv in cfg.importance.levels],
+        decider=cfg.decider, decision_model=cfg.decision_model, batch_size=cfg.batch_size, default_threshold=0.0,
+    )
+
+
+HALF_LIFE_HOURS = 36.0
+
+
+def rank_news(data: dict[str, Any], now: datetime) -> float:
+    """How high a story goes in the list. How much it matters (1 to 4) counts for most; it fades as the story ages, by half every 36
+    hours, so a critical story from today beats a major one from yesterday, and a critical story from last week sinks; and how sure the
+    first question was that it is relevant breaks ties."""
+    published = None
+    try:
+        published = datetime.fromisoformat(str(data.get("publishedAt") or "").replace("Z", "+00:00"))
+    except ValueError:
+        pass
+    hours = max(0.0, (now - (published or now)).total_seconds() / 3600)
+    relevance = data.get("relevance")
+    return (int(data.get("weight") or 2) / 4) * 0.5 ** (hours / HALF_LIFE_HOURS) * (0.5 + 0.5 * (relevance if isinstance(relevance, (int, float)) else 0.5))
