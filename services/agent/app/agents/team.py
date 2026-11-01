@@ -89,6 +89,8 @@ DAILY_PLANNER = AgentDefinition(
         "What does Monday look like?",
         "Move everything non-urgent to later in the week",
         "How full is my day tomorrow?",
+        "Add a task to draft the rejoinder, due Thursday",
+        "Make an action plan for the Alur hearing",
     ),
 )
 
@@ -99,7 +101,7 @@ HEARING_PREP = AgentDefinition(
     system=PREP_SYSTEM,
     packs=("agenda", "cases", "drive", "changes"),
     workspaces=("sb",),
-    suggestions=("Prepare me for tomorrow's hearings", "What is the last order in the Alur case?", "Which documents are missing for the Vempalli case?"),
+    suggestions=("Prepare me for tomorrow's hearings", "What is the last order in the Alur case?", "Which documents are missing for the Vempalli case?", "List the next hearing for SA-2026-001 on 12 January"),
 )
 
 FOLLOW_UP_CHASER = AgentDefinition(
@@ -109,7 +111,7 @@ FOLLOW_UP_CHASER = AgentDefinition(
     system=CHASER_SYSTEM,
     packs=("agenda", "changes"),
     workspaces=WORKSPACES,
-    suggestions=("Who should I call tomorrow?", "Who has been tried twice with no answer?", "Who promised something for this week?"),
+    suggestions=("Who should I call tomorrow?", "Who has been tried twice with no answer?", "Who promised something for this week?", "Add a call to Hemla Pawar tomorrow at 11"),
 )
 
 DEADLINE_SCOUT = AgentDefinition(
