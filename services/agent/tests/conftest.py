@@ -68,6 +68,9 @@ class FakeDecisions(DecisionClient):
 class FakeData(DataGateway):
     def __init__(self) -> None:
         self.trashed: list[int] = []
+        self.meetings: list[dict] = []
+        #: Whole bodies for the emails that need one (the list only has the start).
+        self.bodies: dict[int, str] = {}
         self.trashed_by: list[tuple[str, int]] = []
         self.mail = [
             {"uid": 4, "subject": "Partnership opportunity", "sender": {"name": "Lead", "address": "lead@client.io"}, "snippet": "We would like a quote for a new app", "date": "2026-10-04T10:00:00Z"},
@@ -106,6 +109,16 @@ class FakeData(DataGateway):
 
     async def mail_summaries(self, account_id, folder, uids):
         return sorted((m for m in self.mail if m["uid"] in uids), key=lambda m: -m["uid"])
+
+    async def mail_message(self, account_id, folder, uid):
+        m = next((x for x in self.mail if x["uid"] == uid), None)
+        if m is None:
+            raise AiError("That message isn't in the mailbox any more.")
+        return {"uid": uid, "subject": m["subject"], "sender": m["sender"], "text": self.bodies.get(uid, m["snippet"]), "date": m["date"]}
+
+    async def create_meeting(self, record):
+        self.meetings.append(record)
+        return record["id"]
 
     async def mail_correspondents(self, account_id):
         return ["friend@elsewhere.org"]

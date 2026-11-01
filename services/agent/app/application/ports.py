@@ -51,6 +51,14 @@ class DataGateway(ABC):
         """List rows (sender, subject, date, start of the text) for up to 100 messages, newest first."""
 
     @abstractmethod
+    async def mail_message(self, account_id: str, folder: str, uid: int) -> dict[str, Any]:
+        """One whole email as the mail service gives it: {subject, sender, to, date, text, ...}."""
+
+    @abstractmethod
+    async def create_meeting(self, record: dict[str, Any]) -> str:
+        """Adds a meeting to the calendar (the practice service). Returns its id."""
+
+    @abstractmethod
     async def mail_correspondents(self, account_id: str) -> list[str]: ...
 
     @abstractmethod
@@ -272,6 +280,8 @@ class LedgerEntry:
     version: int = 1
     created_at: datetime | None = None
     decided_at: datetime | None = None
+    #: What the agent worked out about the item: a summary, priority, suggested action and any event (see analysis in domain/workflows.py).
+    data: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -323,6 +333,18 @@ class WorkflowRepository(ABC):
 
     @abstractmethod
     async def entry(self, user_id: str, workflow_id: str, item_id: str) -> LedgerEntry | None: ...
+
+    @abstractmethod
+    async def upstream_entries(self, user_id: str, workflow_id: str, statuses: list[str], limit: int = 2000) -> list[LedgerEntry]:
+        """What an agent judged, in the given states, newest first: the mail a later agent goes on to read."""
+
+    @abstractmethod
+    async def queue(self, user_id: str, statuses: list[str], limit: int = 500) -> list[LedgerEntry]:
+        """Items waiting on the person across every agent they built, newest first."""
+
+    @abstractmethod
+    async def settle(self, user_id: str, workflow_id: str, item_id: str, status: str, data: dict[str, Any] | None = None) -> bool:
+        """Moves one item to a new state (and replaces its data when given). False if there is no such item."""
 
     @abstractmethod
     async def counts(self, workflow_id: str) -> dict[str, int]:

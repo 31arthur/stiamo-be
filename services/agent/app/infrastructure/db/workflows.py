@@ -12,7 +12,7 @@ def _workflow(r: WorkflowModel) -> Workflow:
 
 
 def _entry(r: LedgerModel) -> LedgerEntry:
-    return LedgerEntry(r.id, r.agent_id, r.user_id, r.item_id, r.title, r.excerpt, r.label, r.confidence, r.reason, r.status, r.run_id, r.version, r.created_at, r.decided_at)
+    return LedgerEntry(r.id, r.agent_id, r.user_id, r.item_id, r.title, r.excerpt, r.label, r.confidence, r.reason, r.status, r.run_id, r.version, r.created_at, r.decided_at, dict(r.data or {}))
 
 
 def _execution(r: ExecutionModel) -> Execution:
@@ -63,6 +63,7 @@ class SqlWorkflowRepository(WorkflowRepository):
                 row = LedgerModel(id=e.id, agent_id=e.agent_id, user_id=e.user_id, item_id=e.item_id, created_at=now)
             row.title, row.excerpt, row.label, row.confidence, row.reason = e.title[:200], e.excerpt, e.label, e.confidence, e.reason
             row.status, row.run_id, row.version, row.decided_at = e.status, e.run_id, e.version, None
+            row.data = dict(e.data) if e.data else None
             self._s.add(row)
         await self._s.flush()
 
@@ -115,3 +116,22 @@ class SqlWorkflowRepository(WorkflowRepository):
         for run_id, status, n in rows:
             out.setdefault(run_id, {})[status] = n
         return out
+
+    async def upstream_entries(self, user_id: str, workflow_id: str, statuses: list[str], limit: int = 2000) -> list[LedgerEntry]:
+        q = select(LedgerModel).where(LedgerModel.user_id == user_id, LedgerModel.agent_id == workflow_id, LedgerModel.status.in_(statuses)).order_by(LedgerModel.created_at.desc()).limit(limit)
+        return [_entry(r) for r in (await self._s.execute(q)).scalars()]
+
+    async def queue(self, user_id: str, statuses: list[str], limit: int = 500) -> list[LedgerEntry]:
+        q = select(LedgerModel).where(LedgerModel.user_id == user_id, LedgerModel.status.in_(statuses)).order_by(LedgerModel.created_at.desc()).limit(limit)
+        return [_entry(r) for r in (await self._s.execute(q)).scalars()]
+
+    async def settle(self, user_id: str, workflow_id: str, item_id: str, status: str, data: dict | None = None) -> bool:
+        row = (await self._s.execute(select(LedgerModel).where(LedgerModel.user_id == user_id, LedgerModel.agent_id == workflow_id, LedgerModel.item_id == item_id))).scalar_one_or_none()
+        if row is None:
+            return False
+        row.status, row.decided_at = status, datetime.now(UTC)
+        if data is not None:
+            row.data = dict(data)
+        self._s.add(row)
+        await self._s.flush()
+        return True
