@@ -78,6 +78,12 @@ class HttpDataGateway(DataGateway):
             raise await self._mail_error(r)
         return r.json().get("messages", [])
 
+    async def feed_items(self, feeds: list[dict[str, Any]], since_days: int | None, known_ids: set[str], limit: int) -> tuple[list[dict[str, Any]], int]:
+        from app.domain.workflows import article_id
+        from app.infrastructure.news import fetch_articles
+
+        return await fetch_articles(self._http, feeds, since_days, lambda a: article_id(a["guid"]) in known_ids, limit)
+
     async def mail_message(self, account_id: str, folder: str, uid: int) -> dict[str, Any]:
         try:
             r = await self._get(f"{self._mail}/v1/mail/accounts/{account_id}/messages/{uid}", folder=folder)

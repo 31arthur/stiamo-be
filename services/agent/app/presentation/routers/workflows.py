@@ -94,6 +94,7 @@ async def update(workflow_id: str, body: WorkflowBody, request: Request, workflo
 async def delete(workflow_id: str, request: Request, workflows: deps.Workflows, me: deps.Me) -> Response:
     await workflows.delete(me, workflow_id)
     request.app.state.listeners.stop(workflow_id)
+    request.app.state.schedules.stop(workflow_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -147,7 +148,7 @@ async def stop_sweep(workflow_id: str, request: Request, workflows: deps.Workflo
 @router.get("/{workflow_id}/listen", summary="Whether the agent is listening to its mailbox, and how that is going")
 async def listen_status(workflow_id: str, request: Request, workflows: deps.Workflows, me: deps.Me) -> dict[str, Any]:
     await workflows.get(me, workflow_id)
-    return request.app.state.listeners.status(workflow_id)
+    return {**request.app.state.listeners.status(workflow_id), "schedule": request.app.state.schedules.status(workflow_id)}
 
 
 @router.get("/{workflow_id}/executions", summary="Every real run of the agent, newest first")

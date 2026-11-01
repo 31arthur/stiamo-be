@@ -70,6 +70,9 @@ class FakeData(DataGateway):
     def __init__(self) -> None:
         self.trashed: list[int] = []
         self.meetings: list[dict] = []
+        #: News articles the feeds would give, newest first, and which feeds were asked.
+        self.articles: list[dict] = []
+        self.feeds_asked: list[list[str]] = []
         #: Whole bodies for the emails that need one (the list only has the start).
         self.bodies: dict[int, str] = {}
         self.trashed_by: list[tuple[str, int]] = []
@@ -110,6 +113,13 @@ class FakeData(DataGateway):
 
     async def mail_summaries(self, account_id, folder, uids):
         return sorted((m for m in self.mail if m["uid"] in uids), key=lambda m: -m["uid"])
+
+    async def feed_items(self, feeds, since_days, known_ids, limit):
+        from app.domain.workflows import article_id
+
+        fresh = [a for a in self.articles if article_id(a["guid"]) not in known_ids]
+        self.feeds_asked.append([f["url"] for f in feeds])
+        return fresh[:limit], len(fresh)
 
     async def mail_message(self, account_id, folder, uid):
         m = next((x for x in self.mail if x["uid"] == uid), None)

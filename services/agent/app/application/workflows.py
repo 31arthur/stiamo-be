@@ -46,6 +46,8 @@ from app.domain.workflows import (
     decide_status,
     extra_guidance,
     feedback_prompt,
+    importance_config,
+    item_from_article,
     item_from_entry,
     item_from_mail,
     item_from_record,
@@ -253,6 +255,9 @@ class WorkflowService:
         elif cfg.source.kind == "agent":
             items = await self._agent_items(who, token, cfg, seen, run_upstream)
             scanned = total = len(items)
+        elif cfg.source.kind == "feed":
+            items, total, remaining = await self._feed_items(token, cfg, seen, cap)
+            scanned = len(items)
         else:
             try:
                 records = await Memo(self._data(token)).records(cfg.source.table or "")
@@ -262,7 +267,7 @@ class WorkflowService:
             scanned = total = len(items)
         matched = apply_filters(items, cfg.filters.model_copy(update={"limit": 10_000}), seen)
         # Whatever was read but not decided this time (the cap) waits for the next run.
-        return Fetched(matched[:cap], len(matched), protected, scanned, remaining + max(0, len(matched) - cap) if cfg.source.kind in ("mail", "agent") else 0, total)
+        return Fetched(matched[:cap], len(matched), protected, scanned, remaining + max(0, len(matched) - cap) if cfg.source.kind in ("mail", "agent", "feed") else 0, total)
 
     async def _mail_items(self, token: str, cfg: WorkflowConfig, seen: set[str], cap: int) -> tuple[list[Item], list[tuple[Item, str]], int, int, int]:
         """Works through the mailboxes newest first, in the date range asked for, skipping what an earlier run already judged. It asks
@@ -297,6 +302,16 @@ class WorkflowService:
         except AiError as exc:
             raise ValidationFailed(str(exc)) from exc
         return items, protected, scanned, total, remaining
+
+    async def _feed_items(self, token: str, cfg: WorkflowConfig, seen: set[str], cap: int) -> tuple[list[Item], int, int]:
+        """The newest articles from the feeds that haven't been judged yet. Only those are read from their publishers (that is the slow
+        part), and only up to the cap; how many more there are is what a run through everything carries on with."""
+        feeds = [f.model_dump() for f in cfg.source.feeds]
+        try:
+            found, new_total = await Memo(self._data(token)).feed_items(feeds, cfg.filters.since_days, seen if cfg.filters.new_only else set(), cap)
+        except AiError as exc:
+            raise ValidationFailed(str(exc)) from exc
+        return [item_from_article(a) for a in found], new_total, max(0, new_total - len(found))
 
     async def _agent_items(self, who: Who | None, token: str, cfg: WorkflowConfig, seen: set[str], run_upstream: bool) -> list[Item]:
         """The mail another agent has already looked at and kept (or you said wasn't spam). It is run first, so new mail has been through
@@ -468,8 +483,10 @@ class WorkflowService:
             counts.update(kept=0, applied=0, protected=protected)
         if any(lb.route != "none" for lb in cfg.labels):  # what an agent that reads for what matters adds
             counts.update(kept=counts.get("kept", 0), queued=0, events=0)
+            if cfg.source.kind == "feed":
+                counts.update(published=0, irrelevant=0)
         for o in outcomes:
-            key = {"proposed": "proposed", "needs_review": "needsReview", "failed": "failed", "kept": "kept", "applied": "applied", "queued": "queued", "event_proposed": "events"}[o.status]
+            key = {"proposed": "proposed", "needs_review": "needsReview", "failed": "failed", "kept": "kept", "applied": "applied", "queued": "queued", "event_proposed": "events", "published": "published", "irrelevant": "irrelevant"}[o.status]
             counts[key] = counts.get(key, 0) + 1
         usage: dict[str, Any] = {"inputTokens": sum(o.usage.get("inputTokens", 0) for o in outcomes), "outputTokens": sum(o.usage.get("outputTokens", 0) for o in outcomes)}
         if any(o.cost for o in outcomes):
@@ -494,7 +511,7 @@ class WorkflowService:
             await self._repo.touch(workflow.id, started)
 
         summary = f"{counts['items']} item{'s' if counts['items'] != 1 else ''}: {counts['proposed']} proposed, {counts['needsReview']} to review" + (f", {counts['failed']} failed" if counts["failed"] else "")
-        for key, words in (("applied", "moved to Trash"), ("kept", "kept"), ("protected", "protected"), ("queued", "for your attention"), ("events", "events to approve")):
+        for key, words in (("applied", "moved to Trash"), ("kept", "kept"), ("protected", "protected"), ("queued", "for your attention"), ("events", "events to approve"), ("published", "on the news page"), ("irrelevant", "not relevant")):
             if counts.get(key):
                 summary += f", {counts[key]} {words}"
         if fetched.remaining:
@@ -547,6 +564,30 @@ class WorkflowService:
 
         return read
 
+    async def _publish(self, who: Who, cfg: WorkflowConfig, s: UserSettings, workflow_id: str | None, targets: list[Outcome]) -> None:
+        """News that passed the first question is asked a second: how much does it matter. Only those, so the cost follows what is kept.
+        Then each is published, with what the page needs to show it."""
+        levels = {lv.name: lv.weight for lv in cfg.importance.levels} if cfg.importance else {}
+        graded: dict[str, Outcome] = {}
+        if levels:
+            second = importance_config(cfg)
+            results, _ = await self._decide_all(second, [o.item for o in targets], await self._decider(who, second, s, workflow_id))
+            graded = {r.item.id: r for r in results}
+        for o in targets:
+            r = graded.get(o.item.id)
+            level = r.label if r and r.label else None
+            if r:
+                for k, v in r.usage.items():
+                    o.usage[k] = o.usage.get(k, 0) + v
+                o.cost += r.cost
+            m = o.item.meta
+            o.data = {
+                "kind": "news", "title": o.item.title, "source": m.get("source"), "link": m.get("link"), "publishedAt": o.item.when, "description": m.get("description") or None,
+                "imageUrl": m.get("image") or None, "lang": m.get("lang"), "feed": m.get("feed"), "importance": level, "weight": levels.get(level or "", 2),
+                "relevance": round(o.confidence, 3), "importanceConfidence": round(r.confidence, 3) if r else None,
+            }
+            o.status = "published"
+
     async def _route(self, who: Who, token: str, cfg: WorkflowConfig, s: UserSettings, workflow_id: str | None, outcomes: list[Outcome]) -> None:
         """What a label means when it has a route: the email is read in full, summarised and put in the Attention queue; if it names a
         date, a calendar event is proposed for the owner to approve. A label with no route is simply kept."""
@@ -555,8 +596,11 @@ class WorkflowService:
             return
         for o in outcomes:
             if o.label and o.label not in routes and o.status in ("proposed", "needs_review"):
-                o.status = "kept"
-        targets = [o for o in outcomes if o.label in routes and o.status in ("proposed", "needs_review")]
+                o.status = "irrelevant" if cfg.source.kind == "feed" else "kept"
+        publishing = [o for o in outcomes if routes.get(o.label or "") == "publish" and o.status in ("proposed", "needs_review")]
+        if publishing:
+            await self._publish(who, cfg, s, workflow_id, publishing)
+        targets = [o for o in outcomes if routes.get(o.label or "") in ("attention", "event") and o.status in ("proposed", "needs_review")]
         if not targets:
             return
         read = await self._analyst(who, cfg, s, workflow_id)

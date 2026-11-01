@@ -64,11 +64,22 @@ def workflow_service(request: Request, session: Session) -> WorkflowService:
 
 
 async def sync_listener(app: FastAPI, who: Who, workflow_id: str, config: dict, resolve) -> None:
-    """Starts, changes or stops listening for one agent to match its setup. `resolve` finds the config of the agent it goes on from."""
+    """Starts, changes or stops what makes an agent run by itself, to match its setup: listening to a mailbox when new mail arrives,
+    and running every so many minutes. `resolve` finds the config of the agent it goes on from."""
     from app.domain.workflows import WorkflowConfig
 
-    listeners = app.state.listeners
     cfg = WorkflowConfig(**config)
+
+    async def trigger() -> None:
+        if not app.state.sweeps.is_active(workflow_id):
+            app.state.sweeps.start(workflow_id, who.user_id, sweep_run(app, who, workflow_id))
+
+    if cfg.schedule_minutes:
+        app.state.schedules.ensure(workflow_id, cfg.schedule_minutes, trigger)
+    else:
+        app.state.schedules.stop(workflow_id)
+
+    listeners = app.state.listeners
     if not cfg.listen:
         listeners.stop(workflow_id)
         return
@@ -82,11 +93,6 @@ async def sync_listener(app: FastAPI, who: Who, workflow_id: str, config: dict, 
     if source.source.kind != "mail":
         listeners.stop(workflow_id)
         return
-
-    async def trigger() -> None:
-        if not app.state.sweeps.is_active(workflow_id):
-            app.state.sweeps.start(workflow_id, who.user_id, sweep_run(app, who, workflow_id))
-
     listeners.ensure(workflow_id, source.source.account_ids, source.source.folder, lambda: app.state.tokens.mint(who.user_id, who.email), trigger)
 
 

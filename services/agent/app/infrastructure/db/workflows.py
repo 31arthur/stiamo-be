@@ -29,7 +29,7 @@ class SqlWorkflowRepository(WorkflowRepository):
 
     async def listening(self) -> list[Workflow]:
         rows = (await self._s.execute(select(WorkflowModel))).scalars()
-        return [_workflow(r) for r in rows if (r.config or {}).get("listen")]
+        return [_workflow(r) for r in rows if (r.config or {}).get("listen") or (r.config or {}).get("scheduleMinutes")]
 
     async def get(self, user_id: str, workflow_id: str) -> Workflow | None:
         row = await self._s.get(WorkflowModel, workflow_id)

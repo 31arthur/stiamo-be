@@ -312,3 +312,33 @@ only when someone presses Run. The agent service keeps a watcher on each mailbox
 - It follows the setup: saving an agent with `listen` on starts it, off (or deleting the agent) stops it, and when the service
   starts the agents that were listening listen again. It is held in the agent service's memory: run **one replica** of `agent`.
 - Listening runs are real runs. For a spam filter with "move it by itself" on, mail is moved as it arrives. Test runs never listen.
+
+### News monitor
+
+`source.kind = "feed"` reads RSS feeds (`source.feeds[]`: `key`, `url`, `lang`), for example Google News searches, and keeps the stories
+that matter. Every run:
+
+1. **Fetch** the feeds (a feed that is down is skipped), parse them, drop what is older than `filters.sinceDays` and what is already
+   known (by id), newest first.
+2. **Read only what is new**, up to `filters.limit` per run: the publisher's real address is decoded from the Google link (older
+   links carry it inside them; newer ones go through Google's batchexecute call), then the publisher's page gives its description
+   and picture (the page's own tags, and if it has none, its first real paragraphs; a failure leaves the story with its headline).
+   How many new stories there are in all is `stats.remaining`, so a backlog is worked through in runs.
+3. **First question (relevance):** the labels, as for any agent (for S&B: `relevant` and `irrelevant`). A label with `route: "publish"`
+   puts its stories on the news page (`status: published`); the others are `irrelevant`.
+4. **Second question (importance), only for the relevant:** `config.importance` is `{prompt, levels[{name, description, weight 1-4}]}`,
+   asked of the same model, in batches, so the cost follows what was kept. Without it every story has weight 2.
+5. **Rank** (when the page is read, because age changes): `weight/4 x 0.5^(hours/36) x (0.5 + relevance/2)`: how much it matters counts for
+   most, it halves every 36 hours, and how sure the first question was breaks ties. So a critical story from today beats a major one
+   from yesterday, and last week's critical story sinks below today's notable one.
+
+- `GET /v1/agent/news?workspace=&limit=20&days=7`: `{items[], total, generatedAt}`, each `{agentId, itemId, title, source, link, description,
+  imageUrl, publishedAt, importance, weight, lang, feed, relevance, rank}`.
+- `POST /v1/agent/news/hide {agentId, itemId}`: takes a story off the page (`204`).
+
+### Running every so often
+
+`config.scheduleMinutes` (10 to 1,440) runs the agent when it is saved and then every that many minutes, as a background sweep (see
+above); if one is still going, the new one is skipped. For sources that can't say when something is new, like feeds. It follows the
+setup like listening does and starts again when the service starts. `GET .../listen` also returns `schedule: {scheduled, everyMinutes,
+nextRunAt, lastRunAt, runs, error}`. In memory: run **one replica** of `agent`.
