@@ -1,3 +1,4 @@
+import asyncio
 import time
 import uuid
 from typing import Any
@@ -179,6 +180,22 @@ class FakeTwilio(TwilioApi):
         self.sent.append((sender, to, text))
 
 
+class FakeMailEvents:
+    """The mail service's feed, in the test: nothing happens until `poke()` says new mail came."""
+
+    def __init__(self) -> None:
+        self.queue: asyncio.Queue[str] = asyncio.Queue()
+        self.opened: list[tuple[str, str]] = []
+
+    def poke(self, event: str = "changed") -> None:
+        self.queue.put_nowait(event)
+
+    async def __call__(self, account_id: str, folder: str, token: str):
+        self.opened.append((account_id, folder))
+        while True:
+            yield await self.queue.get()
+
+
 class FakeTokens(AccessTokens):
     def mint(self, user_id, email):
         return f"minted-for-{user_id}"
@@ -195,8 +212,8 @@ def test_registry() -> AgentRegistry:
 class Rig:
     """Everything a test needs: the app, a client and the fakes."""
 
-    def __init__(self, app, client, script, llm_log, decision_log, telegram, twilio, data):
-        self.app, self.client, self.script, self.llm_log, self.decision_log, self.telegram, self.twilio, self.data = app, client, script, llm_log, decision_log, telegram, twilio, data
+    def __init__(self, app, client, script, llm_log, decision_log, telegram, twilio, data, events):
+        self.app, self.client, self.script, self.llm_log, self.decision_log, self.telegram, self.twilio, self.data, self.events = app, client, script, llm_log, decision_log, telegram, twilio, data, events
 
 
 @pytest.fixture
@@ -205,10 +222,11 @@ async def rig():
     llm_log: list[dict[str, Any]] = []
     decision_log: list[dict[str, Any]] = []
     models = [ModelInfo("o3", "o3", ("low", "medium", "high")), ModelInfo("gpt-4o", "gpt-4o", ())]
-    telegram, twilio, data = FakeTelegram(), FakeTwilio(), FakeData()
+    telegram, twilio, data, events = FakeTelegram(), FakeTwilio(), FakeData(), FakeMailEvents()
     settings = Settings(database_url="sqlite+aiosqlite:///:memory:", public_url=PUBLIC)
     app = create_app(
         settings,
+        mail_events=events,
         registry=test_registry(),
         llm_factory=lambda provider, key: FakeLlm(key, script, models, llm_log),
         decision_factory=lambda key: FakeDecisions(decision_log),
@@ -221,4 +239,4 @@ async def rig():
         async with app.state.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            yield Rig(app, client, script, llm_log, decision_log, telegram, twilio, data)
+            yield Rig(app, client, script, llm_log, decision_log, telegram, twilio, data, events)

@@ -57,8 +57,10 @@ async def list_workflows(workflows: deps.Workflows, me: deps.Me) -> dict[str, An
 
 
 @router.post("", status_code=status.HTTP_201_CREATED, summary="Build an agent")
-async def create(body: WorkflowBody, workflows: deps.Workflows, me: deps.Me) -> dict[str, Any]:
-    return await workflows.create(me, body.name, body.description, body.config, body.workspaces)
+async def create(body: WorkflowBody, request: Request, workflows: deps.Workflows, me: deps.Me) -> dict[str, Any]:
+    made = await workflows.create(me, body.name, body.description, body.config, body.workspaces)
+    await _listen(request, workflows, me, made)
+    return made
 
 
 @router.post("/test", summary="Try a setup that isn't saved yet on a sample (nothing is kept)")
@@ -82,13 +84,16 @@ async def get_workflow(workflow_id: str, workflows: deps.Workflows, me: deps.Me)
 
 
 @router.put("/{workflow_id}", summary="Change an agent (a changed setup is a new version)")
-async def update(workflow_id: str, body: WorkflowBody, workflows: deps.Workflows, me: deps.Me) -> dict[str, Any]:
-    return await workflows.update(me, workflow_id, body.name, body.description, body.config)
+async def update(workflow_id: str, body: WorkflowBody, request: Request, workflows: deps.Workflows, me: deps.Me) -> dict[str, Any]:
+    changed = await workflows.update(me, workflow_id, body.name, body.description, body.config)
+    await _listen(request, workflows, me, changed)
+    return changed
 
 
 @router.delete("/{workflow_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Delete an agent, its ledger and its history")
-async def delete(workflow_id: str, workflows: deps.Workflows, me: deps.Me) -> Response:
+async def delete(workflow_id: str, request: Request, workflows: deps.Workflows, me: deps.Me) -> Response:
     await workflows.delete(me, workflow_id)
+    request.app.state.listeners.stop(workflow_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -139,6 +144,12 @@ async def stop_sweep(workflow_id: str, request: Request, workflows: deps.Workflo
     return {"sweep": s.json() if s and s.user_id == me.user_id else None}
 
 
+@router.get("/{workflow_id}/listen", summary="Whether the agent is listening to its mailbox, and how that is going")
+async def listen_status(workflow_id: str, request: Request, workflows: deps.Workflows, me: deps.Me) -> dict[str, Any]:
+    await workflows.get(me, workflow_id)
+    return request.app.state.listeners.status(workflow_id)
+
+
 @router.get("/{workflow_id}/executions", summary="Every real run of the agent, newest first")
 async def executions(workflow_id: str, workflows: deps.Workflows, me: deps.Me) -> dict[str, Any]:
     return await workflows.executions(me, workflow_id)
@@ -157,3 +168,15 @@ async def review(workflow_id: str, workflows: deps.Workflows, me: deps.Me) -> di
 @router.post("/{workflow_id}/review", summary="Approve or dismiss items (approving may correct the label)")
 async def decide_review(workflow_id: str, body: ReviewBody, workflows: deps.Workflows, me: deps.Me, token: deps.Token) -> dict[str, int]:
     return await workflows.decide_review(me, token, workflow_id, body.item_ids, body.action, body.label, body.note)
+
+
+async def _listen(request: Request, workflows: deps.Workflows, me: deps.Me, workflow: dict[str, Any]) -> None:
+    """Listening follows the setup: switched on, changed or off, it is started, replaced or stopped."""
+
+    async def upstream(wid: str):
+        try:
+            return (await workflows.get(me, wid))["config"]
+        except Exception:  # noqa: BLE001  the agent it goes on from is gone: there is nothing to listen to
+            return None
+
+    await deps.sync_listener(request.app, me, workflow["id"], workflow["config"], upstream)

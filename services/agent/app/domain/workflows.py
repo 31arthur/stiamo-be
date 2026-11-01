@@ -123,6 +123,8 @@ class WorkflowConfig(DomainModel):
     batch_size: int = Field(default=1, ge=1, le=MAX_BATCH)
     #: How the prompt and labels were written, section by section, so a screen can show them for editing again. Not read by the
     #: model: what it reads is `prompt` and the labels.
+    #: Listen to the mailbox: run by itself whenever new mail arrives (the mail service's IMAP IDLE says so), instead of only when asked.
+    listen: bool = False
     guide: dict[str, str] | None = None
     #: Points added from the owner's corrections ("this wasn't spam, because…"). They are added to the prompt when it is sent and
     #: never replace anything the person wrote.

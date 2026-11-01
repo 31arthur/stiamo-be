@@ -297,3 +297,18 @@ The model is told never to invent a date; a date it can't make into a real one l
   event) or `approve_event` (the owner may have changed the event; it is checked again, then a meeting is created in the
   calendar through the practice service). An item is dealt with once (`409` after).
 - Ledger entries carry `data` (migration 0007): the summary, priority, action, due date, event and, once approved, `meetingId`.
+
+### Listening to a mailbox
+
+`config.listen: true` makes an agent that reads a mailbox (or goes on from one that does) run by itself when new mail arrives, instead of
+only when someone presses Run. The agent service keeps a watcher on each mailbox: it reads the mail service's live feed (IMAP IDLE,
+`GET /v1/mail/accounts/{id}/events`) with a token minted for the owner, so the server says when mail arrives and nothing is polled.
+
+- A change wakes the agent once after a short pause (5 seconds), so a burst of mail is one run. The run is a background sweep
+  (see above), so it carries on until nothing new is left; if one is already going, it picks the new mail up itself.
+- When it starts listening, and after any dropped connection, it runs once to catch up on what came meanwhile.
+- A dropped feed reconnects with a growing pause (2 seconds up to 2 minutes). A refused mailbox password ends the feed with a reason.
+- `GET /v1/agent/workflows/{id}/listen`: `{listening, state: off|connecting|listening|reconnecting, mailboxes, lastEventAt, lastRunAt, runs, error}`.
+- It follows the setup: saving an agent with `listen` on starts it, off (or deleting the agent) stops it, and when the service
+  starts the agents that were listening listen again. It is held in the agent service's memory: run **one replica** of `agent`.
+- Listening runs are real runs. For a spam filter with "move it by itself" on, mail is moved as it arrives. Test runs never listen.

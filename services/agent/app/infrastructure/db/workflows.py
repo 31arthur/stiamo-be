@@ -27,6 +27,10 @@ class SqlWorkflowRepository(WorkflowRepository):
         rows = (await self._s.execute(select(WorkflowModel).where(WorkflowModel.user_id == user_id).order_by(WorkflowModel.created_at))).scalars()
         return [_workflow(r) for r in rows]
 
+    async def listening(self) -> list[Workflow]:
+        rows = (await self._s.execute(select(WorkflowModel))).scalars()
+        return [_workflow(r) for r in rows if (r.config or {}).get("listen")]
+
     async def get(self, user_id: str, workflow_id: str) -> Workflow | None:
         row = await self._s.get(WorkflowModel, workflow_id)
         return _workflow(row) if row and row.user_id == user_id else None
