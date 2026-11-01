@@ -7,6 +7,7 @@
 #   /v1/attachments/*, /v1/files/*  -> files
 #   /v1/drive/*              -> drive (searches your Google Drive; copies nothing)
 #   /v1/mail/*               -> mail (IMAP mailboxes per workspace; live updates by IDLE)
+#   /v1/calendar/*           -> calendar (Google calendars per workspace, combined; meetings and hearings sent back)
 #   /v1/agent/*              -> agent (AI providers, the case agent, Telegram and WhatsApp webhooks)
 name: stiamo-be
 
@@ -255,6 +256,44 @@ services:
       - "traefik.http.services.stiamo-mail.loadbalancer.healthcheck.path=/health"
       - "traefik.http.services.stiamo-mail.loadbalancer.healthcheck.interval=30s"
       - "traefik.http.services.stiamo-mail.loadbalancer.healthcheck.timeout=10s"
+
+  calendar:
+    image: ghcr.io/${GHCR_OWNER:?set GHCR_OWNER}/stiamo-be-calendar:${IMAGE_TAG:-latest}
+    pull_policy: always
+    restart: unless-stopped
+    expose: ["8000"]
+    environment:
+      CALENDAR_ENV: production
+      CALENDAR_DATABASE_URL: postgresql+asyncpg://stiamo_calendar:${CALENDAR_DB_PASSWORD:?set CALENDAR_DB_PASSWORD}@db:5432/stiamo_calendar
+      CALENDAR_JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET}
+      # Encrypts the stored Google refresh tokens. Losing it means connecting the calendars again.
+      CALENDAR_SECRET_KEY: ${CALENDAR_SECRET_KEY:?set CALENDAR_SECRET_KEY (docs/CALENDAR_SETUP.md)}
+      CALENDAR_GOOGLE_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:-}
+      CALENDAR_GOOGLE_CLIENT_SECRET: ${GOOGLE_OAUTH_CLIENT_SECRET:-}
+      CALENDAR_PUBLIC_URL: https://stiamo-be.fullstackarthur.com
+      CALENDAR_APP_URL: ${CALENDAR_APP_URL:-https://stiamo.fullstackarthur.com}
+      CALENDAR_PRACTICE_URL: http://practice:8000
+      CALENDAR_CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
+    depends_on:
+      db: { condition: service_healthy }
+    networks: [stiamo-net, traefik-proxy]
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 512M }
+        reservations: { memory: 128M }
+    logging: *logging
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik-proxy"
+      - "traefik.http.routers.stiamo-calendar.rule=Host(`stiamo-be.fullstackarthur.com`) && PathPrefix(`/v1/calendar`)"
+      - "traefik.http.routers.stiamo-calendar.entrypoints=websecure"
+      - "traefik.http.routers.stiamo-calendar.tls=true"
+      - "traefik.http.routers.stiamo-calendar.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.stiamo-calendar.middlewares=stiamo-retry"
+      - "traefik.http.services.stiamo-calendar.loadbalancer.server.port=8000"
+      - "traefik.http.services.stiamo-calendar.loadbalancer.healthcheck.path=/health"
+      - "traefik.http.services.stiamo-calendar.loadbalancer.healthcheck.interval=30s"
+      - "traefik.http.services.stiamo-calendar.loadbalancer.healthcheck.timeout=10s"
 
   db:
     image: postgres:16-alpine

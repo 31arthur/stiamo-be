@@ -18,6 +18,7 @@ declare -A passwords=(
   [files]="${FILES_DB_PASSWORD:?add FILES_DB_PASSWORD to .env (openssl rand -hex 24)}"
   [agent]="${AGENT_DB_PASSWORD:?add AGENT_DB_PASSWORD to .env (openssl rand -hex 24)}"
   [mail]="${MAIL_DB_PASSWORD:?add MAIL_DB_PASSWORD to .env (openssl rand -hex 24)}"
+  [calendar]="${CALENDAR_DB_PASSWORD:?add CALENDAR_DB_PASSWORD to .env (openssl rand -hex 24)}"
 )
 
 for service in "${!passwords[@]}"; do

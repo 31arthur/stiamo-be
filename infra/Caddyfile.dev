@@ -17,6 +17,9 @@
 			flush_interval -1
 		}
 	}
+	handle /v1/calendar/* {
+		reverse_proxy calendar:8000
+	}
 	handle /v1/agent/* {
 		reverse_proxy agent:8000
 	}
