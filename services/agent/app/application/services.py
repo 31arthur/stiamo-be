@@ -115,6 +115,9 @@ class Memo(DataGateway):
     async def drive_suggest(self, terms):
         return await self._inner.drive_suggest(terms)
 
+    async def calendar_events(self, start, end):
+        return await self._once(f"calendar:{start}:{end}", lambda: self._inner.calendar_events(start, end))
+
     async def save_record(self, table, record):
         await self._inner.save_record(table, record)
         self._memo.pop(f"records:{table}", None)

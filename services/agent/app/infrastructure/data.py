@@ -12,10 +12,11 @@ MAX_RECORDS = 3000
 
 
 class HttpDataGateway(DataGateway):
-    def __init__(self, http: httpx.AsyncClient, token: str, practice_url: str, files_url: str, drive_url: str, mail_url: str = "http://mail:8000") -> None:
+    def __init__(self, http: httpx.AsyncClient, token: str, practice_url: str, files_url: str, drive_url: str, mail_url: str = "http://mail:8000", calendar_url: str = "http://calendar:8000") -> None:
         self._http, self._headers = http, {"Authorization": f"Bearer {token}"}
         self._practice, self._files, self._drive, self._mail = practice_url.rstrip("/"), files_url.rstrip("/"), drive_url.rstrip("/"), mail_url.rstrip("/")
         self._drive_ok: bool | None = None
+        self._calendar = calendar_url.rstrip("/")
 
     async def _get(self, url: str, **params: Any) -> httpx.Response:
         try:
@@ -147,6 +148,14 @@ class HttpDataGateway(DataGateway):
         if r.status_code != 200:
             raise AiError("Google Drive couldn't be searched right now.")
         return r.json().get("items", [])
+
+    async def calendar_events(self, start: str, end: str) -> list[dict[str, Any]]:
+        # Planning goes on without them: a calendar service that isn't deployed, or a Google that is down, only means less is known.
+        try:
+            r = await self._http.get(f"{self._calendar}/v1/calendar/events", headers=self._headers, params={"from": start, "to": end})
+        except httpx.HTTPError:
+            return []
+        return r.json().get("items", []) if r.status_code == 200 else []
 
     async def save_record(self, table: str, record: dict[str, Any]) -> None:
         paths = {"tasks": "/v1/tasks", "follow-ups": "/v1/follow-ups", "cases": "/v1/cases", "hearings": "/v1/hearings", "plans": "/v1/plans"}

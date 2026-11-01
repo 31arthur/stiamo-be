@@ -64,3 +64,10 @@ and by id, so retrying never doubles anything. A change to a task or follow-up i
 older than a day is refused as stale. A new case gets its number when it is opened, as always.
 
 Migration `0009` adds `agent_proposals`.
+
+## Google calendar events
+
+Events in the Google calendars connected through the calendar service ([CALENDAR_SETUP.md](CALENDAR_SETUP.md)) count as busy time: `day_agenda`
+lists them (and the all-day ones), the free windows leave them clear, `propose_schedule` refuses a block placed over one, and approving a
+plan checks again. They are read through `AGENT_CALENDAR_URL` (default `http://calendar:8000`); with no calendar service, or no account
+connected, nothing changes. An event that runs over midnight counts on the day it starts.

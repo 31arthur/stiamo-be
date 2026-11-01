@@ -147,10 +147,11 @@ class DayPlanService:
         try:
             tasks, follow_ups = await data.records("tasks"), await data.records("follow-ups")
             hearings, meetings = await data.hearings(), await data.records("meetings")
+            calendar = await data.calendar_events(p.day, p.day)
         except AiError as exc:
             raise ValidationFailed(str(exc)) from exc
         skip = {f"{b['kind']}:{b['id']}" for b in p.blocks}
-        problems = check_blocks(p.blocks, busy_blocks(p.day, hearings, meetings, tasks, follow_ups, skip=skip))
+        problems = check_blocks(p.blocks, busy_blocks(p.day, hearings, meetings, tasks, follow_ups, skip=skip, calendar=calendar))
         if problems:
             raise Conflict("The day has changed since this was planned: " + " ".join(problems[:3]) + " Ask for a new plan.")
         by = {"task": {t["id"]: t for t in tasks if is_open(t)}, "followUp": {f["id"]: f for f in follow_ups if is_open(f)}}

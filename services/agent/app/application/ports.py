@@ -79,6 +79,10 @@ class DataGateway(ABC):
     @abstractmethod
     async def drive_suggest(self, terms: list[str]) -> list[dict[str, Any]]: ...
 
+    async def calendar_events(self, start: str, end: str) -> list[dict[str, Any]]:
+        """The events in the owner's Google calendars between two days (YYYY-MM-DD), on their own clock. Empty when none are connected."""
+        return []
+
     @abstractmethod
     async def save_record(self, table: str, record: dict[str, Any]) -> None:
         """Writes one task or follow-up back (create or replace), as the owner."""

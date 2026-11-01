@@ -70,8 +70,9 @@ def overdue_follow_ups(day: str, follow_ups: list[dict[str, Any]]) -> list[dict[
     return [f for f in follow_ups if is_open(f) and (f.get("due") or {}).get("date") and f["due"]["date"] < day]
 
 
-def busy_blocks(day: str, hearings: list[dict[str, Any]], meetings: list[dict[str, Any]], tasks: list[dict[str, Any]], follow_ups: list[dict[str, Any]], *, skip: set[str] | None = None) -> list[tuple[int, int, str]]:
-    """Every stretch of the day already taken: hearings, meetings, and tasks or follow-ups with a time (except those named in `skip`)."""
+def busy_blocks(day: str, hearings: list[dict[str, Any]], meetings: list[dict[str, Any]], tasks: list[dict[str, Any]], follow_ups: list[dict[str, Any]], *, skip: set[str] | None = None, calendar: list[dict[str, Any]] | None = None) -> list[tuple[int, int, str]]:
+    """Every stretch of the day already taken: hearings, meetings, events in the person's Google calendars, and tasks or follow-ups with a time
+    (except those named in `skip`). An event that runs over midnight counts on the day it starts. All-day events don't take time."""
     skip = skip or set()
     out: list[tuple[int, int, str]] = []
     for h in hearings_on(day, hearings):
@@ -88,7 +89,19 @@ def busy_blocks(day: str, hearings: list[dict[str, Any]], meetings: list[dict[st
         due = f.get("due") or {}
         if is_open(f) and due.get("date") == day and due.get("time") is not None and f"followUp:{f.get('id')}" not in skip:
             out.append((int(due["time"]), int(due["time"]) + int(f.get("duration") or 15), f"follow-up: {f.get('title')}"))
+    for e in calendar_on(day, calendar or []):
+        start = int(e["startMinute"])
+        out.append((start, max(start + 5, int(e.get("endMinute") or start + DEFAULT_MEETING)), f"calendar: {e.get('title') or 'event'}"))
     return sorted(out)
+
+
+def calendar_on(day: str, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Google events with a time of day that start on the day."""
+    return sorted((e for e in events if not e.get("allDay") and e.get("date") == day and e.get("startMinute") is not None), key=lambda e: e["startMinute"])
+
+
+def all_day_on(day: str, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [e for e in events if e.get("allDay") and e.get("date", "") <= day <= e.get("endDate", e.get("date", ""))]
 
 
 def free_windows(busy: list[tuple[int, int, str]], start: int = DAY_START, end: int = DAY_END) -> list[tuple[int, int]]:
