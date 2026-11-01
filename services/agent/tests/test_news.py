@@ -70,9 +70,10 @@ async def test_news_is_filtered_for_relevance_then_graded_and_ranked_newest_impo
     assert run["counts"]["published"] == 2 and run["counts"]["irrelevant"] == 2 and "on the news page" in run["summary"]
     page = await top(rig, "workspace=sb")
     assert [s["title"] for s in page["items"]] == ["Workers stranded in Kuwait appeal to embassy", "Kerala migrant worker dies in Gulf accident"]
+    assert page["sort"] == "importance"
     first = page["items"][0]
     assert (first["importance"], first["weight"], first["source"], first["link"], first["imageUrl"], first["feed"]) == ("critical", 4, "The Hindu", "https://paper.example/1", "https://img.example/1.jpg", "migrant")
-    assert first["rank"] > page["items"][1]["rank"] and page["total"] == 2
+    assert page["total"] == 2
     assert "Cricket" not in str(page)
     # the second question was only asked about the two that passed the first
     assert len([c for c in rig.llm_log if "How much does this story matter" in c["system"]]) == 2
@@ -132,6 +133,8 @@ async def test_the_limit_is_twenty_by_default(rig):
     page = await top(rig)
     assert len(page["items"]) == 20 and page["total"] == 30
     assert len((await top(rig, "limit=5"))["items"]) == 5
+    assert (await rig.client.get(f"{NEWS}?limit=50", headers=headers())).status_code == 422  # never more than twenty at a time
+    assert len((await top(rig, "sort=latest"))["items"]) == 20
 
 
 async def test_a_news_setup_needs_feeds_and_sensible_levels(rig):
@@ -196,3 +199,16 @@ async def test_an_agent_with_a_schedule_runs_by_itself_and_stops_when_the_schedu
     assert status["schedule"]["scheduled"] is True and status["schedule"]["everyMinutes"] == 10
     await rig.client.put(f"{BASE}/{wid}", json={"name": "News", "description": "", "config": config(scheduleMinutes=None)}, headers=headers())
     assert (await rig.client.get(f"{BASE}/{wid}/listen", headers=headers())).json()["schedule"]["scheduled"] is False
+
+
+async def test_the_same_stories_in_two_rankings_most_important_and_latest(rig):
+    rig.data.articles = [article(1, "Newest, notable", 1), article(2, "Older, critical", 20), article(3, "Middle, major", 6), article(4, "Oldest, critical", 40)]
+    wid = await make_news(rig)
+    rig.script += [answer("relevant")] * 4 + [answer("notable"), answer("major"), answer("critical"), answer("critical")]  # graded newest first: 1, 3, 2, 4
+    await rig.client.post(f"{BASE}/{wid}/run", json={}, headers=headers())
+    important = await top(rig, "sort=importance")
+    assert [s["title"] for s in important["items"]] == ["Older, critical", "Oldest, critical", "Middle, major", "Newest, notable"]  # by weight, newer first among equals
+    latest = await top(rig, "sort=latest")
+    assert [s["title"] for s in latest["items"]] == ["Newest, notable", "Middle, major", "Older, critical", "Oldest, critical"]
+    assert latest["sort"] == "latest" and (await top(rig))["sort"] == "importance"
+    assert (await rig.client.get(f"{NEWS}?sort=best", headers=headers())).status_code == 422

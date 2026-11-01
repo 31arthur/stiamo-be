@@ -12,13 +12,16 @@ from app.application.services import Who
 from app.domain.workflows import rank_news
 
 DEFAULT_LIMIT = 20
+#: The page never shows more than this at a time.
+MAX_LIMIT = 20
 
 
 class NewsService:
     def __init__(self, repo: WorkflowRepository, settings: SettingsRepository) -> None:
         self._repo, self._settings = repo, settings
 
-    async def top(self, who: Who, workspace: str | None, limit: int = DEFAULT_LIMIT, days: int = 7) -> dict[str, Any]:
+    async def top(self, who: Who, workspace: str | None, limit: int = DEFAULT_LIMIT, days: int = 7, sort: str = "importance") -> dict[str, Any]:
+        """The stories, in one of two rankings: `importance` (how much it matters, then how recent) or `latest` (how recent). Never more than 20."""
         s = await self._settings.get(who.user_id)
         agents = {w.id: w for w in await self._repo.all(who.user_id) if (w.config.get("source") or {}).get("kind") == "feed"}
         now = datetime.now(UTC)
@@ -42,8 +45,11 @@ class NewsService:
                 "imageUrl": d.get("imageUrl"), "publishedAt": d.get("publishedAt"), "importance": d.get("importance"), "weight": d.get("weight") or 2, "lang": d.get("lang"),
                 "feed": d.get("feed"), "relevance": d.get("relevance"), "rank": round(rank_news(d, now), 4),
             })
-        out.sort(key=lambda a: (a["rank"], a["publishedAt"] or ""), reverse=True)
-        return {"items": out[:limit], "total": len(out), "generatedAt": now.isoformat(timespec="seconds").replace("+00:00", "Z")}
+        if sort == "latest":
+            out.sort(key=lambda a: (a["publishedAt"] or "", a["weight"]), reverse=True)
+        else:
+            out.sort(key=lambda a: (a["weight"], a["publishedAt"] or "", a["relevance"] or 0), reverse=True)
+        return {"items": out[: min(limit, MAX_LIMIT)], "total": len(out), "sort": sort, "generatedAt": now.isoformat(timespec="seconds").replace("+00:00", "Z")}
 
     async def hide(self, who: Who, agent_id: str, item_id: str) -> None:
         entry = await self._repo.entry(who.user_id, agent_id, item_id)
