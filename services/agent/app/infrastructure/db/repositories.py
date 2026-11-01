@@ -8,10 +8,12 @@ from app.application.ports import (
     ChannelRepository,
     DayPlan,
     DayPlanRepository,
+    Proposal,
+    ProposalRepository,
     SettingsRepository,
     UserSettings,
 )
-from app.infrastructure.db.models import ChannelModel, DayPlanModel, SettingsModel
+from app.infrastructure.db.models import ChannelModel, DayPlanModel, ProposalModel, SettingsModel
 from app.infrastructure.security import SecretBox
 
 
@@ -100,3 +102,30 @@ class SqlDayPlanRepository(DayPlanRepository):
         row.status, row.briefing, row.blocks, row.run_id, row.trigger, row.decided_at = p.status, p.briefing, list(p.blocks), p.run_id, p.trigger, p.decided_at
         self._s.add(row)
         await self._s.flush()
+
+
+def _proposal(r: ProposalModel) -> Proposal:
+    return Proposal(r.id, r.user_id, r.agent_id, r.action, r.title, list(r.lines or []), list(r.ops or []), r.status, r.channel_id, r.created_at, r.decided_at)
+
+
+class SqlProposalRepository(ProposalRepository):
+    def __init__(self, session: AsyncSession) -> None:
+        self._s = session
+
+    async def add(self, p: Proposal) -> None:
+        self._s.add(ProposalModel(id=p.id, user_id=p.user_id, agent_id=p.agent_id, action=p.action, title=p.title[:300], lines=list(p.lines), ops=list(p.ops), status=p.status, channel_id=p.channel_id, created_at=p.created_at))
+        await self._s.flush()
+
+    async def get(self, user_id: str, proposal_id: str) -> Proposal | None:
+        row = await self._s.get(ProposalModel, proposal_id)
+        return _proposal(row) if row and row.user_id == user_id else None
+
+    async def pending_in(self, user_id: str, channel_id: str, since: datetime) -> list[Proposal]:
+        rows = (await self._s.execute(select(ProposalModel).where(ProposalModel.user_id == user_id, ProposalModel.channel_id == channel_id, ProposalModel.status == "pending", ProposalModel.created_at >= since).order_by(ProposalModel.created_at))).scalars()
+        return [_proposal(r) for r in rows]
+
+    async def save(self, p: Proposal) -> None:
+        row = await self._s.get(ProposalModel, p.id)
+        if row is not None:
+            row.status, row.decided_at = p.status, p.decided_at
+            await self._s.flush()

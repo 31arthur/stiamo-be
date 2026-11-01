@@ -149,7 +149,7 @@ class HttpDataGateway(DataGateway):
         return r.json().get("items", [])
 
     async def save_record(self, table: str, record: dict[str, Any]) -> None:
-        paths = {"tasks": "/v1/tasks", "follow-ups": "/v1/follow-ups"}
+        paths = {"tasks": "/v1/tasks", "follow-ups": "/v1/follow-ups", "cases": "/v1/cases", "hearings": "/v1/hearings", "plans": "/v1/plans"}
         if table not in paths:
             raise AiError("That collection can't be changed.")
         draft = {k: v for k, v in record.items() if k not in ("userId", "createdAt", "updatedAt")}

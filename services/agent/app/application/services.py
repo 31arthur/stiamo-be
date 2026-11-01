@@ -14,6 +14,8 @@ from app.application.ports import (
     DataGateway,
     DecisionClient,
     LlmClient,
+    Proposal,
+    ProposalRepository,
     RunLog,
     RunRecord,
     SettingsRepository,
@@ -137,9 +139,11 @@ class AgentService:
         decision_factory: Callable[[str], DecisionClient],
         data_factory: Callable[[str], DataGateway],
         max_steps: int = 8,
+        proposals: ProposalRepository | None = None,
     ) -> None:
         self._repo, self._registry, self._runs, self._workflows = repo, registry, runs, workflows
         self._llm, self._decisions, self._data, self._max_steps = llm_factory, decision_factory, data_factory, max_steps
+        self._proposals = proposals
 
     @property
     def registry(self) -> AgentRegistry:
@@ -308,13 +312,13 @@ class AgentService:
 
     # --- asking ----------------------------------------------------------------------------------------------
 
-    async def _prepare(self, who: Who, token: str, agent: AgentDefinition, channel: str, prompt: PromptConfig | None = None) -> Prepared:
+    async def _prepare(self, who: Who, token: str, agent: AgentDefinition, channel: str, prompt: PromptConfig | None = None, channel_id: str | None = None) -> Prepared:
         """Builds the agent for this person: their tools (from the agent's packs, bound to their data) and the prompt's variables."""
         s = await self._load(who)
         today = date.today().isoformat()
         decision = s.decision or {}
         decisions = self._decisions(s.keys["openrouter"]) if decision.get("enabled") and "openrouter" in s.keys else None
-        ctx = PackContext(Memo(self._data(token)), today, decisions, decision.get("modelId") or DECISION_MODELS[0]["id"], lambda: self._waiting(who))
+        ctx = PackContext(Memo(self._data(token)), today, decisions, decision.get("modelId") or DECISION_MODELS[0]["id"], lambda: self._waiting(who), self._proposer(who, agent.id, channel_id))
         tools: list[Tool] = []
         context: dict[str, Any] = {"today": today, "user": who.name, "channel": channel}
         for name in agent.packs:
@@ -325,6 +329,19 @@ class AgentService:
         if len(names) != len(set(names)):
             raise RuntimeError(f"Agent {agent.id!r} gets the same tool name from two packs: {sorted({n for n in names if names.count(n) > 1})}")
         return Prepared(s, prompt or self._prompt(agent, s), tools, context)
+
+    def _proposer(self, who: Who, agent_id: str, channel_id: str | None):
+        """What an agent's propose tools call to keep a proposal for the person to approve. None when proposals aren't kept here."""
+        repo = self._proposals
+        if repo is None:
+            return None
+
+        async def propose(action: str, title: str, lines: list[str], ops: list[dict[str, Any]]) -> str:
+            pid = str(uuid.uuid4())
+            await repo.add(Proposal(pid, who.user_id, agent_id, action, title, lines, ops, "pending", channel_id, datetime.now(UTC)))
+            return pid
+
+        return propose
 
     async def _waiting(self, who: Who) -> list[dict[str, Any]]:
         """What is waiting in the Attention queue, for the agents that read it."""
@@ -358,7 +375,7 @@ class AgentService:
         if not message:
             raise ValidationFailed("Ask something first.")
         try:
-            p = await self._prepare(who, token, agent, channel)
+            p = await self._prepare(who, token, agent, channel, channel_id=channel_id)
         except AiError as exc:
             raise ValidationFailed(str(exc)) from exc
         sel, _ = self._selection(p.settings, agent.id)

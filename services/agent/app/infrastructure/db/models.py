@@ -194,3 +194,23 @@ class DayPlanModel(Base):
     decided_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
 
     __table_args__ = (UniqueConstraint("user_id", "day", name="uq_day_plans_user_day"),)
+
+
+class ProposalModel(Base):
+    """What an agent proposed to add or change, kept until the person approves or drops it."""
+
+    __tablename__ = "agent_proposals"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(36))
+    agent_id: Mapped[str] = mapped_column(String(64))
+    action: Mapped[str] = mapped_column(String(32))
+    title: Mapped[str] = mapped_column(String(300))
+    lines: Mapped[list[str]] = mapped_column(Json, default=list)
+    ops: Mapped[list[dict[str, Any]]] = mapped_column(Json, default=list)
+    status: Mapped[str] = mapped_column(String(10))
+    channel_id: Mapped[str | None] = mapped_column(String(36))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime)
+    decided_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+
+    __table_args__ = (Index("ix_agent_proposals_user", "user_id", "status"),)

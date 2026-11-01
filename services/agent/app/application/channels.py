@@ -9,6 +9,7 @@ from typing import Any
 from stiamo_common.errors import Forbidden, NotFound, ValidationFailed
 
 from app.application.ports import AccessTokens, Channel, ChannelRepository, TelegramApi, TwilioApi
+from app.application.proposals import ProposalService, verdict_of
 from app.application.runner import AgentRun
 from app.application.services import AgentService, Who
 from app.domain.llm import AiError
@@ -28,6 +29,7 @@ def format_reply(run: AgentRun, limit: int) -> str:
     cases = [f for f in run.found if f["kind"] == "case"]
     docs = [f for f in run.found if f["kind"] == "document"]
     schedules = [f for f in run.found if f["kind"] == "schedule"]
+    proposals = [f for f in run.found if f["kind"] == "proposal"]
     if cases:
         lines = []
         for c in cases[:8]:
@@ -37,6 +39,9 @@ def format_reply(run: AgentRun, limit: int) -> str:
     if docs:
         lines = [f"• {d.get('name', '')}" + (f"\n  {d['webViewLink']}" if d.get("webViewLink") else "") for d in docs[:8]]
         parts.append("Documents:\n" + "\n".join(lines))
+    if proposals:
+        cards = ["• " + x["title"] + "".join("\n  " + ln for ln in x["lines"]) for x in proposals[:6]]
+        parts.append("To approve:\n" + "\n\n".join(cards) + "\n\nReply YES to save, or NO to drop.")
     for s in schedules[:1]:
         parts.append("Proposed schedule (approve it in Stiamo):\n" + "\n".join(f"• {b['from']} {b['title']}" for b in s["blocks"]))
     return clip("\n\n".join(parts), limit)
@@ -54,10 +59,12 @@ class ChannelService:
         public_url: str,
         pairing_minutes: int = 30,
         memory: dict[tuple[str, str], list[dict[str, Any]]] | None = None,
+        proposals: ProposalService | None = None,
     ) -> None:
         self._repo, self._agent, self._tg, self._tw, self._tokens = repo, agent, telegram, twilio, tokens
         self._public, self._pairing = public_url.rstrip("/"), pairing_minutes
         self._memory = memory if memory is not None else {}
+        self._proposals = proposals
 
     # --- what is connected -----------------------------------------------------------------------------
 
@@ -204,6 +211,12 @@ class ChannelService:
         settings_email = c.public.get("ownerEmail", "")
         who = Who(c.user_id, settings_email)
         agent_id = c.public.get("agent") or self._agent.registry.default_id
+        # A yes or a no is about what the agent just proposed in this chat, not a new question for it.
+        verdict = verdict_of(text) if self._proposals else None
+        if verdict is not None:
+            settled = await self._proposals.settle_channel(who, self._tokens.mint(who.user_id, who.email), c.id, verdict)
+            if settled is not None:
+                return clip(settled, limit)
         key = (c.id, f"{agent_id}:{sender}")  # changing the channel's agent starts a fresh conversation
         try:
             run = await self._agent.chat(who, self._tokens.mint(who.user_id, who.email), agent_id, text, self._memory.get(key), channel_name, trigger=channel_name.lower(), channel_id=c.id)

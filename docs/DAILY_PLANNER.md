@@ -46,3 +46,21 @@ and runs with a single replica.
 | `POST /v1/agent/day-plans/generate` | `{day?, force?}`: plan a day now. |
 | `POST /v1/agent/day-plans/{id}/apply` | Approve: book the blocks. 409 if the day has changed. |
 | `POST /v1/agent/day-plans/{id}/dismiss` | Not this plan. |
+
+## Asking the team to add or change things
+
+Every agent in the team also has the **changes** pack (`app/application/toolpacks/changes.py`): `add_task`, `change_task`,
+`add_follow_up`, `change_follow_up`, `add_hearing`, `add_case`, `add_action_plan`. Ask in plain words ("add a task to draft the
+rejoinder for Alur, due Thursday", "move the call with Hemla to 3 pm", "list a hearing for SA-2026-001 on 12 Jan", "make an action
+plan for the rejoinder with these steps").
+
+**They only propose.** Each tool checks what it was given (dates, times, the case, the organization) and says what is wrong if
+something is, so the agent can ask you or fix it. A good one is kept as a *proposal* and shown as a card with **Approve** and **Not
+this**. On Telegram or WhatsApp the reply lists what was proposed; **YES** saves it, **NO** drops it (only what was proposed in that
+chat in the last 30 minutes; with nothing waiting, "yes" is an ordinary message).
+
+Approving is the only thing that writes (`POST /v1/agent/proposals/{id}/apply`, `/drop`). It saves as the owner, record by record
+and by id, so retrying never doubles anything. A change to a task or follow-up is merged into it as it is at that moment. A proposal
+older than a day is refused as stale. A new case gets its number when it is opened, as always.
+
+Migration `0009` adds `agent_proposals`.

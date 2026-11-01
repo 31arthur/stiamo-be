@@ -13,10 +13,16 @@ from stiamo_common.security import Principal, make_principal_dependency
 
 from app.application.channels import ChannelService
 from app.application.dayplans import DayPlanService, planner_settings
+from app.application.proposals import ProposalService
 from app.application.services import AgentService, Who
 from app.application.workflows import WorkflowService
 from app.config import get_settings
-from app.infrastructure.db.repositories import SqlChannelRepository, SqlDayPlanRepository, SqlSettingsRepository
+from app.infrastructure.db.repositories import (
+    SqlChannelRepository,
+    SqlDayPlanRepository,
+    SqlProposalRepository,
+    SqlSettingsRepository,
+)
 from app.infrastructure.db.workflows import SqlWorkflowRepository
 
 current_principal = make_principal_dependency(lambda: get_settings().token_settings())
@@ -50,9 +56,13 @@ Session = Annotated[AsyncSession, Depends(get_session)]
 
 def build_services(app: FastAPI, session: AsyncSession) -> tuple[AgentService, ChannelService]:
     s = app.state
-    agent = AgentService(SqlSettingsRepository(session, s.box), s.registry, s.runs, SqlWorkflowRepository(session), s.llm_factory, s.decision_factory, s.data_factory, s.settings.max_steps)
-    channels = ChannelService(SqlChannelRepository(session, s.box), agent, s.telegram, s.twilio, s.tokens, public_url=s.settings.public_url, pairing_minutes=s.settings.pairing_minutes, memory=s.chat_memory)
+    agent = AgentService(SqlSettingsRepository(session, s.box), s.registry, s.runs, SqlWorkflowRepository(session), s.llm_factory, s.decision_factory, s.data_factory, s.settings.max_steps, SqlProposalRepository(session))
+    channels = ChannelService(SqlChannelRepository(session, s.box), agent, s.telegram, s.twilio, s.tokens, public_url=s.settings.public_url, pairing_minutes=s.settings.pairing_minutes, memory=s.chat_memory, proposals=build_proposals(app, session))
     return agent, channels
+
+
+def build_proposals(app: FastAPI, session: AsyncSession) -> ProposalService:
+    return ProposalService(SqlProposalRepository(session), app.state.data_factory)
 
 
 def build_day_plans(app: FastAPI, session: AsyncSession) -> DayPlanService:
