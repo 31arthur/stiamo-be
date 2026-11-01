@@ -134,7 +134,6 @@ async def test_the_limit_is_twenty_by_default(rig):
     assert len(page["items"]) == 20 and page["total"] == 30
     assert len((await top(rig, "limit=5"))["items"]) == 5
     assert (await rig.client.get(f"{NEWS}?limit=50", headers=headers())).status_code == 422  # never more than twenty at a time
-    assert len((await top(rig, "sort=latest"))["items"]) == 20
 
 
 async def test_a_news_setup_needs_feeds_and_sensible_levels(rig):
@@ -209,6 +208,7 @@ async def test_the_same_stories_in_two_rankings_most_important_and_latest(rig):
     important = await top(rig, "sort=importance")
     assert [s["title"] for s in important["items"]] == ["Older, critical", "Oldest, critical", "Middle, major", "Newest, notable"]  # by weight, newer first among equals
     latest = await top(rig, "sort=latest")
-    assert [s["title"] for s in latest["items"]] == ["Newest, notable", "Middle, major", "Older, critical", "Oldest, critical"]
+    assert [s["title"] for s in latest["items"]] == ["Newest, notable"]  # nothing older than three hours, however long a period is asked for
+    assert [s["title"] for s in (await top(rig, "sort=latest&days=60"))["items"]] == ["Newest, notable"]
     assert latest["sort"] == "latest" and (await top(rig))["sort"] == "importance"
     assert (await rig.client.get(f"{NEWS}?sort=best", headers=headers())).status_code == 422

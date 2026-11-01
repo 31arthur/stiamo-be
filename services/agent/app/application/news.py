@@ -14,6 +14,8 @@ from app.domain.workflows import rank_news
 DEFAULT_LIMIT = 20
 #: The page never shows more than this at a time.
 MAX_LIMIT = 20
+#: The latest ranking is only what was published in the last few hours, whatever period was asked for.
+LATEST_WINDOW = timedelta(hours=3)
 
 
 class NewsService:
@@ -21,10 +23,13 @@ class NewsService:
         self._repo, self._settings = repo, settings
 
     async def top(self, who: Who, workspace: str | None, limit: int = DEFAULT_LIMIT, days: int = 7, sort: str = "importance") -> dict[str, Any]:
-        """The stories, in one of two rankings: `importance` (how much it matters, then how recent) or `latest` (how recent). Never more than 20."""
+        """The stories, in one of two rankings: `importance` (how much it matters, then how recent) or `latest` (how recent, and only from the last three hours). Never more than 20."""
         s = await self._settings.get(who.user_id)
         agents = {w.id: w for w in await self._repo.all(who.user_id) if (w.config.get("source") or {}).get("kind") == "feed"}
         now = datetime.now(UTC)
+        window = timedelta(days=days)
+        if sort == "latest":
+            window = min(window, LATEST_WINDOW)
         out: list[dict[str, Any]] = []
         for r in await self._repo.queue(who.user_id, ["published"], limit=3000):
             w = agents.get(r.agent_id)
@@ -38,7 +43,7 @@ class NewsService:
                 published = datetime.fromisoformat(str(d.get("publishedAt") or "").replace("Z", "+00:00"))
             except ValueError:
                 published = r.created_at
-            if now - published > timedelta(days=days):
+            if now - published > window:
                 continue
             out.append({
                 "agentId": r.agent_id, "itemId": r.item_id, "title": d.get("title") or r.title, "source": d.get("source"), "link": d.get("link"), "description": d.get("description"),
