@@ -332,7 +332,7 @@ that matter. Every run:
    most, it halves every 36 hours, and how sure the first question was breaks ties. So a critical story from today beats a major one
    from yesterday, and last week's critical story sinks below today's notable one.
 
-- `GET /v1/agent/news?workspace=&limit=20&days=7`: `{items[], total, generatedAt}`, each `{agentId, itemId, title, source, link, description,
+- `GET /v1/agent/news?workspace=&limit=20&days=7&sort=importance|latest`: at most 20 stories (`limit` is capped at 20), in one of two rankings: `importance` (weight, then newer first among equals) or `latest` (newest first). `{items[], total, sort, generatedAt}`, each `{agentId, itemId, title, source, link, description,
   imageUrl, publishedAt, importance, weight, lang, feed, relevance, rank}`.
 - `POST /v1/agent/news/hide {agentId, itemId}`: takes a story off the page (`204`).
 
