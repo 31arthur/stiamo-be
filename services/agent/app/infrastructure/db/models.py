@@ -24,6 +24,8 @@ class SettingsModel(Base):
     prompt: Mapped[dict[str, Any] | None] = mapped_column(Json)
     #: agent id -> the workspaces it is shown in.
     workspaces: Mapped[dict[str, list[str]] | None] = mapped_column(Json)
+    #: The daily planner's evening run: whether it is on, when, in which time zone.
+    planner: Mapped[dict[str, Any] | None] = mapped_column(Json)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime)
 
 
@@ -173,3 +175,22 @@ class LedgerModel(Base):
     data: Mapped[dict[str, Any] | None] = mapped_column(Json)
 
     __table_args__ = (UniqueConstraint("agent_id", "item_id", name="uq_ledger_item"), Index("ix_ledger_status", "agent_id", "status"))
+
+
+class DayPlanModel(Base):
+    """What the daily planner made for one day: the briefing and the schedule it proposed, until the person approves or dismisses it."""
+
+    __tablename__ = "day_plans"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(36))
+    day: Mapped[str] = mapped_column(String(10))
+    status: Mapped[str] = mapped_column(String(12))
+    briefing: Mapped[str] = mapped_column(Text, default="")
+    blocks: Mapped[list[dict[str, Any]]] = mapped_column(Json, default=list)
+    run_id: Mapped[str | None] = mapped_column(String(36))
+    trigger: Mapped[str] = mapped_column(String(12), default="evening")
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime)
+    decided_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+
+    __table_args__ = (UniqueConstraint("user_id", "day", name="uq_day_plans_user_day"),)

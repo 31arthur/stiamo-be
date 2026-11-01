@@ -27,6 +27,7 @@ def format_reply(run: AgentRun, limit: int) -> str:
     parts = [run.answer or "I found nothing to say about that."]
     cases = [f for f in run.found if f["kind"] == "case"]
     docs = [f for f in run.found if f["kind"] == "document"]
+    schedules = [f for f in run.found if f["kind"] == "schedule"]
     if cases:
         lines = []
         for c in cases[:8]:
@@ -36,6 +37,8 @@ def format_reply(run: AgentRun, limit: int) -> str:
     if docs:
         lines = [f"• {d.get('name', '')}" + (f"\n  {d['webViewLink']}" if d.get("webViewLink") else "") for d in docs[:8]]
         parts.append("Documents:\n" + "\n".join(lines))
+    for s in schedules[:1]:
+        parts.append("Proposed schedule (approve it in Stiamo):\n" + "\n".join(f"• {b['from']} {b['title']}" for b in s["blocks"]))
     return clip("\n\n".join(parts), limit)
 
 
@@ -167,6 +170,23 @@ class ChannelService:
         else:
             for n in c.public.get("allowed", []):
                 await self._tw.send_whatsapp(c.public["accountSid"], c.secrets["authToken"], c.public["from"], n, text)
+
+    async def announce(self, who: Who, text: str) -> int:
+        """Sends a message to every chat and number the person has connected. Returns how many it reached; one that fails doesn't stop the rest."""
+        sent = 0
+        for c in await self._repo.for_user(who.user_id):
+            try:
+                if c.kind == "telegram":
+                    for p in c.public.get("paired", []):
+                        await self._tg.send_message(c.secrets["botToken"], p["id"], clip(text, TELEGRAM_MAX))
+                        sent += 1
+                else:
+                    for n in c.public.get("allowed", []):
+                        await self._tw.send_whatsapp(c.public["accountSid"], c.secrets["authToken"], c.public["from"], n, clip(text, WHATSAPP_MAX))
+                        sent += 1
+            except Exception:  # noqa: BLE001
+                log.warning("could not announce on channel %s", c.id)
+        return sent
 
     async def remove(self, who: Who, channel_id: str) -> None:
         c = await self._mine(who, channel_id)

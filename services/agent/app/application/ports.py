@@ -79,6 +79,10 @@ class DataGateway(ABC):
     @abstractmethod
     async def drive_suggest(self, terms: list[str]) -> list[dict[str, Any]]: ...
 
+    @abstractmethod
+    async def save_record(self, table: str, record: dict[str, Any]) -> None:
+        """Writes one task or follow-up back (create or replace), as the owner."""
+
 
 @dataclass
 class UserSettings:
@@ -95,6 +99,8 @@ class UserSettings:
     #: agent id -> the workspaces it is shown in. An agent with no entry uses its own default.
     workspaces: dict[str, list[str]] = field(default_factory=dict)
     updated_at: datetime | None = None
+    #: The daily planner's evening run: {enabled, time "HH:MM", timezone, channels}. Empty: never set.
+    planner: dict[str, Any] = field(default_factory=dict)
 
 
 class SettingsRepository(ABC):
@@ -103,6 +109,10 @@ class SettingsRepository(ABC):
 
     @abstractmethod
     async def save(self, settings: UserSettings) -> None: ...
+
+    @abstractmethod
+    async def planners(self) -> list[UserSettings]:
+        """Everyone whose evening plan is switched on."""
 
 
 @dataclass
@@ -379,3 +389,33 @@ class WorkflowRepository(ABC):
     @abstractmethod
     async def run_status_counts(self, workflow_id: str) -> dict[str, dict[str, int]]:
         """For each run: how many of its items are in each status now."""
+
+
+@dataclass
+class DayPlan:
+    """The plan for one day: a written briefing, and the time blocks proposed for tasks and follow-ups."""
+
+    id: str
+    user_id: str
+    day: str
+    status: str  # proposed | applied | dismissed
+    briefing: str
+    blocks: list[dict[str, Any]]
+    run_id: str | None
+    trigger: str
+    created_at: datetime
+    decided_at: datetime | None = None
+
+
+class DayPlanRepository(ABC):
+    @abstractmethod
+    async def for_day(self, user_id: str, day: str) -> DayPlan | None: ...
+
+    @abstractmethod
+    async def recent(self, user_id: str, limit: int = 10) -> list[DayPlan]: ...
+
+    @abstractmethod
+    async def get(self, user_id: str, plan_id: str) -> DayPlan | None: ...
+
+    @abstractmethod
+    async def save(self, plan: DayPlan) -> None: ...

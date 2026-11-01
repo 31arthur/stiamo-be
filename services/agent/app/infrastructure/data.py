@@ -147,3 +147,15 @@ class HttpDataGateway(DataGateway):
         if r.status_code != 200:
             raise AiError("Google Drive couldn't be searched right now.")
         return r.json().get("items", [])
+
+    async def save_record(self, table: str, record: dict[str, Any]) -> None:
+        paths = {"tasks": "/v1/tasks", "follow-ups": "/v1/follow-ups"}
+        if table not in paths:
+            raise AiError("That collection can't be changed.")
+        draft = {k: v for k, v in record.items() if k not in ("userId", "createdAt", "updatedAt")}
+        try:
+            r = await self._http.put(f"{self._practice}{paths[table]}/{record['id']}", headers=self._headers, json=draft)
+        except httpx.HTTPError as exc:
+            raise AiError("Couldn't reach your tasks. Try again in a moment.") from exc
+        if r.status_code not in (200, 201):
+            raise AiError(f"Your tasks didn't accept the change ({r.status_code}).")

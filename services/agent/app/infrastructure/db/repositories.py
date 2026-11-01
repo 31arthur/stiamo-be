@@ -3,8 +3,15 @@ from datetime import UTC, datetime
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.application.ports import Channel, ChannelRepository, SettingsRepository, UserSettings
-from app.infrastructure.db.models import ChannelModel, SettingsModel
+from app.application.ports import (
+    Channel,
+    ChannelRepository,
+    DayPlan,
+    DayPlanRepository,
+    SettingsRepository,
+    UserSettings,
+)
+from app.infrastructure.db.models import ChannelModel, DayPlanModel, SettingsModel
 from app.infrastructure.security import SecretBox
 
 
@@ -17,17 +24,27 @@ class SqlSettingsRepository(SettingsRepository):
         if row is None:
             return None
         keys = {k: v for k, v in self._box.open(row.keys_sealed).items() if isinstance(v, str)}
-        return UserSettings(row.user_id, row.email, keys, dict(row.selection or {}), row.decision, dict(row.prompt or {}), dict(row.workspaces or {}), row.updated_at)
+        return UserSettings(row.user_id, row.email, keys, dict(row.selection or {}), row.decision, dict(row.prompt or {}), dict(row.workspaces or {}), row.updated_at, dict(row.planner or {}))
 
     async def save(self, s: UserSettings) -> None:
         row = await self._s.get(SettingsModel, s.user_id) or SettingsModel(user_id=s.user_id)
         row.email = s.email
         row.keys_sealed = self._box.seal(s.keys) if s.keys else None
         # Reassigned (not mutated) so the change is noticed.
-        row.selection, row.decision, row.prompt, row.workspaces = dict(s.selections), s.decision, dict(s.prompts), dict(s.workspaces)
+        row.selection, row.decision, row.prompt, row.workspaces, row.planner = dict(s.selections), s.decision, dict(s.prompts), dict(s.workspaces), dict(s.planner)
         row.updated_at = datetime.now(UTC)
         self._s.add(row)
         await self._s.flush()
+
+    async def planners(self) -> list[UserSettings]:
+        rows = (await self._s.execute(select(SettingsModel))).scalars()
+        out = []
+        for r in rows:
+            if (r.planner or {}).get("enabled"):
+                found = await self.get(r.user_id)
+                if found:
+                    out.append(found)
+        return out
 
 
 class SqlChannelRepository(ChannelRepository):
@@ -56,3 +73,30 @@ class SqlChannelRepository(ChannelRepository):
 
     async def delete(self, channel_id: str) -> None:
         await self._s.execute(delete(ChannelModel).where(ChannelModel.id == channel_id))
+
+
+def _plan(r: DayPlanModel) -> DayPlan:
+    return DayPlan(r.id, r.user_id, r.day, r.status, r.briefing, list(r.blocks or []), r.run_id, r.trigger, r.created_at, r.decided_at)
+
+
+class SqlDayPlanRepository(DayPlanRepository):
+    def __init__(self, session: AsyncSession) -> None:
+        self._s = session
+
+    async def for_day(self, user_id: str, day: str) -> DayPlan | None:
+        row = (await self._s.execute(select(DayPlanModel).where(DayPlanModel.user_id == user_id, DayPlanModel.day == day))).scalar_one_or_none()
+        return _plan(row) if row else None
+
+    async def recent(self, user_id: str, limit: int = 10) -> list[DayPlan]:
+        rows = (await self._s.execute(select(DayPlanModel).where(DayPlanModel.user_id == user_id).order_by(DayPlanModel.day.desc()).limit(limit))).scalars()
+        return [_plan(r) for r in rows]
+
+    async def get(self, user_id: str, plan_id: str) -> DayPlan | None:
+        row = await self._s.get(DayPlanModel, plan_id)
+        return _plan(row) if row and row.user_id == user_id else None
+
+    async def save(self, p: DayPlan) -> None:
+        row = await self._s.get(DayPlanModel, p.id) or DayPlanModel(id=p.id, user_id=p.user_id, day=p.day, created_at=p.created_at)
+        row.status, row.briefing, row.blocks, row.run_id, row.trigger, row.decided_at = p.status, p.briefing, list(p.blocks), p.run_id, p.trigger, p.decided_at
+        self._s.add(row)
+        await self._s.flush()

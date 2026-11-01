@@ -113,6 +113,10 @@ class Memo(DataGateway):
     async def drive_suggest(self, terms):
         return await self._inner.drive_suggest(terms)
 
+    async def save_record(self, table, record):
+        await self._inner.save_record(table, record)
+        self._memo.pop(f"records:{table}", None)
+
 
 @dataclass
 class Prepared:

@@ -8,6 +8,7 @@ from stiamo_common.db import make_engine, make_session_factory
 from stiamo_common.errors import install_error_handlers
 
 from app.agents import default_registry
+from app.application.daily import DailyManager
 from app.application.listeners import ListenerManager
 from app.application.schedules import ScheduleManager
 from app.application.services import Who
@@ -23,8 +24,8 @@ from app.infrastructure.llm.openai_compat import OpenAiCompatibleClient
 from app.infrastructure.mailevents import HttpMailEvents
 from app.infrastructure.messaging import HttpTelegramApi, HttpTwilioApi
 from app.infrastructure.security import JwtAccessTokens, SecretBox
-from app.presentation.deps import sync_listener
-from app.presentation.routers import agent, attention, channels, news, usage, webhooks, workflows
+from app.presentation.deps import sync_evening, sync_listener
+from app.presentation.routers import agent, attention, channels, dayplans, news, usage, webhooks, workflows
 
 
 async def start_listening(app: FastAPI) -> None:
@@ -38,6 +39,16 @@ async def start_listening(app: FastAPI) -> None:
                 await sync_listener(app, Who(w.user_id, s.email if s else ""), w.id, w.config, lambda wid, uid=w.user_id: _config_of(repo, uid, wid))
     except Exception:  # noqa: BLE001  a problem here must not keep the service from starting
         logging.getLogger(__name__).exception("could not start the mailbox listeners")
+
+
+async def start_evenings(app: FastAPI) -> None:
+    """After a restart, everyone whose evening plan is on gets it again at the same time."""
+    try:
+        async with app.state.session_factory() as session:
+            for s in await SqlSettingsRepository(session, app.state.box).planners():
+                sync_evening(app, Who(s.user_id, s.email), s.planner)
+    except Exception:  # noqa: BLE001  a problem here must not keep the service from starting
+        logging.getLogger(__name__).exception("could not start the evening plans")
 
 
 async def _config_of(repo, user_id: str, workflow_id: str):
@@ -59,7 +70,9 @@ def create_app(settings: Settings | None = None, *, mail_events=None, registry=N
         app.state.engine = engine
         app.state.session_factory = make_session_factory(engine)
         await start_listening(app)
+        await start_evenings(app)
         yield
+        await app.state.daily.close()
         await app.state.listeners.close()
         await app.state.schedules.close()
         await app.state.sweeps.close()
@@ -78,6 +91,8 @@ def create_app(settings: Settings | None = None, *, mail_events=None, registry=N
     app.state.sweeps = SweepManager()
     #: Agents that run every so many minutes (see application/schedules.py).
     app.state.schedules = ScheduleManager()
+    #: The daily planner's evening run, once a day at the time each person chose (see application/daily.py).
+    app.state.daily = DailyManager()
     #: Agents listening to their mailbox (see application/listeners.py).
     app.state.listeners = ListenerManager(mail_events or HttpMailEvents(http, settings.mail_url))
     app.state.llm_factory = llm_factory or (lambda provider, key: GeminiClient(key, http) if provider == "gemini" else OpenAiCompatibleClient(provider, key, http))
@@ -96,6 +111,7 @@ def create_app(settings: Settings | None = None, *, mail_events=None, registry=N
     app.include_router(usage.router)
     app.include_router(attention.router)
     app.include_router(news.router)
+    app.include_router(dayplans.router)
     app.include_router(workflows.router)
     app.include_router(webhooks.router)
 
