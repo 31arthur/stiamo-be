@@ -25,6 +25,8 @@ class PackContext:
     decision_model: str | None = None
     #: What is waiting in the owner's Attention queue (mail that matters, events to approve), when the agent may read it.
     attention: Callable[[], Awaitable[list[dict[str, Any]]]] | None = None
+    #: Keeps something the agent proposes (action, title, the lines to show, what approving does) and returns its id. None: the agent may not propose.
+    propose: Callable[[str, str, list[str], list[dict[str, Any]]], Awaitable[str]] | None = None
 
 
 class ToolPack(ABC):

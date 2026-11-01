@@ -419,3 +419,39 @@ class DayPlanRepository(ABC):
 
     @abstractmethod
     async def save(self, plan: DayPlan) -> None: ...
+
+
+@dataclass
+class Proposal:
+    """Something an agent suggests adding or changing. Kept until the person approves it (it is then saved) or drops it."""
+
+    id: str
+    user_id: str
+    agent_id: str
+    #: What kind: task.create, task.update, followUp.create, followUp.update, hearing.create, case.create, plan.create.
+    action: str
+    title: str
+    #: The details shown to the person, one per line.
+    lines: list[str]
+    #: What approving does, in order: {table, id, create, patch}. A create writes `patch` as the whole record; an update
+    #: merges it into the record as it is when approved.
+    ops: list[dict[str, Any]]
+    status: str  # pending | applied | dropped
+    channel_id: str | None
+    created_at: datetime
+    decided_at: datetime | None = None
+
+
+class ProposalRepository(ABC):
+    @abstractmethod
+    async def add(self, p: Proposal) -> None: ...
+
+    @abstractmethod
+    async def get(self, user_id: str, proposal_id: str) -> Proposal | None: ...
+
+    @abstractmethod
+    async def pending_in(self, user_id: str, channel_id: str, since: datetime) -> list[Proposal]:
+        """What was proposed in one chat since a time, still waiting, oldest first."""
+
+    @abstractmethod
+    async def save(self, p: Proposal) -> None: ...
