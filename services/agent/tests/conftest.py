@@ -9,6 +9,8 @@ from app.agents import AGENTS
 from app.application.ports import AccessTokens, DataGateway, DecisionClient, LlmClient, TelegramApi, TwilioApi
 from app.application.registry import AgentRegistry
 from app.application.toolpacks import PackRegistry
+from app.application.toolpacks.agenda import AgendaPack
+from app.application.toolpacks.attention import AttentionPack
 from app.application.toolpacks.cases import CasesPack
 from app.application.toolpacks.decisions import DecisionsPack
 from app.application.toolpacks.drive import DrivePack
@@ -69,6 +71,9 @@ class FakeDecisions(DecisionClient):
 class FakeData(DataGateway):
     def __init__(self) -> None:
         self.trashed: list[int] = []
+        #: What the planning tools read besides the cases and tasks: hearings, meetings, follow-ups, plans.
+        self.extra_hearings: list[dict] = []
+        self.tables: dict[str, list[dict]] = {}
         self.meetings: list[dict] = []
         #: News articles the feeds would give, newest first, and which feeds were asked.
         self.articles: list[dict] = []
@@ -91,19 +96,19 @@ class FakeData(DataGateway):
         return self._cases
 
     async def hearings(self):
-        return [{"id": "h1", "caseId": "c1", "date": "2999-01-01", "purpose": "Arguments", "outcome": {"status": "open"}}]
+        return [{"id": "h1", "caseId": "c1", "date": "2999-01-01", "purpose": "Arguments", "outcome": {"status": "open"}}, *self.extra_hearings]
 
     async def attachments(self):
         return []
 
     async def records(self, table):
-        if table == "tasks":
+        if table == "tasks" and "tasks" not in self.tables:
             return [
                 {"id": "t1", "title": "Pay the court fee", "status": "open", "workspace": "sb", "updatedAt": "2999-01-01T00:00:00Z"},
                 {"id": "t2", "title": "Buy milk", "workspace": "personal", "updatedAt": "2998-01-01T00:00:00Z"},
                 {"id": "t3", "title": "Old filing", "workspace": "sb", "updatedAt": "2001-01-01T00:00:00Z"},
             ]
-        return []
+        return self.tables.get(table, [])
 
     async def mail_uids(self, account_id, folder, since, before):
         if account_id == "down":
@@ -216,7 +221,7 @@ LIBRARIAN = AgentDefinition(id="librarian", name="Librarian", description="Finds
 
 
 def test_registry() -> AgentRegistry:
-    return AgentRegistry([*AGENTS, LIBRARIAN], PackRegistry([CasesPack(), DrivePack(), DecisionsPack()]))
+    return AgentRegistry([*AGENTS, LIBRARIAN], PackRegistry([CasesPack(), DrivePack(), DecisionsPack(), AgendaPack(), AttentionPack()]))
 
 
 class Rig:

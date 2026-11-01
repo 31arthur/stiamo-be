@@ -6,6 +6,7 @@ the pack has it; add a pack and any agent can opt in.
 """
 
 from abc import ABC, abstractmethod
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -22,6 +23,8 @@ class PackContext:
     today: str
     decisions: DecisionClient | None = None
     decision_model: str | None = None
+    #: What is waiting in the owner's Attention queue (mail that matters, events to approve), when the agent may read it.
+    attention: Callable[[], Awaitable[list[dict[str, Any]]]] | None = None
 
 
 class ToolPack(ABC):

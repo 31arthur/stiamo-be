@@ -310,7 +310,7 @@ class AgentService:
         today = date.today().isoformat()
         decision = s.decision or {}
         decisions = self._decisions(s.keys["openrouter"]) if decision.get("enabled") and "openrouter" in s.keys else None
-        ctx = PackContext(Memo(self._data(token)), today, decisions, decision.get("modelId") or DECISION_MODELS[0]["id"])
+        ctx = PackContext(Memo(self._data(token)), today, decisions, decision.get("modelId") or DECISION_MODELS[0]["id"], lambda: self._waiting(who))
         tools: list[Tool] = []
         context: dict[str, Any] = {"today": today, "user": who.name, "channel": channel}
         for name in agent.packs:
@@ -321,6 +321,15 @@ class AgentService:
         if len(names) != len(set(names)):
             raise RuntimeError(f"Agent {agent.id!r} gets the same tool name from two packs: {sorted({n for n in names if names.count(n) > 1})}")
         return Prepared(s, prompt or self._prompt(agent, s), tools, context)
+
+    async def _waiting(self, who: Who) -> list[dict[str, Any]]:
+        """What is waiting in the Attention queue, for the agents that read it."""
+        agents = {w.id: w for w in await self._workflows.all(who.user_id)}
+        out = []
+        for r in await self._workflows.queue(who.user_id, ["queued", "event_proposed"]):
+            d = r.data or {}
+            out.append({"from": agents[r.agent_id].name if r.agent_id in agents else "", "title": r.title, "summary": d.get("summary") or r.title, "priority": d.get("priority") or "normal", "action": d.get("action"), "due": d.get("due"), "event": d.get("event"), "status": r.status})
+        return out
 
     @staticmethod
     def _tools_for(package: Package, tools: list[Tool]) -> list[Tool]:
