@@ -49,9 +49,10 @@ class HttpDataGateway(DataGateway):
     async def records(self, table: str) -> list[dict[str, Any]]:
         from app.domain.workflows import TABLES
 
-        if table not in TABLES:
+        readable = {**TABLES, "plans": "/v1/plans"}
+        if table not in readable:
             raise AiError("That collection can't be read.")
-        return await self._all(f"{self._practice}{TABLES[table]}")
+        return await self._all(f"{self._practice}{readable[table]}")
 
     async def _mail_error(self, r: httpx.Response) -> AiError:
         try:
