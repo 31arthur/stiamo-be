@@ -38,6 +38,17 @@ FULL_READ_EVERY = timedelta(hours=24)
 #: A Google access token is good for an hour: kept this long, in memory only.
 ACCESS_SECONDS = 50 * 60
 MAX_ERRORS = 5
+#: Most events written to Google in one run.
+MAX_WRITES = 150
+
+
+def _within(budget: int, *lists: list) -> tuple[list, ...]:
+    """Each list cut to what is left of the budget, in order: removals first, then changes, then additions."""
+    out = []
+    for items in lists:
+        out.append(items[: max(0, budget)])
+        budget -= len(out[-1])
+    return tuple(out)
 
 
 class AccessCache:
@@ -294,10 +305,11 @@ class CalendarService:
         if not target and not links:
             return {"added": 0, "changed": 0, "removed": 0}
         tz = await self.timezone_of(user_id)
-        meetings = await self._practice.records(token, "meetings")
-        hearings = await self._practice.records(token, "hearings")
-        cases = await self._practice.records(token, "cases")
-        plan = plan_export(desired_events(meetings, hearings, cases, tz, datetime.now(UTC).date()), links, target)
+        records = {t: await self._practice.records(token, t) for t in ("meetings", "hearings", "cases", "tasks", "follow-ups")}
+        desired = desired_events(records["meetings"], records["hearings"], records["cases"], tz, datetime.now(UTC).date(), tasks=records["tasks"], follow_ups=records["follow-ups"])
+        plan = plan_export(desired, links, target)
+        # Google limits how fast events can be written, so a first run with a lot to send does it over a few runs.
+        plan.delete, plan.update, plan.insert = _within(MAX_WRITES, plan.delete, plan.update, plan.insert)
         counts = {"added": 0, "changed": 0, "removed": 0}
 
         async def at(source_id: str) -> tuple[str, str]:

@@ -106,7 +106,7 @@ class FakeGoogle(GoogleGateway):
 
 class FakePractice(PracticeGateway):
     def __init__(self) -> None:
-        self.tables: dict[str, list[dict[str, Any]]] = {"meetings": [], "hearings": [], "cases": []}
+        self.tables: dict[str, list[dict[str, Any]]] = {"meetings": [], "hearings": [], "cases": [], "tasks": [], "follow-ups": []}
         self.tokens: list[str] = []
 
     async def records(self, token: str, table: str) -> list[dict[str, Any]]:

@@ -2,21 +2,27 @@
 
 Connect as many Google accounts as you like, each to the workspace it belongs to (your S&B calendar to S&B, your own to Personal…).
 In a workspace you see that workspace's calendars; in **All workspaces** you see them all together, each in its own colour.
-Stiamo's meetings and hearings can also be sent to a calendar you choose for each workspace, so Google has them too.
+Everything on your Stiamo schedule can also be sent to a calendar you choose for each workspace, so Google has it too: meetings,
+hearings, tasks and follow-ups.
 
 ```
 Google account ──OAuth (read + write events)──► calendar service ──► the Calendar page (one workspace, or all together)
                                                      ▲   │
-                       meetings and hearings ────────┘   └──► one chosen Google calendar per workspace
+                       meetings, hearings, tasks, follow-ups ┘   └──► one chosen Google calendar per workspace
 ```
 
 ## What it can and can't do
 
 - **Reads** every calendar you leave switched on (the main one, shared team calendars, holidays), kept current every 5 minutes
   and whenever you press **Sync now**. It reads from 30 days back to about 13 months ahead, with recurring events unrolled.
-- **Sends** open meetings and hearings (from a week ago onwards) to the calendar you choose for their workspace: an edit in Stiamo
-  edits it in Google, and deleting it in Stiamo deletes the copy in Google. Hearings go to the S&B workspace. Hearings with no time
-  of day are all-day entries. Tasks and follow-ups are not sent.
+- **Sends** to the calendar you choose for each workspace (from a week ago onwards):
+  - *Meetings and appointments* at their time. *Hearings* at their time (all-day when they have none), titled `Hearing: purpose (SA-2026-001)`; they go to S&B.
+  - *Tasks* that have a time on the planner, at that time; otherwise as an all-day entry on their due date, titled `Task: …`. A task with no
+    day isn't sent.
+  - *Follow-ups* with a day, at their time or all day, titled `Call: …`, `Message: …` and so on.
+  - Tasks and follow-ups that are **done or cancelled come down** from Google. An edit in Stiamo edits the event, and deleting an item in
+    Stiamo deletes it. Moving a task on the planner moves it in Google within a few minutes.
+  - Google limits how fast events can be written, so a large first run (a long list of tasks) is spread over a few runs of at most 150 each.
 - **Doesn't** change events that came from Google. Open them in Google (each has a link). What Stiamo sent is marked, so it is never
   shown twice.
 - Access it asks Google for: the list of your calendars, and events (read and write). Nothing else: not your mail, contacts or

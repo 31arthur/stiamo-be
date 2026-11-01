@@ -131,7 +131,7 @@ class HttpPractice(PracticeGateway):
         self._http, self._url = http, practice_url.rstrip("/")
 
     async def records(self, token: str, table: str) -> list[dict[str, Any]]:
-        if table not in ("meetings", "hearings", "cases"):
+        if table not in ("meetings", "hearings", "cases", "tasks", "follow-ups"):
             raise GoogleError("That can't be read.")
         out: list[dict[str, Any]] = []
         after: str | None = None
