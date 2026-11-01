@@ -1,7 +1,19 @@
 from datetime import UTC, datetime, timedelta
 from urllib.parse import parse_qs, urlparse
 
-from app.domain.calendar import Event, Link, Source, desired_events, digest, event_from_google, plan_export, view
+from app.application.service import _within
+from app.domain.calendar import (
+    Event,
+    Link,
+    Source,
+    body_for_follow_up,
+    body_for_task,
+    desired_events,
+    digest,
+    event_from_google,
+    plan_export,
+    view,
+)
 from sqlalchemy import text
 
 from .conftest import APP, event, headers
@@ -49,6 +61,32 @@ def test_what_should_be_in_google_follows_the_open_meetings_and_hearings():
     ws, hearing = out["hearing:h1"]
     assert ws == "sb" and hearing["summary"] == "Hearing: Arguments (SA-2026-001)" and hearing["location"] == "JCL Kurnool"
     assert out["hearing:h2"][1]["start"] == {"date": "2026-11-08"}  # no time of day: an all-day entry
+
+
+def test_tasks_and_follow_ups_go_on_the_calendar_at_their_time_or_all_day():
+    planned = body_for_task({"id": "t1", "title": "Draft the rejoinder", "priority": "high", "notes": "Use the wage list", "slot": {"date": "2026-11-05", "start": 660, "duration": 90}}, "Asia/Kolkata")
+    assert planned["summary"] == "Task: Draft the rejoinder" and planned["start"]["dateTime"].startswith("2026-11-05T11:00:00+05:30") and planned["end"]["dateTime"].startswith("2026-11-05T12:30:00+05:30")
+    assert planned["description"] == "Use the wage list\nPriority: high" and planned["extendedProperties"]["private"]["stiamoRef"] == "task:t1"
+    assert body_for_task({"id": "t2", "title": "Pay the fee", "dueDate": "2026-11-06"}, "Asia/Kolkata")["start"] == {"date": "2026-11-06"}
+    assert body_for_task({"id": "t3", "title": "Someday"}, "Asia/Kolkata") is None
+    call = body_for_follow_up({"id": "f1", "title": "the advocate", "channel": "call", "contact": "Ravindra", "due": {"date": "2026-11-05", "time": 900}, "duration": 20}, "Asia/Kolkata")
+    assert call["summary"] == "Call: the advocate" and call["description"] == "With Ravindra" and call["end"]["dateTime"].startswith("2026-11-05T15:20:00+05:30")
+    assert body_for_follow_up({"id": "f2", "title": "Hemla", "channel": "message", "due": {"date": "2026-11-07"}}, "Asia/Kolkata")["summary"] == "Message: Hemla"
+    assert body_for_follow_up({"id": "f3", "title": "No day"}, "Asia/Kolkata") is None
+
+
+def test_only_open_tasks_and_follow_ups_stay_on_the_calendar():
+    today = datetime(2026, 11, 1, tzinfo=UTC).date()
+    tasks = [{"id": "a", "title": "Open", "dueDate": "2026-11-05", "workspace": "sb"}, {"id": "b", "title": "Done", "dueDate": "2026-11-05", "outcome": {"status": "done"}}, {"id": "c", "title": "Long ago", "dueDate": "2026-08-01"}, {"id": "d", "title": "No day"}]
+    follow_ups = [{"id": "x", "title": "Call", "due": {"date": "2026-11-05"}, "workspace": "sb"}, {"id": "y", "title": "Finished", "due": {"date": "2026-11-05"}, "outcome": {"status": "done"}}]
+    out = desired_events([], [], [], "Asia/Kolkata", today, tasks=tasks, follow_ups=follow_ups)
+    assert sorted(out) == ["followUp:x", "task:a"] and out["task:a"][0] == "sb"  # a finished one is not wanted, so it is taken down from Google
+
+
+def test_a_big_first_run_is_spread_over_several():
+    removals, changes, additions = _within(5, list(range(2)), list(range(2)), list(range(10)))
+    assert (len(removals), len(changes), len(additions)) == (2, 2, 1)
+    assert _within(0, [1], [2], [3]) == ([], [], [])
 
 
 def test_the_export_plan_adds_changes_moves_and_removes_only_what_it_must():
@@ -218,19 +256,21 @@ async def with_export(rig):
     rig.practice.tables["cases"] = [{"id": "c1", "reference": "SA-2026-001", "title": "Alur"}]
     rig.practice.tables["meetings"] = [{"id": "m1", "title": "Union leaders", "workspace": "sb", "slot": {"date": SOON, "start": 600, "duration": 60}, "outcome": {"status": "open"}}, {"id": "m2", "title": "Dentist", "workspace": "personal", "slot": {"date": SOON, "start": 1000, "duration": 30}}]
     rig.practice.tables["hearings"] = [{"id": "h1", "caseId": "c1", "date": SOON, "time": 840, "purpose": "Arguments", "outcome": {"status": "open"}}]
+    rig.practice.tables["tasks"] = [{"id": "t1", "title": "Draft the rejoinder", "workspace": "sb", "slot": {"date": SOON, "start": 660, "duration": 90}, "outcome": {"status": "open"}}, {"id": "t2", "title": "Buy stamps", "workspace": "personal", "dueDate": SOON}]
+    rig.practice.tables["follow-ups"] = [{"id": "f1", "title": "the advocate", "channel": "call", "workspace": "sb", "due": {"date": SOON, "time": 900}, "outcome": {"status": "open"}}]
     return work
 
 
 async def test_meetings_and_hearings_go_to_the_calendar_chosen_for_their_workspace(rig):
     await with_export(rig)
     out = await rig.sync()
-    assert out["sent"] == {"added": 2, "changed": 0, "removed": 0}  # the dentist is personal and nothing is chosen for personal
+    assert out["sent"] == {"added": 4, "changed": 0, "removed": 0}  # the dentist and the stamps are personal, and nothing is chosen for personal
     sent = {b["extendedProperties"]["private"]["stiamoRef"]: (cal, b) for verb, cal, _, b in rig.google.written if verb == "insert"}
-    assert sorted(sent) == ["hearing:h1", "meeting:m1"] and sent["meeting:m1"][0] == "a@x.org" and sent["hearing:h1"][1]["summary"] == "Hearing: Arguments (SA-2026-001)"
+    assert sorted(sent) == ["followUp:f1", "hearing:h1", "meeting:m1", "task:t1"] and sent["task:t1"][1]["summary"] == "Task: Draft the rejoinder" and sent["followUp:f1"][1]["summary"] == "Call: the advocate" and sent["meeting:m1"][0] == "a@x.org" and sent["hearing:h1"][1]["summary"] == "Hearing: Arguments (SA-2026-001)"
     assert rig.practice.tokens and all(t for t in rig.practice.tokens)
     again = await rig.sync()
     assert again["sent"] == {"added": 0, "changed": 0, "removed": 0}  # nothing changed, so nothing is sent twice
-    assert len([w for w in rig.google.written if w[0] == "insert"]) == 2
+    assert len([w for w in rig.google.written if w[0] == "insert"]) == 4
 
 
 async def test_a_change_in_stiamo_changes_google_and_a_deleted_one_is_taken_down(rig):
@@ -238,9 +278,12 @@ async def test_a_change_in_stiamo_changes_google_and_a_deleted_one_is_taken_down
     await rig.sync()
     rig.practice.tables["meetings"][0]["title"] = "Union leaders (moved)"
     rig.practice.tables["hearings"] = []
+    rig.practice.tables["tasks"][0]["slot"]["start"] = 720  # moved on the planner
+    rig.practice.tables["follow-ups"][0]["outcome"] = {"status": "done"}  # finished
     out = await rig.sync()
-    assert out["sent"] == {"added": 0, "changed": 1, "removed": 1}
-    verbs = [(v, b.get("summary")) for v, _, _, b in rig.google.written[2:]]
+    assert out["sent"] == {"added": 0, "changed": 2, "removed": 2}
+    verbs = [(v, b.get("summary")) for v, _, _, b in rig.google.written[4:]]
+    assert ("update", "Task: Draft the rejoinder") in verbs
     assert ("update", "Union leaders (moved)") in verbs and any(v == "delete" for v, _ in verbs)
 
 

@@ -194,13 +194,47 @@ def body_for_hearing(h: dict[str, Any], case: dict[str, Any] | None, tz: str) ->
     return body
 
 
+CHANNEL_LABELS = {"call": "Call", "message": "Message", "email": "Email", "visit": "Visit"}
+
+
+def _is_open(r: dict[str, Any]) -> bool:
+    return (r.get("outcome") or {}).get("status", "open") == "open"
+
+
+def body_for_task(t: dict[str, Any], tz: str) -> dict[str, Any] | None:
+    """A task on the calendar: at its planned time when it has one, otherwise as an all-day entry on its due date. None when it has no day."""
+    slot = t.get("slot") or {}
+    if slot.get("date") and slot.get("start") is not None:
+        start, end = _timed(slot["date"], int(slot["start"]), int(slot.get("duration") or t.get("estimate") or DEFAULT_MEETING_MINUTES), tz)
+    elif t.get("dueDate"):
+        start, end = _all_day(t["dueDate"])
+    else:
+        return None
+    notes = [x for x in (t.get("notes"), f"Priority: {t['priority']}" if t.get("priority") not in (None, "normal") else None) if x]
+    return {"summary": f"Task: {t.get('title') or 'untitled'}", "description": "\n".join(notes), "start": start, "end": end, "extendedProperties": {"private": {MARK: f"task:{t['id']}"}}}
+
+
+def body_for_follow_up(f: dict[str, Any], tz: str) -> dict[str, Any] | None:
+    """A call or message to make: at its time when it has one, otherwise all day on its day. None when it has no day."""
+    due = f.get("due") or {}
+    if not due.get("date"):
+        return None
+    if due.get("time") is not None:
+        start, end = _timed(due["date"], int(due["time"]), int(f.get("duration") or 15), tz)
+    else:
+        start, end = _all_day(due["date"])
+    notes = [x for x in (f"With {f['contact']}" if f.get("contact") else None, f.get("notes")) if x]
+    return {"summary": f"{CHANNEL_LABELS.get(f.get('channel') or 'call', 'Call')}: {f.get('title') or 'follow-up'}", "description": "\n".join(notes), "start": start, "end": end, "extendedProperties": {"private": {MARK: f"followUp:{f['id']}"}}}
+
+
 def digest(body: dict[str, Any]) -> str:
     """Changes when anything Stiamo sends changes, so an event is only updated in Google when it has to be."""
     return hashlib.sha256(json.dumps(body, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:20]
 
 
-def desired_events(meetings: list[dict[str, Any]], hearings: list[dict[str, Any]], cases: list[dict[str, Any]], tz: str, today: date, back_days: int = 7) -> dict[str, tuple[str, dict[str, Any]]]:
-    """What should be in Google right now: ref -> (workspace, event body). Open meetings and hearings from a week ago onwards."""
+def desired_events(meetings: list[dict[str, Any]], hearings: list[dict[str, Any]], cases: list[dict[str, Any]], tz: str, today: date, *, tasks: list[dict[str, Any]] | None = None, follow_ups: list[dict[str, Any]] | None = None, back_days: int = 7) -> dict[str, tuple[str, dict[str, Any]]]:
+    """What should be in Google right now: ref -> (workspace, event body). Meetings and hearings (unless cancelled), and the tasks and follow-ups
+    still open (done ones come down), from a week ago onwards."""
     floor = (today - timedelta(days=back_days)).isoformat()
     by_id = {c["id"]: c for c in cases}
     out: dict[str, tuple[str, dict[str, Any]]] = {}
@@ -212,6 +246,15 @@ def desired_events(meetings: list[dict[str, Any]], hearings: list[dict[str, Any]
         if (h.get("outcome") or {}).get("status", "open") == "cancelled" or h.get("date", "") < floor:
             continue
         out[f"hearing:{h['id']}"] = ("sb", body_for_hearing(h, by_id.get(h.get("caseId") or ""), tz))
+    for t in tasks or []:
+        body = body_for_task(t, tz) if _is_open(t) else None
+        day = ((t.get("slot") or {}).get("date")) or t.get("dueDate") or ""
+        if body and day >= floor:
+            out[f"task:{t['id']}"] = (t.get("workspace") or "personal", body)
+    for f in follow_ups or []:
+        body = body_for_follow_up(f, tz) if _is_open(f) else None
+        if body and f["due"]["date"] >= floor:
+            out[f"followUp:{f['id']}"] = (f.get("workspace") or "personal", body)
     return out
 
 
