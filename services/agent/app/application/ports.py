@@ -309,6 +309,10 @@ class WorkflowRepository(ABC):
     async def get(self, user_id: str, workflow_id: str) -> Workflow | None: ...
 
     @abstractmethod
+    async def listening(self) -> list[Workflow]:
+        """Every agent, for every person, that is set to listen to its mailbox. Read when the service starts."""
+
+    @abstractmethod
     async def save(self, workflow: Workflow) -> None:
         """Creates it, or replaces it and keeps the earlier version's configuration."""
 

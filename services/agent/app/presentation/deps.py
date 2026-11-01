@@ -63,6 +63,33 @@ def workflow_service(request: Request, session: Session) -> WorkflowService:
     return build_workflow_service(request.app, session)
 
 
+async def sync_listener(app: FastAPI, who: Who, workflow_id: str, config: dict, resolve) -> None:
+    """Starts, changes or stops listening for one agent to match its setup. `resolve` finds the config of the agent it goes on from."""
+    from app.domain.workflows import WorkflowConfig
+
+    listeners = app.state.listeners
+    cfg = WorkflowConfig(**config)
+    if not cfg.listen:
+        listeners.stop(workflow_id)
+        return
+    source = cfg
+    if cfg.source.kind == "agent":  # an agent that goes on from another listens to the mailbox that one reads
+        up = await resolve(cfg.source.upstream_id or "")
+        if up is None:
+            listeners.stop(workflow_id)
+            return
+        source = WorkflowConfig(**up)
+    if source.source.kind != "mail":
+        listeners.stop(workflow_id)
+        return
+
+    async def trigger() -> None:
+        if not app.state.sweeps.is_active(workflow_id):
+            app.state.sweeps.start(workflow_id, who.user_id, sweep_run(app, who, workflow_id))
+
+    listeners.ensure(workflow_id, source.source.account_ids, source.source.folder, lambda: app.state.tokens.mint(who.user_id, who.email), trigger)
+
+
 def sweep_run(app: FastAPI, who: Who, workflow_id: str):
     """One run for a background sweep: its own session, and a fresh token for the owner (the browser's expires in minutes)."""
 
