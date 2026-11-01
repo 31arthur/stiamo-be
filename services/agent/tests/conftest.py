@@ -73,6 +73,7 @@ class FakeData(DataGateway):
         self.trashed: list[int] = []
         #: What the planning tools read besides the cases and tasks: hearings, meetings, follow-ups, plans.
         self.extra_hearings: list[dict] = []
+        self.saved: list[tuple[str, dict]] = []
         self.tables: dict[str, list[dict]] = {}
         self.meetings: list[dict] = []
         #: News articles the feeds would give, newest first, and which feeds were asked.
@@ -143,6 +144,9 @@ class FakeData(DataGateway):
         self.trashed.extend(uids)
         self.trashed_by.extend((account_id, u) for u in uids)
         return len(uids)
+
+    async def save_record(self, table, record):
+        self.saved.append((table, record))
 
     async def drive_available(self):
         return True

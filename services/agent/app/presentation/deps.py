@@ -8,14 +8,15 @@ from typing import Annotated
 from fastapi import Depends, FastAPI, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
-from stiamo_common.errors import Unauthorized
+from stiamo_common.errors import Conflict, Unauthorized
 from stiamo_common.security import Principal, make_principal_dependency
 
 from app.application.channels import ChannelService
+from app.application.dayplans import DayPlanService, planner_settings
 from app.application.services import AgentService, Who
 from app.application.workflows import WorkflowService
 from app.config import get_settings
-from app.infrastructure.db.repositories import SqlChannelRepository, SqlSettingsRepository
+from app.infrastructure.db.repositories import SqlChannelRepository, SqlDayPlanRepository, SqlSettingsRepository
 from app.infrastructure.db.workflows import SqlWorkflowRepository
 
 current_principal = make_principal_dependency(lambda: get_settings().token_settings())
@@ -52,6 +53,38 @@ def build_services(app: FastAPI, session: AsyncSession) -> tuple[AgentService, C
     agent = AgentService(SqlSettingsRepository(session, s.box), s.registry, s.runs, SqlWorkflowRepository(session), s.llm_factory, s.decision_factory, s.data_factory, s.settings.max_steps)
     channels = ChannelService(SqlChannelRepository(session, s.box), agent, s.telegram, s.twilio, s.tokens, public_url=s.settings.public_url, pairing_minutes=s.settings.pairing_minutes, memory=s.chat_memory)
     return agent, channels
+
+
+def build_day_plans(app: FastAPI, session: AsyncSession) -> DayPlanService:
+    agent, channels = build_services(app, session)
+    return DayPlanService(SqlDayPlanRepository(session), SqlSettingsRepository(session, app.state.box), agent, app.state.data_factory, channels.announce)
+
+
+def evening_run(app: FastAPI, who: Who):
+    """The planner's evening: its own session and a fresh token for the owner (nobody is signed in at nine at night)."""
+
+    async def run_once() -> None:
+        async with app.state.session_factory() as session:
+            try:
+                try:
+                    await build_day_plans(app, session).generate(who, app.state.tokens.mint(who.user_id, who.email), trigger="evening", force=False, announce=True)
+                except Conflict:
+                    pass  # tomorrow was planned and approved already; leave it
+                await session.commit()
+            except Exception:
+                await session.rollback()
+                raise
+
+    return run_once
+
+
+def sync_evening(app: FastAPI, who: Who, planner: dict) -> None:
+    """Starts, moves or stops the evening plan to match what the person set."""
+    p = planner_settings(planner)
+    if p["enabled"]:
+        app.state.daily.ensure(who.user_id, p["time"], p["timezone"], evening_run(app, who))
+    else:
+        app.state.daily.stop(who.user_id)
 
 
 def build_workflow_service(app: FastAPI, session: AsyncSession) -> WorkflowService:
