@@ -9,7 +9,9 @@ from app.application.toolpacks.common import limit, text
 from app.domain.dayplan import (
     DAY_END,
     DAY_START,
+    all_day_on,
     busy_blocks,
+    calendar_on,
     check_blocks,
     clock,
     follow_ups_on,
@@ -57,6 +59,8 @@ class AgendaPack(ToolPack):
         hearings, meetings = await data.hearings(), await data.records("meetings")
         tasks, follow_ups = await data.records("tasks"), await data.records("follow-ups")
         plans = {p["id"]: p for p in await data.records("plans")}
+        # What is in the person's Google calendars: busy time the plan must work around, though Stiamo can't move it.
+        calendar = await data.calendar_events(today, (date.fromisoformat(today) + timedelta(days=60)).isoformat())
 
         def case_ref(r: dict[str, Any]) -> str | None:
             rel = r.get("related") or r.get("subject") or {}
@@ -91,12 +95,14 @@ class AgendaPack(ToolPack):
 
         async def day_agenda(a: dict[str, Any]) -> ToolOutput:
             day = _day(a, tomorrow(today))
-            busy = busy_blocks(day, hearings, meetings, tasks, follow_ups)
+            busy = busy_blocks(day, hearings, meetings, tasks, follow_ups, calendar=calendar)
             free = free_windows(busy)
             out = {
                 "date": day,
                 "hearings": [hearing_card(h) for h in hearings_on(day, hearings)],
                 "meetings": [meeting_card(m) for m in meetings_on(day, meetings)],
+                "calendarEvents": [{"time": f"{clock(e['startMinute'])}–{clock(e.get('endMinute'))}", "title": e.get("title"), "calendar": e.get("calendar"), "where": e.get("location") or None} for e in calendar_on(day, calendar)],
+                "allDayEvents": [e.get("title") for e in all_day_on(day, calendar)],
                 "followUps": [follow_up_card(f) for f in follow_ups_on(day, follow_ups)],
                 "tasks": [task_card(t) for t in ranked(tasks_on(day, tasks))],
                 "overdueTasks": [task_card(t) for t in ranked(overdue_tasks(day, tasks))][:15],
@@ -108,7 +114,7 @@ class AgendaPack(ToolPack):
 
         async def free_time(a: dict[str, Any]) -> ToolOutput:
             day = _day(a, tomorrow(today))
-            free = free_windows(busy_blocks(day, hearings, meetings, tasks, follow_ups))
+            free = free_windows(busy_blocks(day, hearings, meetings, tasks, follow_ups, calendar=calendar))
             return ToolOutput({"date": day, "workingDay": f"{clock(DAY_START)}–{clock(DAY_END)}", "freeWindows": [{"from": clock(s), "to": clock(e), "minutes": e - s} for s, e in free]})
 
         async def upcoming(a: dict[str, Any]) -> ToolOutput:
@@ -121,6 +127,7 @@ class AgendaPack(ToolPack):
                     "date": day,
                     "hearings": [f"{clock(h.get('time')) if h.get('time') is not None else 'time not set'} {h.get('purpose') or 'hearing'} ({(cases.get(h.get('caseId') or '') or {}).get('reference', '?')})" for h in hearings_on(day, hearings)],
                     "meetings": [m.get("title") for m in meetings_on(day, meetings)],
+                    "calendar": [e.get("title") for e in (*all_day_on(day, calendar), *calendar_on(day, calendar))],
                     "tasksDue": [t.get("title") for t in tasks if is_open(t) and t.get("dueDate") == day],
                     "followUpsDue": [f.get("title") for f in follow_ups_on(day, follow_ups)],
                     "plansDue": [p.get("title") for p in plans.values() if p.get("status") == "active" and p.get("dueDate") == day],
@@ -152,7 +159,7 @@ class AgendaPack(ToolPack):
                 length = int(length) if isinstance(length, (int, float)) and not isinstance(length, bool) else default
                 blocks.append({"kind": kind, "id": ident, "title": record.get("title", ""), "start": int(start), "duration": length})
             skip = {f"{b['kind']}:{b['id']}" for b in blocks}
-            problems += check_blocks(blocks, busy_blocks(day, hearings, meetings, tasks, follow_ups, skip=skip))
+            problems += check_blocks(blocks, busy_blocks(day, hearings, meetings, tasks, follow_ups, skip=skip, calendar=calendar))
             if problems:
                 return ToolOutput({"ok": False, "problems": problems, "hint": "Fix these and call propose_schedule again."})
             if not blocks:

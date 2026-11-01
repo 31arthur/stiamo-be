@@ -35,6 +35,8 @@ class Settings(BaseSettings):
     files_url: str = "http://files:8000"
     drive_url: str = "http://drive:8000"
     mail_url: str = "http://mail:8000"
+    #: The calendar service: the Google events the planning agents treat as busy time.
+    calendar_url: str = "http://calendar:8000"
 
     timeout_seconds: float = 60.0
     max_steps: int = 8

@@ -203,6 +203,7 @@ services:
       AGENT_FILES_URL: http://files:8000
       AGENT_DRIVE_URL: http://drive:8000
       AGENT_MAIL_URL: http://mail:8000
+      AGENT_CALENDAR_URL: http://calendar:8000
     depends_on:
       db: { condition: service_healthy }
     networks: [stiamo-net, traefik-proxy]

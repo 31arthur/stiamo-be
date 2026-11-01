@@ -97,7 +97,7 @@ def create_app(settings: Settings | None = None, *, mail_events=None, registry=N
     app.state.listeners = ListenerManager(mail_events or HttpMailEvents(http, settings.mail_url))
     app.state.llm_factory = llm_factory or (lambda provider, key: GeminiClient(key, http) if provider == "gemini" else OpenAiCompatibleClient(provider, key, http))
     app.state.decision_factory = decision_factory or (lambda key: JevClient(key, http))
-    app.state.data_factory = data_factory or (lambda token: HttpDataGateway(http, token, settings.practice_url, settings.files_url, settings.drive_url, settings.mail_url))
+    app.state.data_factory = data_factory or (lambda token: HttpDataGateway(http, token, settings.practice_url, settings.files_url, settings.drive_url, settings.mail_url, settings.calendar_url))
     app.state.telegram = telegram or HttpTelegramApi(http)
     app.state.twilio = twilio or HttpTwilioApi(http)
     app.state.tokens = tokens or JwtAccessTokens(settings.token_settings())

@@ -75,6 +75,8 @@ class FakeData(DataGateway):
         #: What the planning tools read besides the cases and tasks: hearings, meetings, follow-ups, plans.
         self.extra_hearings: list[dict] = []
         self.saved: list[tuple[str, dict]] = []
+        #: Events in the owner's Google calendars, as the calendar service gives them.
+        self.calendar: list[dict] = []
         self.tables: dict[str, list[dict]] = {}
         self.meetings: list[dict] = []
         #: News articles the feeds would give, newest first, and which feeds were asked.
@@ -145,6 +147,9 @@ class FakeData(DataGateway):
         self.trashed.extend(uids)
         self.trashed_by.extend((account_id, u) for u in uids)
         return len(uids)
+
+    async def calendar_events(self, start, end):
+        return [e for e in self.calendar if start <= e["date"] <= end]
 
     async def save_record(self, table, record):
         self.saved.append((table, record))
