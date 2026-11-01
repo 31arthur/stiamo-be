@@ -210,7 +210,8 @@ def item_from_mail(msg: dict[str, Any], uid_validity: int, account_id: str = "")
     sender = msg.get("sender") or {}
     address = str(sender.get("address") or "").lower()
     who = f"{sender.get('name')} <{address}>" if sender.get("name") else address
-    text = f"From: {who}\nSubject: {msg.get('subject', '')}\n\n{msg.get('snippet', '')}"
+    attached = "Attachment: yes\n" if msg.get("hasAttachments") else ""  # it can't open attachments, but it can tell there is one
+    text = f"From: {who}\nSubject: {msg.get('subject', '')}\n{attached}\n{msg.get('snippet', '')}"
     return Item(f"{account_id}:{uid_validity}:{msg['uid']}", str(msg.get("subject") or "(no subject)")[:120], text[:MAX_ITEM_CHARS], msg.get("date"), {"from": address})
 
 
