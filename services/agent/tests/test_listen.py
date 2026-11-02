@@ -93,8 +93,9 @@ async def test_listening_follows_the_agents_setup(rig):
         await asyncio.sleep(0.02)
     assert len(runs) >= 1
 
+    before = rig.app.state.listeners.status(wid)["runs"]
     rig.events.poke()  # more new mail
-    assert await until(lambda: rig.app.state.listeners.status(wid)["runs"] >= 3)
+    assert await until(lambda: rig.app.state.listeners.status(wid)["runs"] > before)  # starts another run (how many came before depends on how wake-ups merged)
 
     off = config(listen=False)
     await rig.client.put(f"{BASE}/{wid}", json={"name": "Spam filter", "description": "", "config": off}, headers=headers())
