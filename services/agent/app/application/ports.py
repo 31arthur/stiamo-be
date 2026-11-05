@@ -459,3 +459,33 @@ class ProposalRepository(ABC):
 
     @abstractmethod
     async def save(self, p: Proposal) -> None: ...
+
+
+@dataclass
+class Conversation:
+    """One thread with one agent: what was asked and answered (for showing), and what the model was last told (for carrying on)."""
+
+    id: str
+    user_id: str
+    agent_id: str
+    #: A workspace id, or "all".
+    workspace: str
+    title: str
+    turns: list[dict[str, Any]]
+    messages: list[dict[str, Any]]
+    created_at: datetime
+    updated_at: datetime
+
+
+class ConversationRepository(ABC):
+    @abstractmethod
+    async def recent(self, user_id: str, workspace: str | None, limit: int = 200) -> list[Conversation]: ...
+
+    @abstractmethod
+    async def get(self, user_id: str, conversation_id: str) -> Conversation | None: ...
+
+    @abstractmethod
+    async def save(self, c: Conversation) -> None: ...
+
+    @abstractmethod
+    async def delete(self, user_id: str, conversation_id: str) -> None: ...

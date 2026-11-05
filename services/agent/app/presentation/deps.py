@@ -12,6 +12,7 @@ from stiamo_common.errors import Conflict, Unauthorized
 from stiamo_common.security import Principal, make_principal_dependency
 
 from app.application.channels import ChannelService
+from app.application.conversations import ConversationService
 from app.application.dayplans import DayPlanService, planner_settings
 from app.application.proposals import ProposalService
 from app.application.services import AgentService, Who
@@ -19,6 +20,7 @@ from app.application.workflows import WorkflowService
 from app.config import get_settings
 from app.infrastructure.db.repositories import (
     SqlChannelRepository,
+    SqlConversationRepository,
     SqlDayPlanRepository,
     SqlProposalRepository,
     SqlSettingsRepository,
@@ -59,6 +61,11 @@ def build_services(app: FastAPI, session: AsyncSession) -> tuple[AgentService, C
     agent = AgentService(SqlSettingsRepository(session, s.box), s.registry, s.runs, SqlWorkflowRepository(session), s.llm_factory, s.decision_factory, s.data_factory, s.settings.max_steps, SqlProposalRepository(session))
     channels = ChannelService(SqlChannelRepository(session, s.box), agent, s.telegram, s.twilio, s.tokens, public_url=s.settings.public_url, pairing_minutes=s.settings.pairing_minutes, memory=s.chat_memory, proposals=build_proposals(app, session))
     return agent, channels
+
+
+def build_conversations(app: FastAPI, session: AsyncSession) -> ConversationService:
+    agent, _ = build_services(app, session)
+    return ConversationService(SqlConversationRepository(session), agent, SqlProposalRepository(session))
 
 
 def build_proposals(app: FastAPI, session: AsyncSession) -> ProposalService:
