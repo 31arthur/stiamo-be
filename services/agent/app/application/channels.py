@@ -12,6 +12,7 @@ from app.application.ports import AccessTokens, Channel, ChannelRepository, Tele
 from app.application.proposals import ProposalService, verdict_of
 from app.application.runner import AgentRun
 from app.application.services import AgentService, Who
+from app.domain.dayplan import briefing_text
 from app.domain.llm import AiError
 from app.infrastructure.messaging import TELEGRAM_MAX, WHATSAPP_MAX, as_whatsapp, clip
 
@@ -30,6 +31,7 @@ def format_reply(run: AgentRun, limit: int) -> str:
     docs = [f for f in run.found if f["kind"] == "document"]
     schedules = [f for f in run.found if f["kind"] == "schedule"]
     proposals = [f for f in run.found if f["kind"] == "proposal"]
+    briefings = [f for f in run.found if f["kind"] == "briefing"]
     if cases:
         lines = []
         for c in cases[:8]:
@@ -39,6 +41,8 @@ def format_reply(run: AgentRun, limit: int) -> str:
     if docs:
         lines = [f"• {d.get('name', '')}" + (f"\n  {d['webViewLink']}" if d.get("webViewLink") else "") for d in docs[:8]]
         parts.append("Documents:\n" + "\n".join(lines))
+    for b in briefings[:1]:
+        parts.insert(1, briefing_text(b))
     if proposals:
         cards = ["• " + x["title"] + "".join("\n  " + ln for ln in x["lines"]) for x in proposals[:6]]
         parts.append("To approve:\n" + "\n\n".join(cards) + "\n\nReply YES to save, or NO to drop.")

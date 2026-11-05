@@ -13,7 +13,7 @@ from stiamo_common.errors import Conflict, NotFound, ValidationFailed
 
 from app.application.ports import DataGateway, DayPlan, DayPlanRepository, SettingsRepository, UserSettings
 from app.application.services import AgentService, Who
-from app.domain.dayplan import busy_blocks, check_blocks, clock, is_open
+from app.domain.dayplan import briefing_text, busy_blocks, check_blocks, clock, is_open
 from app.domain.llm import AiError
 
 log = logging.getLogger(__name__)
@@ -94,7 +94,7 @@ class DayPlanService:
 
     def _view(self, p: DayPlan) -> dict[str, Any]:
         iso = lambda d: d.astimezone(UTC).isoformat(timespec="seconds").replace("+00:00", "Z") if d else None  # noqa: E731
-        return {"id": p.id, "day": p.day, "status": p.status, "briefing": p.briefing, "blocks": [{**b, "from": clock(b["start"]), "to": clock(b["start"] + b["duration"])} for b in p.blocks], "trigger": p.trigger, "runId": p.run_id, "createdAt": iso(p.created_at), "decidedAt": iso(p.decided_at)}
+        return {"id": p.id, "day": p.day, "status": p.status, "briefing": p.briefing, "blocks": [{**b, "from": clock(b["start"]), "to": clock(b["start"] + b["duration"])} for b in p.blocks], "trigger": p.trigger, "card": p.card, "runId": p.run_id, "createdAt": iso(p.created_at), "decidedAt": iso(p.decided_at)}
 
     async def list(self, who: Who, limit: int = 7) -> dict[str, Any]:
         return {"settings": await self.settings(who), "plans": [self._view(p) for p in await self._plans.recent(who.user_id, limit)]}
@@ -113,7 +113,8 @@ class DayPlanService:
         run = await self._agent.chat(who, token, PLANNER, f"Plan {day}. Give me the briefing, and propose the schedule for the work that fits.", channel="the evening plan", trigger=trigger)
         schedule = next((f for f in reversed(run.found) if f.get("kind") == "schedule" and f.get("date") == day), None)
         blocks = [{k: b[k] for k in ("kind", "id", "title", "start", "duration")} for b in (schedule or {}).get("blocks", [])]
-        plan = DayPlan(existing.id if existing else str(uuid.uuid4()), who.user_id, day, "proposed", run.answer or "", blocks, None, trigger, existing.created_at if existing else self._now())
+        card = next((f for f in reversed(run.found) if f.get("kind") == "briefing" and f.get("date") == day), None)
+        plan = DayPlan(existing.id if existing else str(uuid.uuid4()), who.user_id, day, "proposed", run.answer or "", blocks, None, trigger, existing.created_at if existing else self._now(), card=card)
         await self._plans.save(plan)
         if announce and self._announce and (await self.settings(who))["channels"]:
             try:
@@ -124,7 +125,9 @@ class DayPlanService:
 
     @staticmethod
     def _message(p: DayPlan) -> str:
-        lines = [f"Plan for {date.fromisoformat(p.day).strftime('%a %d %b')}", "", p.briefing.strip()]
+        lines = [f"Plan for {date.fromisoformat(p.day).strftime('%a %d %b')}", "", briefing_text(p.card) if p.card else p.briefing.strip()]
+        if p.card and p.briefing.strip():
+            lines += ["", p.briefing.strip()]
         if p.blocks:
             lines += ["", "Proposed schedule:"] + [f"• {clock(b['start'])} {b['title']}" for b in sorted(p.blocks, key=lambda b: b["start"])]
             lines += ["", "Approve it in Stiamo (Attention) and it goes on your planner."]

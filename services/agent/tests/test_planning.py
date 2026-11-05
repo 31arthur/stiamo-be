@@ -55,12 +55,12 @@ async def test_the_team_is_registered_with_the_tools_each_one_needs(rig):
     ids = [a["id"] for a in (await rig.client.get("/v1/agent/settings", headers=headers())).json()["agents"]]
     assert {"daily-planner", "hearing-prep", "follow-up-chaser", "deadline-scout"} <= set(ids)
     out = (await rig.client.post(f"{PLANNER}/prompt/preview", json={"question": "x"}, headers=headers())).json()
-    assert [t["name"] for t in out["tools"]] == ["day_agenda", "free_time", "upcoming", "propose_schedule", "search_cases", "get_case", "case_documents", "waiting_in_attention", "add_task", "change_task", "add_follow_up", "change_follow_up", "add_hearing", "add_case", "add_action_plan"]
+    assert [t["name"] for t in out["tools"]] == ["day_agenda", "free_time", "upcoming", "present_plan", "propose_schedule", "search_cases", "get_case", "case_documents", "waiting_in_attention", "add_task", "change_task", "add_follow_up", "change_follow_up", "add_hearing", "add_case", "add_action_plan"]
     assert TOMORROW in out["system"] and "21:00" in out["system"]
     prep = (await rig.client.post("/v1/agent/agents/hearing-prep/prompt/preview", json={"question": "x"}, headers=headers())).json()
     assert "find_documents" in [t["name"] for t in prep["tools"]]
     chaser = (await rig.client.post("/v1/agent/agents/follow-up-chaser/prompt/preview", json={"question": "x"}, headers=headers())).json()
-    assert [t["name"] for t in chaser["tools"]] == ["day_agenda", "free_time", "upcoming", "propose_schedule", "add_task", "change_task", "add_follow_up", "change_follow_up", "add_hearing", "add_case", "add_action_plan"]
+    assert [t["name"] for t in chaser["tools"]] == ["day_agenda", "free_time", "upcoming", "present_plan", "propose_schedule", "add_task", "change_task", "add_follow_up", "change_follow_up", "add_hearing", "add_case", "add_action_plan"]
     assert all(set(a["workspaces"]) == {"personal", "sb", "fsa", "media"} for a in (await rig.client.get("/v1/agent/settings", headers=headers())).json()["agents"] if a["id"] in ("daily-planner", "follow-up-chaser", "deadline-scout"))
 
 

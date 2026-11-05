@@ -80,7 +80,7 @@ class SqlChannelRepository(ChannelRepository):
 
 
 def _plan(r: DayPlanModel) -> DayPlan:
-    return DayPlan(r.id, r.user_id, r.day, r.status, r.briefing, list(r.blocks or []), r.run_id, r.trigger, r.created_at, r.decided_at)
+    return DayPlan(r.id, r.user_id, r.day, r.status, r.briefing, list(r.blocks or []), r.run_id, r.trigger, r.created_at, r.decided_at, r.card)
 
 
 class SqlDayPlanRepository(DayPlanRepository):
@@ -101,7 +101,7 @@ class SqlDayPlanRepository(DayPlanRepository):
 
     async def save(self, p: DayPlan) -> None:
         row = await self._s.get(DayPlanModel, p.id) or DayPlanModel(id=p.id, user_id=p.user_id, day=p.day, created_at=p.created_at)
-        row.status, row.briefing, row.blocks, row.run_id, row.trigger, row.decided_at = p.status, p.briefing, list(p.blocks), p.run_id, p.trigger, p.decided_at
+        row.status, row.briefing, row.blocks, row.run_id, row.trigger, row.decided_at, row.card = p.status, p.briefing, list(p.blocks), p.run_id, p.trigger, p.decided_at, p.card
         self._s.add(row)
         await self._s.flush()
 
