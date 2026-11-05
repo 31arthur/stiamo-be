@@ -27,6 +27,8 @@ class PackContext:
     attention: Callable[[], Awaitable[list[dict[str, Any]]]] | None = None
     #: Keeps something the agent proposes (action, title, the lines to show, what approving does) and returns its id. None: the agent may not propose.
     propose: Callable[[str, str, list[str], list[dict[str, Any]]], Awaitable[str]] | None = None
+    #: Someone is there to approve what is proposed (a chat), as opposed to a run by itself (the evening plan, which keeps its own plan).
+    interactive: bool = True
 
 
 class ToolPack(ABC):

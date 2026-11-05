@@ -32,7 +32,7 @@ async def test_the_day_shows_the_google_events_and_leaves_no_free_time_under_the
     fill(rig)
     rig.data.calendar = [BOARD, HOLIDAY]
     day = await ask(rig, [("day_agenda", {})])
-    assert day["calendarEvents"] == [{"time": "11:00–12:30", "title": "Board call", "calendar": "Work", "where": "Meet"}] and day["allDayEvents"] == ["State holiday"]
+    assert day["calendarEvents"] == [{"id": "g1", "time": "11:00–12:30", "title": "Board call", "calendar": "Work", "where": "Meet"}] and day["allDayEvents"] == ["State holiday"]
     assert day["freeWindows"] == ["09:00–10:00", "12:30–14:00", "15:00–21:00"]  # the hearing at 10, the meeting at 14, and the board call all stay clear
 
 

@@ -135,3 +135,23 @@ def check_blocks(blocks: list[dict[str, Any]], busy: list[tuple[int, int, str]])
                 break
         placed.append((start, start + length, name))
     return problems
+
+
+SECTION_TITLES = {"fixed": "Fixed", "prepare": "Prepare", "calls": "Calls to make", "work": "Work to do", "attention": "Needs your attention", "later": "Coming up"}
+
+
+def briefing_text(card: dict[str, Any]) -> str:
+    """A briefing card as plain text, for where cards can't be shown (a phone's chat)."""
+    lines = [str(card.get("headline") or "").strip()]
+    if card.get("summary"):
+        lines.append(str(card["summary"]).strip())
+    for section in card.get("sections", []):
+        items = section.get("items", [])
+        if not items:
+            continue
+        lines += ["", str(section.get("title") or SECTION_TITLES.get(section.get("kind"), "")).upper()]
+        for i in items:
+            when = f"{i['time']} " if i.get("time") else ""
+            note = f" ({i['note']})" if i.get("note") else ""
+            lines.append(f"• {when}{i.get('title') or i.get('note') or ''}{note if i.get('title') else ''}")
+    return "\n".join(x for x in lines if x is not None).strip()

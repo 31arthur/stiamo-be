@@ -409,6 +409,8 @@ class DayPlan:
     trigger: str
     created_at: datetime
     decided_at: datetime | None = None
+    #: The briefing as a card (sections of real items), when the planner laid it out that way.
+    card: dict[str, Any] | None = None
 
 
 class DayPlanRepository(ABC):

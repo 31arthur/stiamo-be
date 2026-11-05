@@ -190,6 +190,7 @@ class DayPlanModel(Base):
     blocks: Mapped[list[dict[str, Any]]] = mapped_column(Json, default=list)
     run_id: Mapped[str | None] = mapped_column(String(36))
     trigger: Mapped[str] = mapped_column(String(12), default="evening")
+    card: Mapped[dict[str, Any] | None] = mapped_column(Json)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime)
     decided_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
 

@@ -321,7 +321,7 @@ class AgentService:
         today = date.today().isoformat()
         decision = s.decision or {}
         decisions = self._decisions(s.keys["openrouter"]) if decision.get("enabled") and "openrouter" in s.keys else None
-        ctx = PackContext(Memo(self._data(token)), today, decisions, decision.get("modelId") or DECISION_MODELS[0]["id"], lambda: self._waiting(who), self._proposer(who, agent.id, channel_id))
+        ctx = PackContext(Memo(self._data(token)), today, decisions, decision.get("modelId") or DECISION_MODELS[0]["id"], lambda: self._waiting(who), self._proposer(who, agent.id, channel_id), channel != "the evening plan")
         tools: list[Tool] = []
         context: dict[str, Any] = {"today": today, "user": who.name, "channel": channel}
         for name in agent.packs:
