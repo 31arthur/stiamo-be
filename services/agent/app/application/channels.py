@@ -3,6 +3,7 @@
 import logging
 import secrets
 import uuid
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -13,9 +14,9 @@ from app.application.ports import AccessTokens, Channel, ChannelRepository, Tele
 from app.application.proposals import ProposalService, verdict_of
 from app.application.runner import AgentRun
 from app.application.services import AgentService, Who
-from app.domain.dayplan import briefing_text
 from app.domain.llm import AiError
 from app.domain.orchestrator import ORCHESTRATOR_ID
+from app.domain.phone import Style, Writer, render
 from app.infrastructure.messaging import TELEGRAM_MAX, WHATSAPP_MAX, as_whatsapp, clip
 
 log = logging.getLogger(__name__)
@@ -26,38 +27,14 @@ REMEMBER = 12
 NOT_LINKED = "This chat isn't linked to a Stiamo account. Open AI agents → Channels in Stiamo to connect it."
 
 
-def format_reply(run: AgentRun, limit: int) -> str:
-    """The answer, then the cases and documents it found, as plain text a phone can show."""
-    return format_answer(run.answer, run.found, limit)
+def format_reply(run: AgentRun, limit: int, style: Style = "plain") -> str:
+    """The answer, then the cases and documents it found, written for a phone's chat."""
+    return render(run.answer, run.found, limit, style=style)
 
 
-def format_answer(answer: str, found: list[dict[str, Any]], limit: int, agent: str | None = None) -> str:
-    """An answer and its cards as plain text, signed with the agent that gave it when the assistant chose one."""
-    parts = [answer or "I found nothing to say about that."]
-    cases = [f for f in found if f["kind"] == "case"]
-    docs = [f for f in found if f["kind"] == "document"]
-    schedules = [f for f in found if f["kind"] == "schedule"]
-    proposals = [f for f in found if f["kind"] == "proposal"]
-    briefings = [f for f in found if f["kind"] == "briefing"]
-    if cases:
-        lines = []
-        for c in cases[:8]:
-            nxt = c.get("nextHearing")
-            lines.append(f"• {c.get('reference', '')} {c.get('title', '')}" + (f" (next hearing {nxt['date']})" if nxt else ""))
-        parts.append("Cases:\n" + "\n".join(lines))
-    if docs:
-        lines = [f"• {d.get('name', '')}" + (f"\n  {d['webViewLink']}" if d.get("webViewLink") else "") for d in docs[:8]]
-        parts.append("Documents:\n" + "\n".join(lines))
-    for b in briefings[:1]:
-        parts.insert(1, briefing_text(b))
-    if proposals:
-        cards = ["• " + x["title"] + "".join("\n  " + ln for ln in x["lines"]) for x in proposals[:6]]
-        parts.append("To approve:\n" + "\n\n".join(cards) + "\n\nReply YES to save, or NO to drop.")
-    for s in schedules[:1]:
-        parts.append("Proposed schedule (approve it in Stiamo):\n" + "\n".join(f"• {b['from']} {b['title']}" for b in s["blocks"]))
-    if agent:
-        parts.append(f"— {agent}")
-    return clip("\n\n".join(parts), limit)
+def format_answer(answer: str, found: list[dict[str, Any]], limit: int, agent: str | None = None, style: Style = "plain") -> str:
+    """An answer and its cards written for a chat, signed with the agent that gave it when the assistant chose one."""
+    return render(answer, found, limit, agent, style)
 
 
 class ChannelService:
@@ -199,18 +176,23 @@ class ChannelService:
             for n in c.public.get("allowed", []):
                 await self._tw.send_whatsapp(c.public["accountSid"], c.secrets["authToken"], c.public["from"], n, text)
 
-    async def announce(self, who: Who, text: str) -> int:
-        """Sends a message to every chat and number the person has connected. Returns how many it reached; one that fails doesn't stop the rest."""
+    async def announce(self, who: Who, text: str | Callable[[Style, int], str]) -> int:
+        """Sends a message to every chat and number the person has connected. Returns how many it reached; one that fails doesn't stop the rest.
+        `text` may be a function that writes the message for a chat (given its style and its length limit), so each gets it laid out its own way."""
         sent = 0
         for c in await self._repo.for_user(who.user_id):
             try:
                 if c.kind == "telegram":
                     for p in c.public.get("paired", []):
-                        await self._tg.send_message(c.secrets["botToken"], p["id"], clip(text, TELEGRAM_MAX))
+                        if callable(text):
+                            await self._tg.send_message(c.secrets["botToken"], p["id"], text("telegram", TELEGRAM_MAX), html=True)
+                        else:
+                            await self._tg.send_message(c.secrets["botToken"], p["id"], clip(text, TELEGRAM_MAX))
                         sent += 1
                 else:
                     for n in c.public.get("allowed", []):
-                        await self._tw.send_whatsapp(c.public["accountSid"], c.secrets["authToken"], c.public["from"], n, clip(text, WHATSAPP_MAX))
+                        body = text("whatsapp", WHATSAPP_MAX) if callable(text) else clip(text, WHATSAPP_MAX)
+                        await self._tw.send_whatsapp(c.public["accountSid"], c.secrets["authToken"], c.public["from"], n, body)
                         sent += 1
             except Exception:  # noqa: BLE001
                 log.warning("could not announce on channel %s", c.id)
@@ -227,8 +209,9 @@ class ChannelService:
 
     # --- messages arriving -----------------------------------------------------------------------------
 
-    async def _answer(self, c: Channel, sender: str, text: str, channel_name: str, limit: int) -> str:
-        """Runs the agent for the channel's owner and returns what to say back."""
+    async def _answer(self, c: Channel, sender: str, text: str, channel_name: str, limit: int, style: Style) -> str:
+        """Runs the agent for the channel's owner and returns what to say back, written for the chat."""
+        words = Writer(style).text
         settings_email = c.public.get("ownerEmail", "")
         who = Who(c.user_id, settings_email)
         agent_id = c.public.get("agent") or ORCHESTRATOR_ID
@@ -237,23 +220,23 @@ class ChannelService:
         if verdict is not None:
             settled = await self._proposals.settle_channel(who, self._tokens.mint(who.user_id, who.email), c.id, verdict)
             if settled is not None:
-                return clip(settled, limit)
+                return clip(words(settled), limit)
         if agent_id == ORCHESTRATOR_ID and self._conversations is not None:
             # The assistant: it picks the agent for each message and keeps the thread, which is also visible in the web app.
             try:
                 answer, found, name = await self._conversations.channel_ask(who, self._tokens.mint(who.user_id, who.email), f"{c.kind}:{c.id}:{sender}", channel_name, text, c.id)
             except (ValidationFailed, AiError) as exc:
-                return str(getattr(exc, "message", None) or exc)
-            return format_answer(answer, found, limit, name)
+                return words(str(getattr(exc, "message", None) or exc))
+            return format_answer(answer, found, limit, name, style)
         if agent_id == ORCHESTRATOR_ID:
             agent_id = self._agent.registry.default_id
         key = (c.id, f"{agent_id}:{sender}")  # changing the channel's agent starts a fresh conversation
         try:
             run = await self._agent.chat(who, self._tokens.mint(who.user_id, who.email), agent_id, text, self._memory.get(key), channel_name, trigger=channel_name.lower(), channel_id=c.id)
         except (ValidationFailed, AiError) as exc:
-            return str(getattr(exc, "message", None) or exc)
+            return words(str(getattr(exc, "message", None) or exc))
         self._memory[key] = [m.to_json() for m in run.messages][-REMEMBER:]
-        return format_reply(run, limit)
+        return format_reply(run, limit, style)
 
     def check_telegram(self, c: Channel | None, secret_header: str | None) -> Channel:
         if c is None or c.kind != "telegram":
@@ -294,7 +277,7 @@ class ChannelService:
                 await self._tg.send_message(token, chat, NOT_LINKED)
                 return
             await self._tg.send_typing(token, chat)
-            await self._tg.send_message(token, chat, await self._answer(c, str(chat), text, "Telegram", TELEGRAM_MAX))
+            await self._tg.send_message(token, chat, await self._answer(c, str(chat), text, "Telegram", TELEGRAM_MAX, "telegram"), html=True)
         except Exception:  # noqa: BLE001
             log.exception("telegram update failed for channel %s", c.id)
 
@@ -311,7 +294,7 @@ class ChannelService:
             text = body.strip()
             if not text:
                 return
-            reply = await self._answer(c, number, text, "WhatsApp", WHATSAPP_MAX)
+            reply = await self._answer(c, number, text, "WhatsApp", WHATSAPP_MAX, "whatsapp")
             await self._tw.send_whatsapp(c.public["accountSid"], c.secrets["authToken"], c.public["from"], number, reply)
         except Exception:  # noqa: BLE001
             log.exception("whatsapp message failed for channel %s", c.id)

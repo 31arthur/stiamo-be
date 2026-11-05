@@ -13,8 +13,9 @@ from stiamo_common.errors import Conflict, NotFound, ValidationFailed
 
 from app.application.ports import DataGateway, DayPlan, DayPlanRepository, SettingsRepository, UserSettings
 from app.application.services import AgentService, Who
-from app.domain.dayplan import briefing_text, busy_blocks, check_blocks, clock, is_open
+from app.domain.dayplan import busy_blocks, check_blocks, clock, is_open
 from app.domain.llm import AiError
+from app.domain.phone import Style, render
 
 log = logging.getLogger(__name__)
 
@@ -71,7 +72,7 @@ class DayPlanService:
         settings: SettingsRepository,
         agent: AgentService,
         data_factory: Callable[[str], DataGateway],
-        announce: Callable[[Who, str], Awaitable[None]] | None = None,
+        announce: Callable[[Who, Callable[[Style, int], str]], Awaitable[object]] | None = None,
         clock_now: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self._plans, self._settings, self._agent, self._data, self._announce, self._now = plans, settings, agent, data_factory, announce, clock_now
@@ -124,14 +125,12 @@ class DayPlanService:
         return self._view(plan)
 
     @staticmethod
-    def _message(p: DayPlan) -> str:
-        lines = [f"Plan for {date.fromisoformat(p.day).strftime('%a %d %b')}", "", briefing_text(p.card) if p.card else p.briefing.strip()]
-        if p.card and p.briefing.strip():
-            lines += ["", p.briefing.strip()]
+    def _message(p: DayPlan) -> Callable[[Style, int], str]:
+        """The evening plan, written for whichever chat it is sent to."""
+        found: list[dict[str, Any]] = [p.card] if p.card else [{"kind": "briefing", "date": p.day, "headline": "", "sections": [], "free": []}]
         if p.blocks:
-            lines += ["", "Proposed schedule:"] + [f"• {clock(b['start'])} {b['title']}" for b in sorted(p.blocks, key=lambda b: b["start"])]
-            lines += ["", "Approve it in Stiamo (Attention) and it goes on your planner."]
-        return "\n".join(lines)
+            found.append({"kind": "schedule", "blocks": [{"from": clock(b["start"]), "title": b["title"]} for b in sorted(p.blocks, key=lambda b: b["start"])]})
+        return lambda style, limit: render(p.briefing, found, limit, "Daily planner", style, title="Plan for")
 
     # --- deciding ------------------------------------------------------------------------------------------
 

@@ -10,6 +10,7 @@ from app.domain.orchestrator import (
     update_digest,
     update_focus,
 )
+from app.domain.phone import strip_markup
 from sqlalchemy import text
 
 from .conftest import headers
@@ -134,7 +135,7 @@ async def test_the_assistant_on_a_phone_keeps_one_thread_that_the_web_app_shows_
     rig.script += [ChatResult("Call Hemla first.")]
     await send(rig, c, "who should I call tomorrow?", chat=555, update=2)
     reply = rig.telegram.sent[-1][1]
-    assert reply.startswith("Call Hemla first.") and reply.rstrip().endswith("— Follow-up chaser")
+    assert reply.startswith("Call Hemla first.") and strip_markup(reply).rstrip().endswith("— Follow-up chaser") and "<i>— Follow-up chaser</i>" in reply
     rig.script += [ChatResult("Then the labour office.")]
     await send(rig, c, "and after that?", chat=555, update=3)
     assert "who should I call tomorrow?" in rig.llm_log[-1]["last"]  # the second message knows the first
@@ -171,6 +172,6 @@ async def test_a_yes_on_the_phone_still_saves_what_the_assistants_agent_proposed
     await send(rig, c, f"/start {c['pairingCode']}", chat=555, update=1)
     rig.script += [ChatResult("", [ToolCall("a", "add_task", {"title": "Call Hemla"})]), ChatResult("Proposed.")]
     await send(rig, c, "add a task to call Hemla tomorrow", chat=555, update=2)
-    assert "To approve" in rig.telegram.sent[-1][1] and rig.data.saved == []
+    assert "Reply <b>YES</b>" in rig.telegram.sent[-1][1] and rig.data.saved == []
     await send(rig, c, "yes", chat=555, update=3)
     assert rig.telegram.sent[-1][1].startswith("Saved:") and [t for t, _ in rig.data.saved] == ["tasks"]
