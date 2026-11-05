@@ -3,14 +3,27 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from stiamo_common.errors import NotFound, ValidationFailed
 
 from app.application.ports import Conversation, ConversationRepository, ProposalRepository
+from app.application.runner import AgentRun
 from app.application.services import AgentService, Who
 from app.domain.agents import WORKSPACES
+from app.domain.llm import AiError
+from app.domain.orchestrator import (
+    ORCHESTRATOR_ID,
+    build_preface,
+    gist_of,
+    is_follow_up,
+    jev_question,
+    jev_state,
+    route_by_rules,
+    update_digest,
+    update_focus,
+)
 
 #: What a thread remembers for the model: the last messages, so a long thread doesn't grow without end.
 MAX_STORED_MESSAGES = 40
@@ -19,6 +32,9 @@ MAX_TITLE = 80
 #: A thread belongs to one workspace, or to none in particular ("all").
 SCOPES = (*WORKSPACES, "all")
 ASSISTANT = "the assistant"
+#: A phone chat that has been quiet this long starts a new thread, so yesterday's talk doesn't colour today's.
+CHANNEL_IDLE = timedelta(hours=12)
+NEW_THREAD = ("/new", "/reset", "new chat")
 
 
 def _title_from(message: str) -> str:
@@ -47,7 +63,8 @@ class ConversationService:
     async def create(self, who: Who, agent_id: str, workspace: str) -> dict[str, Any]:
         if workspace not in SCOPES:
             raise ValidationFailed("Unknown workspace.")
-        self._agent.registry.get(agent_id)  # raises for an agent that doesn't exist
+        if agent_id != ORCHESTRATOR_ID:
+            self._agent.registry.get(agent_id)  # raises for an agent that doesn't exist
         now = datetime.now(UTC)
         c = Conversation(str(uuid.uuid4()), who.user_id, agent_id, workspace, "", [], [], now, now)
         await self._repo.save(c)
@@ -83,14 +100,80 @@ class ConversationService:
         c = await self._mine(who, conversation_id)
         if len(c.turns) >= MAX_TURNS:
             raise ValidationFailed("This chat is very long. Start a new one.")
-        run = await self._agent.chat(who, token, c.agent_id, message, c.messages, ASSISTANT, trigger="assistant")
-        turn = {"id": str(uuid.uuid4()), "question": message.strip(), "answer": run.answer, "steps": [s.to_json() for s in run.steps], "found": run.found, "at": _iso(datetime.now(UTC))}
+        if c.agent_id == ORCHESTRATOR_ID:
+            turn = await self._orchestrated(who, token, c, message)
+        else:
+            run = await self._agent.chat(who, token, c.agent_id, message, c.messages, ASSISTANT, trigger="assistant")
+            turn = self._turn(message, run)
+            c.messages = [m.to_json() for m in run.messages][-MAX_STORED_MESSAGES:]
         c.turns = [*c.turns, turn]
-        c.messages = [m.to_json() for m in run.messages][-MAX_STORED_MESSAGES:]
         c.title = c.title or _title_from(message)
         c.updated_at = datetime.now(UTC)
         await self._repo.save(c)
         return {"turn": (await self._full(who, c))["turns"][-1], "conversation": self.summary(c)}
+
+    @staticmethod
+    def _turn(message: str, run: AgentRun, **extra: Any) -> dict[str, Any]:
+        return {"id": str(uuid.uuid4()), "question": message.strip(), "answer": run.answer, "steps": [s.to_json() for s in run.steps], "found": run.found, "at": _iso(datetime.now(UTC)), **extra}
+
+    async def _route(self, who: Who, candidates: list[dict[str, Any]], message: str, preface: str, last: str | None) -> tuple[str, str, str]:
+        """Which agent should answer, why, and how it was decided. A message that goes on from the last answer stays with that agent (no
+        model needed); otherwise the decision model (Jev) chooses when it is on, and plain rules when it is not or can't be reached."""
+        ids = [c["id"] for c in candidates]
+        if len(ids) == 1:
+            return ids[0], "the only agent here", "only"
+        if last in ids and is_follow_up(message):
+            return last, "carrying on from the last answer", "continuity"
+        if await self._agent.jev_ready(who):
+            try:
+                out = await self._agent.decide(who, jev_state(message, preface), jev_question(candidates, last))
+                choice = out["answers"]["agent"]["choice"]
+                if choice in ids:
+                    return choice, "chosen by the decision model", "jev"
+            except (ValidationFailed, AiError, KeyError, TypeError):
+                pass  # the rules below always have an answer
+        agent_id, why = route_by_rules(message, candidates, last)
+        return agent_id, why, "rules"
+
+    async def _orchestrated(self, who: Who, token: str, c: Conversation, message: str, *, channel_name: str = ASSISTANT, channel_id: str | None = None, trigger: str = "assistant") -> dict[str, Any]:
+        """One message to the assistant: choose the agent, tell it what the conversation has established, and keep what comes back."""
+        candidates = await self._agent.visible_agents(who, c.workspace)
+        if not candidates:
+            raise ValidationFailed("No agent is set up to work here yet. Choose which workspaces an agent is shown in under Developer.")
+        last = next((t.get("agentId") for t in reversed(c.turns) if t.get("agentId")), None)
+        preface = build_preface(c.turns, c.context)
+        agent_id, why, by = await self._route(who, candidates, message, preface, last)
+        run = await self._agent.chat(who, token, agent_id, message, [], channel_name, trigger=trigger, channel_id=channel_id, preface=preface)
+        name = next(a["name"] for a in candidates if a["id"] == agent_id)
+        turn = self._turn(message, run, agentId=agent_id, agentName=name, routedBy=by, why=why, gist=gist_of(run.found))
+        context = c.context or {}
+        c.context = {"focus": update_focus(context.get("focus") or {}, message, run.found), "digest": update_digest(context.get("digest") or [], turn)}
+        return turn
+
+    async def channel_ask(self, who: Who, token: str, channel_key: str, channel_name: str, message: str, channel_id: str) -> tuple[str, list[dict[str, Any]], str | None]:
+        """A message from a phone chat. It goes into that chat's thread (the same thread, on any day within a few hours of each other), which
+        also shows in the web app. Returns the answer, the cards, and the name of the agent that answered."""
+        now = datetime.now(UTC)
+        c = await self._repo.by_channel(who.user_id, channel_key)
+        fresh = message.strip().lower() in NEW_THREAD
+        if c is not None and (fresh or now - c.updated_at > CHANNEL_IDLE):
+            c.channel_key = None  # the old thread stays in the list, but is no longer the one this chat is in
+            await self._repo.save(c)
+            c = None
+        if fresh:
+            return "Started a new conversation. What do you need?", [], None
+        if c is None:
+            c = Conversation(str(uuid.uuid4()), who.user_id, ORCHESTRATOR_ID, "all", "", [], [], now, now, {}, channel_key)
+        if len(c.turns) >= MAX_TURNS:
+            c.channel_key = None
+            await self._repo.save(c)
+            c = Conversation(str(uuid.uuid4()), who.user_id, ORCHESTRATOR_ID, "all", "", [], [], now, now, {}, channel_key)
+        turn = await self._orchestrated(who, token, c, message, channel_name=channel_name, channel_id=channel_id, trigger=channel_name.lower())
+        c.turns = [*c.turns, turn]
+        c.title = c.title or _title_from(f"{channel_name}: {message}")
+        c.updated_at = datetime.now(UTC)
+        await self._repo.save(c)
+        return turn["answer"], turn["found"], turn.get("agentName")
 
     async def rename(self, who: Who, conversation_id: str, title: str) -> dict[str, Any]:
         c = await self._mine(who, conversation_id)
