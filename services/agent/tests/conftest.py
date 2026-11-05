@@ -183,7 +183,7 @@ class FakeTelegram(TelegramApi):
     async def delete_webhook(self, token):
         self.deleted += 1
 
-    async def send_message(self, token, chat_id, text):
+    async def send_message(self, token, chat_id, text, html=False):
         self.sent.append((chat_id, text))
 
     async def send_typing(self, token, chat_id):

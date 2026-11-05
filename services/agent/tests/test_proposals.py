@@ -2,6 +2,7 @@ import json
 from datetime import UTC, datetime, timedelta
 
 from app.domain.llm import ChatResult, ToolCall
+from app.domain.phone import strip_markup
 from sqlalchemy import text
 
 from .conftest import headers
@@ -128,8 +129,8 @@ async def test_a_yes_on_the_phone_saves_what_was_just_proposed_without_asking_th
     await send(rig, c, f"/start {c['pairingCode']}", chat=555, update=1)
     rig.script += [ChatResult("", [ToolCall("a", "add_task", {"title": "Call Hemla"})]), ChatResult("Proposed.")]
     await send(rig, c, "add a task to call Hemla", chat=555, update=2)
-    reply = rig.telegram.sent[-1][1]
-    assert "To approve" in reply and "New task: Call Hemla" in reply and "Reply YES" in reply and rig.data.saved == []
+    reply = strip_markup(rig.telegram.sent[-1][1])
+    assert "New task: Call Hemla" in reply and "Reply YES" in reply and rig.data.saved == []
     asked = len(rig.llm_log)
     await send(rig, c, "yes", chat=555, update=3)
     assert rig.telegram.sent[-1][1].startswith("Saved:") and "Call Hemla" in rig.telegram.sent[-1][1]

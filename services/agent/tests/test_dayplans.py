@@ -2,6 +2,7 @@ from datetime import UTC, datetime
 
 from app.application.dayplans import seconds_until, tomorrow_in
 from app.domain.llm import ChatResult, ToolCall
+from app.domain.phone import strip_markup
 
 from .conftest import headers
 from .test_agent_api import choose, connect
@@ -102,7 +103,7 @@ async def test_the_planner_in_a_chat_shows_its_schedule_on_the_phone(rig):
 
     card = {"kind": "schedule", "id": "x", "date": TOMORROW, "blocks": [{"from": "09:30", "title": "Call the advocate"}, {"from": "11:00", "title": "Draft the rejoinder"}]}
     text = format_reply(AgentRun("Here you go.", [], [card], []), 3000)
-    assert "Here you go." in text and "• 09:30 Call the advocate" in text and "approve it in Stiamo" in text
+    assert "Here you go." in text and "• 09:30 Call the advocate" in text and "Approve it in Stiamo" in text
 
 
 async def test_the_evening_run_plans_tomorrow_and_tells_the_phone(rig):
@@ -114,7 +115,7 @@ async def test_the_evening_run_plans_tomorrow_and_tells_the_phone(rig):
     await rig.client.put(f"{PLANS}/settings", json={"enabled": True, "time": "21:00", "timezone": "Asia/Kolkata", "channels": True}, headers=headers())
     assert await until(lambda: any("Proposed schedule" in t for _, t in rig.telegram.sent), tries=200)
     rig.app.state.daily.stop("u1")
-    text = next(t for _, t in rig.telegram.sent if "Proposed schedule" in t)
+    text = strip_markup(next(t for _, t in rig.telegram.sent if "Proposed schedule" in t))
     assert "Plan for" in text and "09:30 Call the advocate" in text and "Approve it in Stiamo" in text
     plans = (await rig.client.get(PLANS, headers=headers())).json()["plans"]
     assert plans and plans[0]["status"] == "proposed"

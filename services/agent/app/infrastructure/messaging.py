@@ -9,6 +9,7 @@ import httpx
 from stiamo_common.errors import ValidationFailed
 
 from app.application.ports import TelegramApi, TwilioApi
+from app.domain.phone import strip_markup
 
 TELEGRAM = "https://api.telegram.org"
 TWILIO = "https://api.twilio.com/2010-04-01"
@@ -46,8 +47,18 @@ class HttpTelegramApi(TelegramApi):
     async def delete_webhook(self, token: str) -> None:
         await self._call(token, "deleteWebhook", {"drop_pending_updates": True})
 
-    async def send_message(self, token: str, chat_id: int | str, text: str) -> None:
-        await self._call(token, "sendMessage", {"chat_id": chat_id, "text": clip(text, TELEGRAM_MAX), "disable_web_page_preview": True})
+    async def send_message(self, token: str, chat_id: int | str, text: str, html: bool = False) -> None:
+        """`html`: the text carries Telegram's tags (bold, italic, links). If Telegram can't read them the words are sent without."""
+        body = {"chat_id": chat_id, "text": clip(text, TELEGRAM_MAX), "disable_web_page_preview": True}
+        if not html:
+            await self._call(token, "sendMessage", body)
+            return
+        try:
+            await self._call(token, "sendMessage", {**body, "parse_mode": "HTML"})
+        except ValidationFailed as exc:
+            if "parse" not in str(exc).lower():
+                raise
+            await self._call(token, "sendMessage", {**body, "text": clip(strip_markup(text), TELEGRAM_MAX)})
 
     async def send_typing(self, token: str, chat_id: int | str) -> None:
         await self._call(token, "sendChatAction", {"chat_id": chat_id, "action": "typing"})
