@@ -7,6 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from stiamo_common.errors import NotFound, ValidationFailed
 
@@ -40,6 +41,20 @@ STATS_DAYS = 30
 DAILY_DAYS = 14
 #: The selection an agent with none of its own starts from: the choice made last, for any agent.
 ANY = "*"
+
+
+DEFAULT_ZONE = "Asia/Kolkata"
+
+
+def local_today(s: UserSettings | None, now: datetime | None = None) -> date:
+    """Today on the person's own clock (the time zone set for their evening plan, India's by default), not the server's: an hour
+    after midnight there is already tomorrow's date, and "tomorrow" must mean theirs."""
+    name = ((s.planner if s else None) or {}).get("timezone") or DEFAULT_ZONE
+    try:
+        zone = ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError, OSError):
+        zone = UTC
+    return (now or datetime.now(UTC)).astimezone(zone).date()
 
 
 def selection_of(s: UserSettings, agent_id: str) -> tuple[dict[str, Any] | None, bool]:
@@ -318,7 +333,7 @@ class AgentService:
     async def _prepare(self, who: Who, token: str, agent: AgentDefinition, channel: str, prompt: PromptConfig | None = None, channel_id: str | None = None) -> Prepared:
         """Builds the agent for this person: their tools (from the agent's packs, bound to their data) and the prompt's variables."""
         s = await self._load(who)
-        today = date.today().isoformat()
+        today = local_today(s).isoformat()
         decision = s.decision or {}
         decisions = self._decisions(s.keys["openrouter"]) if decision.get("enabled") and "openrouter" in s.keys else None
         ctx = PackContext(Memo(self._data(token)), today, decisions, decision.get("modelId") or DECISION_MODELS[0]["id"], lambda: self._waiting(who), self._proposer(who, agent.id, channel_id), channel != "the evening plan")
