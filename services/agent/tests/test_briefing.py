@@ -79,3 +79,17 @@ def test_a_briefing_reads_as_plain_text_for_a_phone():
     card = {"headline": "A light day.", "summary": "Two calls.", "sections": [{"kind": "calls", "items": [{"title": "Call the advocate", "time": "09:30", "note": "asked to call back"}, {"note": "Leave the afternoon open."}]}, {"kind": "fixed", "items": []}]}
     out = briefing_text(card)
     assert out.startswith("A light day.\nTwo calls.") and "CALLS TO MAKE" in out and "• 09:30 Call the advocate (asked to call back)" in out and "Leave the afternoon open." in out and "FIXED" not in out
+
+
+async def test_a_reopened_chat_shows_whether_its_schedule_was_put_on_the_planner(rig):
+    await connect(rig)
+    fill(rig)
+    await choose(rig, agent=PLANNER)
+    c = (await rig.client.post("/v1/agent/conversations", json={"agentId": "daily-planner", "workspace": "sb"}, headers=headers())).json()
+    rig.script += [ChatResult("", [ToolCall("a", "propose_schedule", {"blocks": [{"kind": "followUp", "id": "f1", "start": 570}]})]), ChatResult("Proposed.")]
+    turn = (await rig.client.post(f"/v1/agent/conversations/{c['id']}/messages", json={"message": "plan tomorrow"}, headers=headers())).json()["turn"]
+    schedule = next(f for f in turn["found"] if f["kind"] == "schedule")
+    assert schedule["proposalStatus"] == "pending"
+    await rig.client.post(f"/v1/agent/proposals/{schedule['proposalId']}/apply", headers=headers())
+    again = (await rig.client.get(f"/v1/agent/conversations/{c['id']}", headers=headers())).json()
+    assert next(f for f in again["turns"][0]["found"] if f["kind"] == "schedule")["proposalStatus"] == "applied"
