@@ -1,7 +1,9 @@
 name: ci
+# Pushes to main are tested by the publish workflow before it builds anything, so this one runs for pull requests and by hand:
+# running both on every push tested the same commit twice.
 on:
-  push: { branches: [main] }
   pull_request:
+  workflow_dispatch:
 jobs:
   test:
     runs-on: ubuntu-latest

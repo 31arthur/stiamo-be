@@ -1,5 +1,6 @@
 import json
-from datetime import date, timedelta
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from app.domain.dayplan import check_blocks, free_windows
 from app.domain.llm import ChatResult, ToolCall
@@ -8,7 +9,7 @@ from .conftest import headers
 from .test_agent_api import choose, connect
 
 PLANNER = "/v1/agent/agents/daily-planner"
-TODAY = date.today()
+TODAY = datetime.now(ZoneInfo("Asia/Kolkata")).date()  # the agent counts days on the person's clock, not the server's
 TOMORROW = (TODAY + timedelta(days=1)).isoformat()
 
 
@@ -102,3 +103,15 @@ async def test_the_scout_reads_the_attention_queue_and_what_is_coming(rig):
     out = (await rig.client.post(f"{scout}/chat", json={"message": "What is due?"}, headers=headers())).json()
     assert out["answer"] == "Two things."
     assert json.loads(rig.llm_log[-1]["last"]) == {"count": 0, "items": []}  # the queue is empty here; the tool ran and said so
+
+
+def test_today_is_counted_on_the_persons_clock_not_the_servers():
+    from datetime import UTC
+
+    from app.application.ports import UserSettings
+    from app.application.services import local_today
+
+    late = datetime(2026, 11, 5, 18, 41, tzinfo=UTC)  # still the 5th in London, already the 6th in India
+    assert local_today(None, late).isoformat() == "2026-11-06"
+    assert local_today(UserSettings("u1", planner={"timezone": "Europe/London"}), late).isoformat() == "2026-11-05"
+    assert local_today(UserSettings("u1", planner={"timezone": "Mars/Base"}), late).isoformat() == "2026-11-05"  # an unknown zone falls back to UTC
