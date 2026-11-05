@@ -25,7 +25,18 @@ from app.infrastructure.mailevents import HttpMailEvents
 from app.infrastructure.messaging import HttpTelegramApi, HttpTwilioApi
 from app.infrastructure.security import JwtAccessTokens, SecretBox
 from app.presentation.deps import sync_evening, sync_listener
-from app.presentation.routers import agent, attention, channels, dayplans, news, proposals, usage, webhooks, workflows
+from app.presentation.routers import (
+    agent,
+    attention,
+    channels,
+    conversations,
+    dayplans,
+    news,
+    proposals,
+    usage,
+    webhooks,
+    workflows,
+)
 
 
 async def start_listening(app: FastAPI) -> None:
@@ -113,6 +124,7 @@ def create_app(settings: Settings | None = None, *, mail_events=None, registry=N
     app.include_router(news.router)
     app.include_router(dayplans.router)
     app.include_router(proposals.router)
+    app.include_router(conversations.router)
     app.include_router(workflows.router)
     app.include_router(webhooks.router)
 

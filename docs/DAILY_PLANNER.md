@@ -71,3 +71,18 @@ Events in the Google calendars connected through the calendar service ([CALENDAR
 lists them (and the all-day ones), the free windows leave them clear, `propose_schedule` refuses a block placed over one, and approving a
 plan checks again. They are read through `AGENT_CALENDAR_URL` (default `http://calendar:8000`); with no calendar service, or no account
 connected, nothing changes. An event that runs over midnight counts on the day it starts.
+
+## Conversations
+
+The app's Assistant page keeps each chat as a **conversation** on the server (`agent_conversations`, migration `0010`), so a thread
+continues on any device. A conversation belongs to one agent and one workspace (or "all"); what it said is kept for showing, and the
+last 40 messages are kept for the model. Proposal cards in a thread show their current state when it is reopened.
+
+| Call | What |
+| --- | --- |
+| `GET /v1/agent/conversations?workspace=` | Threads, newest first; a workspace's own, or every one for `all`. |
+| `POST /v1/agent/conversations` | `{agentId, workspace}`: start one. |
+| `GET /v1/agent/conversations/{id}` | One thread in full. |
+| `POST /v1/agent/conversations/{id}/messages` | `{message}`: ask; returns the turn and the thread's summary. |
+| `PATCH /v1/agent/conversations/{id}` | `{title}`: rename. |
+| `DELETE /v1/agent/conversations/{id}` | Delete. |

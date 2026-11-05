@@ -214,3 +214,21 @@ class ProposalModel(Base):
     decided_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
 
     __table_args__ = (Index("ix_agent_proposals_user", "user_id", "status"),)
+
+
+class ConversationModel(Base):
+    """A thread with one of the team's agents."""
+
+    __tablename__ = "agent_conversations"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(36))
+    agent_id: Mapped[str] = mapped_column(String(64))
+    workspace: Mapped[str] = mapped_column(String(16))
+    title: Mapped[str] = mapped_column(String(120), default="")
+    turns: Mapped[list[dict[str, Any]]] = mapped_column(Json, default=list)
+    messages: Mapped[list[dict[str, Any]]] = mapped_column(Json, default=list)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime)
+
+    __table_args__ = (Index("ix_agent_conversations_user", "user_id", "updated_at"),)

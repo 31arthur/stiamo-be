@@ -6,6 +6,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.application.ports import (
     Channel,
     ChannelRepository,
+    Conversation,
+    ConversationRepository,
     DayPlan,
     DayPlanRepository,
     Proposal,
@@ -13,7 +15,7 @@ from app.application.ports import (
     SettingsRepository,
     UserSettings,
 )
-from app.infrastructure.db.models import ChannelModel, DayPlanModel, ProposalModel, SettingsModel
+from app.infrastructure.db.models import ChannelModel, ConversationModel, DayPlanModel, ProposalModel, SettingsModel
 from app.infrastructure.security import SecretBox
 
 
@@ -129,3 +131,32 @@ class SqlProposalRepository(ProposalRepository):
         if row is not None:
             row.status, row.decided_at = p.status, p.decided_at
             await self._s.flush()
+
+
+def _conversation(r: ConversationModel) -> Conversation:
+    return Conversation(r.id, r.user_id, r.agent_id, r.workspace, r.title, list(r.turns or []), list(r.messages or []), r.created_at, r.updated_at)
+
+
+class SqlConversationRepository(ConversationRepository):
+    def __init__(self, session: AsyncSession) -> None:
+        self._s = session
+
+    async def recent(self, user_id: str, workspace: str | None, limit: int = 200) -> list[Conversation]:
+        q = select(ConversationModel).where(ConversationModel.user_id == user_id)
+        if workspace:
+            q = q.where(ConversationModel.workspace == workspace)
+        rows = (await self._s.execute(q.order_by(ConversationModel.updated_at.desc()).limit(limit))).scalars()
+        return [_conversation(r) for r in rows]
+
+    async def get(self, user_id: str, conversation_id: str) -> Conversation | None:
+        row = await self._s.get(ConversationModel, conversation_id)
+        return _conversation(row) if row and row.user_id == user_id else None
+
+    async def save(self, c: Conversation) -> None:
+        row = await self._s.get(ConversationModel, c.id) or ConversationModel(id=c.id, user_id=c.user_id, created_at=c.created_at)
+        row.agent_id, row.workspace, row.title, row.turns, row.messages, row.updated_at = c.agent_id, c.workspace, c.title[:120], list(c.turns), list(c.messages), c.updated_at
+        self._s.add(row)
+        await self._s.flush()
+
+    async def delete(self, user_id: str, conversation_id: str) -> None:
+        await self._s.execute(delete(ConversationModel).where(ConversationModel.id == conversation_id, ConversationModel.user_id == user_id))
