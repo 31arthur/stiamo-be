@@ -36,7 +36,8 @@ async def test_a_new_task_is_only_a_card_until_it_is_approved(rig):
     (table, record), = rig.data.saved
     assert table == "tasks" and record["title"] == "Draft the rejoinder" and record["dueDate"] == TOMORROW and record["priority"] == "high" and record["estimate"] == 90
     assert record["related"] == {"kind": "case", "id": "c1"} and record["workspace"] == "sb" and record["outcome"] == {"status": "open"}
-    assert (await apply(rig, card)).status_code == 409  # approving twice does nothing twice
+    again = await apply(rig, card)
+    assert again.status_code == 200 and again.json()["status"] == "applied"  # a second tap says it is saved, and saves nothing twice
     assert len(rig.data.saved) == 1
 
 
@@ -44,7 +45,9 @@ async def test_a_proposal_can_be_dropped_and_is_only_ever_the_owners(rig):
     card = (await ask(rig, [("add_task", {"title": "Buy stamps"})]))["found"][0]
     assert (await rig.client.post(APPLY.format(card["id"]), headers=headers("other@example.com", "u2"))).status_code == 404
     assert (await rig.client.post(DROP.format(card["id"]), headers=headers())).json()["status"] == "dropped"
-    assert (await apply(rig, card)).status_code == 409 and rig.data.saved == []
+    assert (await rig.client.post(DROP.format(card["id"]), headers=headers())).status_code == 200  # dropping twice is fine too
+    refused = await apply(rig, card)
+    assert refused.status_code == 409 and "dropped" in refused.json()["error"]["message"] and rig.data.saved == []
     assert (await rig.client.post(APPLY.format(card["id"]))).status_code == 401
 
 

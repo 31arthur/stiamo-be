@@ -68,6 +68,9 @@ class ConversationService:
                 if f.get("kind") == "proposal":
                     p = await self._proposals.get(who.user_id, f["id"])
                     f = {**f, "status": p.status if p else "dropped"}
+                elif f.get("kind") == "schedule" and f.get("proposalId"):
+                    p = await self._proposals.get(who.user_id, f["proposalId"])
+                    f = {**f, "proposalStatus": p.status if p else "dropped"}
                 found.append(f)
             turns.append({**t, "found": found})
         return {**self.summary(c), "turns": turns}

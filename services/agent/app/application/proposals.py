@@ -49,8 +49,10 @@ class ProposalService:
     async def apply(self, who: Who, token: str, proposal_id: str) -> dict[str, Any]:
         """Saves what was proposed. Each record is written by id, so trying again after a failure never doubles anything."""
         p = await self._mine(who, proposal_id)
+        if p.status == "applied":
+            return self.view(p)  # approved already (a second tap, a chat reopened): it is saved, and saying so is not an error
         if p.status != "pending":
-            raise Conflict("That has already been dealt with.")
+            raise Conflict("That was dropped, so it wasn't saved. Ask for it again.")
         if self._now() - p.created_at > STALE:
             raise Conflict("That proposal is more than a day old, and things may have changed. Ask for it again.")
         data = self._data(token)
@@ -80,8 +82,10 @@ class ProposalService:
 
     async def drop(self, who: Who, proposal_id: str) -> dict[str, Any]:
         p = await self._mine(who, proposal_id)
+        if p.status == "dropped":
+            return self.view(p)
         if p.status != "pending":
-            raise Conflict("That has already been dealt with.")
+            raise Conflict("That was already saved, so it can't be dropped.")
         p.status, p.decided_at = "dropped", self._now()
         await self._repo.save(p)
         return self.view(p)
