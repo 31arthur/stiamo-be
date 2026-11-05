@@ -229,7 +229,9 @@ class ConversationModel(Base):
     title: Mapped[str] = mapped_column(String(120), default="")
     turns: Mapped[list[dict[str, Any]]] = mapped_column(Json, default=list)
     messages: Mapped[list[dict[str, Any]]] = mapped_column(Json, default=list)
+    context: Mapped[dict[str, Any] | None] = mapped_column(Json)
+    channel_key: Mapped[str | None] = mapped_column(String(160))
     created_at: Mapped[datetime] = mapped_column(UTCDateTime)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime)
 
-    __table_args__ = (Index("ix_agent_conversations_user", "user_id", "updated_at"),)
+    __table_args__ = (Index("ix_agent_conversations_user", "user_id", "updated_at"), Index("ix_agent_conversations_channel", "user_id", "channel_key"))

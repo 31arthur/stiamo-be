@@ -8,12 +8,14 @@ from typing import Any
 
 from stiamo_common.errors import Forbidden, NotFound, ValidationFailed
 
+from app.application.conversations import ConversationService
 from app.application.ports import AccessTokens, Channel, ChannelRepository, TelegramApi, TwilioApi
 from app.application.proposals import ProposalService, verdict_of
 from app.application.runner import AgentRun
 from app.application.services import AgentService, Who
 from app.domain.dayplan import briefing_text
 from app.domain.llm import AiError
+from app.domain.orchestrator import ORCHESTRATOR_ID
 from app.infrastructure.messaging import TELEGRAM_MAX, WHATSAPP_MAX, as_whatsapp, clip
 
 log = logging.getLogger(__name__)
@@ -26,12 +28,17 @@ NOT_LINKED = "This chat isn't linked to a Stiamo account. Open AI agents → Cha
 
 def format_reply(run: AgentRun, limit: int) -> str:
     """The answer, then the cases and documents it found, as plain text a phone can show."""
-    parts = [run.answer or "I found nothing to say about that."]
-    cases = [f for f in run.found if f["kind"] == "case"]
-    docs = [f for f in run.found if f["kind"] == "document"]
-    schedules = [f for f in run.found if f["kind"] == "schedule"]
-    proposals = [f for f in run.found if f["kind"] == "proposal"]
-    briefings = [f for f in run.found if f["kind"] == "briefing"]
+    return format_answer(run.answer, run.found, limit)
+
+
+def format_answer(answer: str, found: list[dict[str, Any]], limit: int, agent: str | None = None) -> str:
+    """An answer and its cards as plain text, signed with the agent that gave it when the assistant chose one."""
+    parts = [answer or "I found nothing to say about that."]
+    cases = [f for f in found if f["kind"] == "case"]
+    docs = [f for f in found if f["kind"] == "document"]
+    schedules = [f for f in found if f["kind"] == "schedule"]
+    proposals = [f for f in found if f["kind"] == "proposal"]
+    briefings = [f for f in found if f["kind"] == "briefing"]
     if cases:
         lines = []
         for c in cases[:8]:
@@ -48,6 +55,8 @@ def format_reply(run: AgentRun, limit: int) -> str:
         parts.append("To approve:\n" + "\n\n".join(cards) + "\n\nReply YES to save, or NO to drop.")
     for s in schedules[:1]:
         parts.append("Proposed schedule (approve it in Stiamo):\n" + "\n".join(f"• {b['from']} {b['title']}" for b in s["blocks"]))
+    if agent:
+        parts.append(f"— {agent}")
     return clip("\n\n".join(parts), limit)
 
 
@@ -64,11 +73,13 @@ class ChannelService:
         pairing_minutes: int = 30,
         memory: dict[tuple[str, str], list[dict[str, Any]]] | None = None,
         proposals: ProposalService | None = None,
+        conversations: ConversationService | None = None,
     ) -> None:
         self._repo, self._agent, self._tg, self._tw, self._tokens = repo, agent, telegram, twilio, tokens
         self._public, self._pairing = public_url.rstrip("/"), pairing_minutes
         self._memory = memory if memory is not None else {}
         self._proposals = proposals
+        self._conversations = conversations
 
     # --- what is connected -----------------------------------------------------------------------------
 
@@ -78,7 +89,7 @@ class ChannelService:
         return f"{self._public}/v1/agent/webhooks/{kind}/{channel_id}"
 
     def view(self, c: Channel) -> dict[str, Any]:
-        out: dict[str, Any] = {"id": c.id, "kind": c.kind, **{k: v for k, v in c.public.items() if k != "ownerEmail"}, "agent": c.public.get("agent") or self._agent.registry.default_id, "createdAt": c.created_at.isoformat() if c.created_at else None}
+        out: dict[str, Any] = {"id": c.id, "kind": c.kind, **{k: v for k, v in c.public.items() if k != "ownerEmail"}, "agent": c.public.get("agent") or ORCHESTRATOR_ID, "createdAt": c.created_at.isoformat() if c.created_at else None}
         out["webhookUrl"] = f"{self._public}/v1/agent/webhooks/{c.kind}/{c.id}" if self._public else None
         pairing = c.state.get("pairing")
         if c.kind == "telegram" and pairing and datetime.fromisoformat(pairing["expires"]) > datetime.now(UTC):
@@ -110,7 +121,7 @@ class ChannelService:
                 raise ValidationFailed("That bot is already connected.")
         cid, secret = str(uuid.uuid4()), secrets.token_urlsafe(32)
         await self._tg.set_webhook(bot_token, self._webhook("telegram", cid), secret)
-        agent_id = self._agent.registry.get(agent or self._agent.registry.default_id).id
+        agent_id = self._agent_id(agent)
         c = Channel(cid, who.user_id, "telegram", {"botToken": bot_token, "webhookSecret": secret}, {"agent": agent_id, "ownerEmail": who.email, "botId": me.get("id"), "username": me.get("username", ""), "name": me.get("first_name", ""), "paired": []}, {}, datetime.now(UTC))
         await self._repo.save(c)
         return self.view(await self._new_pairing(c))
@@ -144,15 +155,21 @@ class ChannelService:
         name = await self._tw.check_account(account_sid, auth_token)
         cid = str(uuid.uuid4())
         self._webhook("whatsapp", cid)  # fails early, with an explanation, when the server's address isn't set
-        agent_id = self._agent.registry.get(agent or self._agent.registry.default_id).id
+        agent_id = self._agent_id(agent)
         c = Channel(cid, who.user_id, "whatsapp", {"authToken": auth_token}, {"agent": agent_id, "ownerEmail": who.email, "accountSid": account_sid, "account": name, "from": as_whatsapp(sender), "allowed": numbers}, {}, datetime.now(UTC))
         await self._repo.save(c)
         return self.view(c)
 
+    def _agent_id(self, agent: str | None) -> str:
+        """The assistant (which chooses the agent), or one agent of the team by id. The assistant is the default."""
+        if not agent or agent == ORCHESTRATOR_ID:
+            return ORCHESTRATOR_ID
+        return self._agent.registry.get(agent).id
+
     async def set_agent(self, who: Who, channel_id: str, agent: str) -> dict[str, Any]:
         """Which agent answers on this channel."""
         c = await self._mine(who, channel_id)
-        c.public = {**c.public, "agent": self._agent.registry.get(agent).id}
+        c.public = {**c.public, "agent": self._agent_id(agent)}
         await self._repo.save(c)
         return self.view(c)
 
@@ -214,13 +231,22 @@ class ChannelService:
         """Runs the agent for the channel's owner and returns what to say back."""
         settings_email = c.public.get("ownerEmail", "")
         who = Who(c.user_id, settings_email)
-        agent_id = c.public.get("agent") or self._agent.registry.default_id
+        agent_id = c.public.get("agent") or ORCHESTRATOR_ID
         # A yes or a no is about what the agent just proposed in this chat, not a new question for it.
         verdict = verdict_of(text) if self._proposals else None
         if verdict is not None:
             settled = await self._proposals.settle_channel(who, self._tokens.mint(who.user_id, who.email), c.id, verdict)
             if settled is not None:
                 return clip(settled, limit)
+        if agent_id == ORCHESTRATOR_ID and self._conversations is not None:
+            # The assistant: it picks the agent for each message and keeps the thread, which is also visible in the web app.
+            try:
+                answer, found, name = await self._conversations.channel_ask(who, self._tokens.mint(who.user_id, who.email), f"{c.kind}:{c.id}:{sender}", channel_name, text, c.id)
+            except (ValidationFailed, AiError) as exc:
+                return str(getattr(exc, "message", None) or exc)
+            return format_answer(answer, found, limit, name)
+        if agent_id == ORCHESTRATOR_ID:
+            agent_id = self._agent.registry.default_id
         key = (c.id, f"{agent_id}:{sender}")  # changing the channel's agent starts a fresh conversation
         try:
             run = await self._agent.chat(who, self._tokens.mint(who.user_id, who.email), agent_id, text, self._memory.get(key), channel_name, trigger=channel_name.lower(), channel_id=c.id)

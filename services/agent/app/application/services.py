@@ -290,6 +290,21 @@ class AgentService:
             "packs": list(agent.packs),
         }
 
+    async def visible_agents(self, who: Who, workspace: str) -> list[dict[str, Any]]:
+        """The team's agents that can answer in a workspace ("all": every one), as the person has assigned them."""
+        s = await self._load(who)
+        out = []
+        for a in self._registry.all():
+            where = s.workspaces.get(a.id, list(a.workspaces))
+            if workspace == "all" or workspace in where:
+                out.append({"id": a.id, "name": a.name, "description": a.description, "suggestions": list(a.suggestions)})
+        return out
+
+    async def jev_ready(self, who: Who) -> bool:
+        """Whether the decision model is on and has what it needs to run."""
+        s = await self._load(who)
+        return bool((s.decision or {}).get("enabled")) and "openrouter" in s.keys
+
     async def set_selection(self, who: Who, agent_id: str, provider: str, model_id: str, thinking: str) -> None:
         await self._known(who, agent_id)
         self._provider(provider)
@@ -385,7 +400,7 @@ class AgentService:
 
     async def chat(
         self, who: Who, token: str, agent_id: str, message: str, history: list[dict[str, Any]] | None = None, channel: str = "the web app",
-        *, trigger: str = "chat", channel_id: str | None = None,
+        *, trigger: str = "chat", channel_id: str | None = None, preface: str = "",
     ) -> AgentRun:
         """Asks an agent. Every question that reaches a model is kept in the run log, whether it worked or not."""
         agent = self._registry.get(agent_id)
@@ -403,7 +418,9 @@ class AgentService:
             past = [Message.from_json(m) for m in (history or [])[-MAX_HISTORY:] if m.get("role") != "system"]
         except (ValueError, AttributeError, TypeError) as exc:
             raise ValidationFailed("The earlier conversation couldn't be read. Start a new chat.") from exc
-        pkg = build_package(p.config, [t.spec for t in p.tools], p.context, message)
+        # What the conversation has established so far (when another agent may have answered before), ahead of the message itself.
+        asked = f"{preface}\n\nThe person's latest message:\n{message}" if preface else message
+        pkg = build_package(p.config, [t.spec for t in p.tools], p.context, asked)
         client = self._llm(sel["providerId"], p.settings.keys[sel["providerId"]])
 
         record = RunRecord(

@@ -11,8 +11,8 @@ async def ready(rig):
     await rig.client.put("/v1/agent/agents/cases/selection", json={"providerId": "openai", "modelId": "gpt-4o", "thinking": "off"}, headers=headers())
 
 
-async def telegram(rig):
-    r = await rig.client.post("/v1/agent/channels/telegram", json={"botToken": "123:abc"}, headers=headers())
+async def telegram(rig, agent="cases"):
+    r = await rig.client.post("/v1/agent/channels/telegram", json={"botToken": "123:abc", "agent": agent}, headers=headers())
     assert r.status_code == 201, r.text
     return r.json()
 
@@ -188,5 +188,6 @@ async def test_a_channel_is_answered_by_the_agent_it_was_given_and_can_be_switch
     assert bad.status_code == 404
 
 
-async def test_a_channel_starts_with_the_first_agent_when_none_is_named(rig):
-    assert (await telegram(rig))["agent"] == "cases"
+async def test_a_channel_starts_with_the_assistant_when_no_agent_is_named(rig):
+    r = await rig.client.post("/v1/agent/channels/telegram", json={"botToken": "123:abc"}, headers=headers())
+    assert r.json()["agent"] == "assistant"

@@ -86,3 +86,21 @@ last 40 messages are kept for the model. Proposal cards in a thread show their c
 | `POST /v1/agent/conversations/{id}/messages` | `{message}`: ask; returns the turn and the thread's summary. |
 | `PATCH /v1/agent/conversations/{id}` | `{title}`: rename. |
 | `DELETE /v1/agent/conversations/{id}` | Delete. |
+
+## The assistant (picks the agent)
+
+`assistant` is not an agent with tools of its own: it **routes**. For each message it chooses one of the team's agents (those shown in the
+workspace), tells that agent what the conversation has established, and returns that agent's answer, signed with its name. The person
+talks to one thing; whichever agent answers.
+
+- **Choosing.** A short follow-up ("and the labour office?", "yes", "move it") stays with the agent that just answered, with no model call.
+  Otherwise the decision model (**Jev**, when it is switched on under Providers) is asked one typed `choice` question whose options are the
+  agents and what each is for. With Jev off or unreachable, plain rules choose by the words each agent is known for. The turn records how
+  (`routedBy`: `jev`, `rules`, `continuity`, `only`) and why. Jev is a decision model: it chooses, it does not search the web.
+- **Consistency.** Every agent is given the same account of the conversation ahead of the message: the case and day it has been about
+  (the *focus*, kept current from the case references named and the cases and days the answers showed), a line for each older exchange,
+  and the last six exchanges in full, including what cards said (a briefing's items, a proposal's title). The raw tool messages of one
+  agent are never replayed to another, so any agent can pick up where another left off. This is stored with the conversation
+  (`agent_conversations.context`, migration `0012`).
+- **Phones.** A Telegram or WhatsApp channel set to the assistant (the default for new channels) keeps one thread per chat, which also
+  shows in the web app. A chat quiet for 12 hours, or `/new`, starts a fresh one. YES and NO still save or drop what an agent proposed.

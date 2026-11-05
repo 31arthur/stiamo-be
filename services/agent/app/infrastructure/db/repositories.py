@@ -134,7 +134,7 @@ class SqlProposalRepository(ProposalRepository):
 
 
 def _conversation(r: ConversationModel) -> Conversation:
-    return Conversation(r.id, r.user_id, r.agent_id, r.workspace, r.title, list(r.turns or []), list(r.messages or []), r.created_at, r.updated_at)
+    return Conversation(r.id, r.user_id, r.agent_id, r.workspace, r.title, list(r.turns or []), list(r.messages or []), r.created_at, r.updated_at, dict(r.context or {}), r.channel_key)
 
 
 class SqlConversationRepository(ConversationRepository):
@@ -152,9 +152,14 @@ class SqlConversationRepository(ConversationRepository):
         row = await self._s.get(ConversationModel, conversation_id)
         return _conversation(row) if row and row.user_id == user_id else None
 
+    async def by_channel(self, user_id: str, channel_key: str) -> Conversation | None:
+        row = (await self._s.execute(select(ConversationModel).where(ConversationModel.user_id == user_id, ConversationModel.channel_key == channel_key).order_by(ConversationModel.updated_at.desc()).limit(1))).scalar_one_or_none()
+        return _conversation(row) if row else None
+
     async def save(self, c: Conversation) -> None:
         row = await self._s.get(ConversationModel, c.id) or ConversationModel(id=c.id, user_id=c.user_id, created_at=c.created_at)
         row.agent_id, row.workspace, row.title, row.turns, row.messages, row.updated_at = c.agent_id, c.workspace, c.title[:120], list(c.turns), list(c.messages), c.updated_at
+        row.context, row.channel_key = dict(c.context), c.channel_key
         self._s.add(row)
         await self._s.flush()
 

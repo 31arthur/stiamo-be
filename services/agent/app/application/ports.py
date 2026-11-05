@@ -477,6 +477,10 @@ class Conversation:
     messages: list[dict[str, Any]]
     created_at: datetime
     updated_at: datetime
+    #: What the conversation has established across the agents that answered: its focus (case, day) and a line per older exchange.
+    context: dict[str, Any] = field(default_factory=dict)
+    #: Set for a thread that is a phone chat (Telegram or WhatsApp): which one, so the next message goes into it.
+    channel_key: str | None = None
 
 
 class ConversationRepository(ABC):
@@ -485,6 +489,10 @@ class ConversationRepository(ABC):
 
     @abstractmethod
     async def get(self, user_id: str, conversation_id: str) -> Conversation | None: ...
+
+    @abstractmethod
+    async def by_channel(self, user_id: str, channel_key: str) -> Conversation | None:
+        """The thread a phone chat is in right now."""
 
     @abstractmethod
     async def save(self, c: Conversation) -> None: ...
