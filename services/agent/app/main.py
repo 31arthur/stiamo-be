@@ -31,6 +31,7 @@ from app.infrastructure.voice import DeepgramVoice
 from app.presentation.deps import sync_evening, sync_listener, sync_reminders
 from app.presentation.routers import (
     agent,
+    alerts,
     attention,
     channels,
     conversations,
@@ -39,6 +40,7 @@ from app.presentation.routers import (
     proposals,
     reminders,
     secrets,
+    themes,
     usage,
     webhooks,
     workflows,
@@ -78,6 +80,20 @@ async def start_reminders(app: FastAPI) -> None:
         logging.getLogger(__name__).exception("could not start the call reminders")
 
 
+async def refresh_webhooks(app: FastAPI) -> None:
+    """Bots connected before urgent-email alerts existed are told to send button presses too (best effort, once per start)."""
+    if not app.state.settings.public_url.startswith("https://"):
+        return
+    try:
+        async with app.state.session_factory() as session:
+            from app.presentation.deps import build_services
+
+            _, channels = build_services(app, session)
+            await channels.resync_webhooks()
+    except Exception:  # noqa: BLE001  a problem here must not keep the service from starting
+        logging.getLogger(__name__).exception("could not refresh the Telegram webhooks")
+
+
 async def _config_of(repo, user_id: str, workflow_id: str):
     w = await repo.get(user_id, workflow_id)
     return w.config if w else None
@@ -99,6 +115,7 @@ def create_app(settings: Settings | None = None, *, mail_events=None, registry=N
         await start_listening(app)
         await start_evenings(app)
         await start_reminders(app)
+        await refresh_webhooks(app)
         yield
         await app.state.reminders.close()
         await app.state.daily.close()
@@ -150,6 +167,8 @@ def create_app(settings: Settings | None = None, *, mail_events=None, registry=N
     app.include_router(proposals.router)
     app.include_router(reminders.router)
     app.include_router(secrets.router)
+    app.include_router(themes.router)
+    app.include_router(alerts.router)
     app.include_router(conversations.router)
     app.include_router(workflows.router)
     app.include_router(webhooks.router)

@@ -121,6 +121,12 @@ class Memo(DataGateway):
     async def mail_trash(self, account_id, folder, uids):
         return await self._inner.mail_trash(account_id, folder, uids)
 
+    async def mail_accounts(self):
+        return await self._once("mail_accounts", self._inner.mail_accounts)
+
+    async def mail_send(self, account_id, message):
+        return await self._inner.mail_send(account_id, message)
+
     async def drive_available(self):
         return await self._once("drive", self._inner.drive_available)
 

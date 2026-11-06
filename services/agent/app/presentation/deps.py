@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from stiamo_common.errors import Conflict, Unauthorized
 from stiamo_common.security import Principal, make_principal_dependency
 
+from app.application.alerts import AlertService
 from app.application.channels import ChannelService
 from app.application.conversations import ConversationService
 from app.application.dayplans import DayPlanService, planner_settings
@@ -20,6 +21,7 @@ from app.application.services import AgentService, Who
 from app.application.workflows import WorkflowService
 from app.config import get_settings
 from app.infrastructure.db.repositories import (
+    SqlAlertRepository,
     SqlChannelRepository,
     SqlConversationRepository,
     SqlDayPlanRepository,
@@ -61,6 +63,7 @@ def build_services(app: FastAPI, session: AsyncSession) -> tuple[AgentService, C
     s = app.state
     agent = AgentService(SqlSettingsRepository(session, s.box), s.registry, s.runs, SqlWorkflowRepository(session), s.llm_factory, s.decision_factory, s.data_factory, s.settings.max_steps, SqlProposalRepository(session))
     channels = ChannelService(SqlChannelRepository(session, s.box), agent, s.telegram, s.twilio, s.tokens, public_url=s.settings.public_url, pairing_minutes=s.settings.pairing_minutes, memory=s.chat_memory, proposals=build_proposals(app, session), conversations=ConversationService(SqlConversationRepository(session), agent, SqlProposalRepository(session)))
+    channels.alerts = AlertService(SqlAlertRepository(session), SqlSettingsRepository(session, s.box), s.llm_factory, s.data_factory, s.tokens, channels, app_url=s.settings.app_url)
     return agent, channels
 
 
@@ -137,7 +140,8 @@ def sync_reminders(app: FastAPI, who: Who, enabled: bool) -> None:
 
 def build_workflow_service(app: FastAPI, session: AsyncSession) -> WorkflowService:
     s = app.state
-    return WorkflowService(SqlWorkflowRepository(session), SqlSettingsRepository(session, s.box), s.runs, s.llm_factory, s.decision_factory, s.data_factory, s.running, s.sweeps.is_active)
+    _, channels = build_services(app, session)
+    return WorkflowService(SqlWorkflowRepository(session), SqlSettingsRepository(session, s.box), s.runs, s.llm_factory, s.decision_factory, s.data_factory, s.running, s.sweeps.is_active, channels.alerts)
 
 
 def workflow_service(request: Request, session: Session) -> WorkflowService:

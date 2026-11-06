@@ -94,6 +94,8 @@ class FakeData(DataGateway):
         #: Whole bodies for the emails that need one (the list only has the start).
         self.bodies: dict[int, str] = {}
         self.trashed_by: list[tuple[str, int]] = []
+        #: Messages sent from a mailbox: (account id, what was sent).
+        self.mail_sent: list[tuple[str, dict]] = []
         self.mail = [
             {"uid": 4, "subject": "Partnership opportunity", "sender": {"name": "Lead", "address": "lead@client.io"}, "snippet": "We would like a quote for a new app", "date": "2026-10-04T10:00:00Z"},
             {"uid": 3, "subject": "50% off everything", "sender": {"name": "Shop", "address": "deals@shop.com"}, "snippet": "Huge sale", "date": "2026-10-03T10:00:00Z"},
@@ -139,6 +141,13 @@ class FakeData(DataGateway):
         self.feeds_asked.append([f["url"] for f in feeds])
         return fresh[:limit], len(fresh)
 
+    async def mail_accounts(self):
+        return [{"id": "acc1", "workspace": "sb", "label": "S&B Chambers", "address": "arjun@sb.example.com"}]
+
+    async def mail_send(self, account_id, message):
+        self.mail_sent.append((account_id, message))
+        return "<sent-1@sb.example.com>"
+
     async def mail_message(self, account_id, folder, uid):
         m = next((x for x in self.mail if x["uid"] == uid), None)
         if m is None:
@@ -179,6 +188,11 @@ class FakeTelegram(TelegramApi):
         self.webhooks: list[tuple[str, str]] = []
         self.deleted = 0
         self.voices: list[tuple[int | str, bytes, str]] = []
+        #: The inline keyboard of each message sent (None when it had none), the buttons pressed, and the messages whose buttons were taken away.
+        self.keyboards: list = []
+        self.answered: list[str] = []
+        self.stripped: list[tuple] = []
+        self.next_id = 100
 
     async def get_me(self, token):
         if token == "bad":
@@ -193,8 +207,17 @@ class FakeTelegram(TelegramApi):
     async def delete_webhook(self, token):
         self.deleted += 1
 
-    async def send_message(self, token, chat_id, text, html=False):
+    async def send_message(self, token, chat_id, text, html=False, buttons=None):
         self.sent.append((chat_id, text))
+        self.keyboards.append(buttons)
+        self.next_id += 1
+        return self.next_id
+
+    async def answer_callback(self, token, callback_id, text=""):
+        self.answered.append(callback_id)
+
+    async def edit_buttons(self, token, chat_id, message_id, buttons):
+        self.stripped.append((chat_id, message_id, buttons))
 
     async def send_typing(self, token, chat_id):
         pass

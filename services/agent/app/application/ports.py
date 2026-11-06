@@ -71,6 +71,14 @@ class DataGateway(ABC):
         """Moves messages to the mailbox's Trash folder. Never deletes."""
 
     @abstractmethod
+    async def mail_accounts(self) -> list[dict[str, Any]]:
+        """The mailboxes the owner has connected: {id, workspace, label, address, ...}."""
+
+    @abstractmethod
+    async def mail_send(self, account_id: str, message: dict[str, Any]) -> str:
+        """Sends a message from a mailbox ({to, subject, text, html, inReplyTo, references}). Returns the new message's id."""
+
+    @abstractmethod
     async def drive_available(self) -> bool: ...
 
     @abstractmethod
@@ -107,6 +115,8 @@ class UserSettings:
     planner: dict[str, Any] = field(default_factory=dict)
     #: Reminders about calls not marked done: {enabled, voice, model, state}. `state` is where each day's reminders have got to.
     reminders: dict[str, Any] = field(default_factory=dict)
+    #: Organisation themes: how replies to each organisation sound and look (see domain/themes.py).
+    themes: list[dict[str, Any]] = field(default_factory=list)
 
 
 class SettingsRepository(ABC):
@@ -151,6 +161,10 @@ class ChannelRepository(ABC):
 
     @abstractmethod
     async def delete(self, channel_id: str) -> None: ...
+
+    @abstractmethod
+    async def all_telegram(self) -> list[Channel]:
+        """Every connected Telegram bot, of everyone."""
 
 
 @dataclass
@@ -249,10 +263,20 @@ class TelegramApi(ABC):
     async def delete_webhook(self, token: str) -> None: ...
 
     @abstractmethod
-    async def send_message(self, token: str, chat_id: int | str, text: str, html: bool = False) -> None: ...
+    async def send_message(self, token: str, chat_id: int | str, text: str, html: bool = False, buttons: list[list[dict[str, str]]] | None = None) -> int | None:
+        """Sends a message, with an inline keyboard (`buttons`: rows of {text, url | callback_data}) if given. Returns its id in the chat."""
+
 
     @abstractmethod
     async def send_typing(self, token: str, chat_id: int | str) -> None: ...
+
+    @abstractmethod
+    async def answer_callback(self, token: str, callback_id: str, text: str = "") -> None:
+        """Tells Telegram a button was pressed (it shows a spinner until then)."""
+
+    @abstractmethod
+    async def edit_buttons(self, token: str, chat_id: int | str, message_id: int, buttons: list[list[dict[str, str]]] | None) -> None:
+        """Replaces the buttons under a message, or takes them away (None)."""
 
     @abstractmethod
     async def send_voice(self, token: str, chat_id: int | str, audio: bytes, caption: str = "") -> None:
@@ -441,6 +465,60 @@ class DayPlan:
     decided_at: datetime | None = None
     #: The briefing as a card (sections of real items), when the planner laid it out that way.
     card: dict[str, Any] | None = None
+
+
+@dataclass
+class Alert:
+    """An urgent email an agent raised on the phone, and where it has got to: the suggested replies, the draft being approved, who is waiting to be asked."""
+
+    id: str
+    user_id: str
+    #: The email's id as an agent knows it (mailbox:validity:uid); "sample:…" for a test alert.
+    item_id: str
+    workflow_id: str | None
+    workspace: str
+    account_id: str
+    folder: str
+    uid: int
+    subject: str
+    sender_name: str
+    sender_address: str
+    #: The email's Message-ID, so a reply sits in its thread.
+    message_id: str = ""
+    summary: str = ""
+    action: str = ""
+    due: str = ""
+    priority: str = "high"
+    replies: list[dict[str, str]] = field(default_factory=list)
+    theme_id: str | None = None
+    status: str = "open"  # open | replied | handled
+    #: The reply being approved: {to, subject, body, intent, instruction}.
+    draft: dict[str, Any] | None = None
+    #: Set while "write my own" waits for what to say: {chat, at}.
+    awaiting: dict[str, Any] | None = None
+    #: Where it was sent: [{channel, chat, message}].
+    chats: list[dict[str, Any]] = field(default_factory=list)
+    sample: bool = False
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class AlertRepository(ABC):
+    @abstractmethod
+    async def get(self, alert_id: str) -> Alert | None: ...
+
+    @abstractmethod
+    async def by_item(self, user_id: str, item_id: str) -> Alert | None: ...
+
+    @abstractmethod
+    async def waiting_for(self, user_id: str, chat: int | str) -> Alert | None:
+        """The open alert whose "write my own" is waiting for this chat to say something."""
+
+    @abstractmethod
+    async def recent(self, user_id: str, limit: int = 30) -> list[Alert]: ...
+
+    @abstractmethod
+    async def save(self, alert: Alert) -> None: ...
 
 
 class DayPlanRepository(ABC):

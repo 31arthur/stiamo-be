@@ -113,6 +113,24 @@ class HttpDataGateway(DataGateway):
             raise await self._mail_error(r)
         return r.json()
 
+    async def mail_accounts(self) -> list[dict[str, Any]]:
+        try:
+            r = await self._get(f"{self._mail}/v1/mail/accounts")
+        except AiError:
+            raise AiError("Couldn't reach the mail service. Try again in a moment.") from None
+        if r.status_code != 200:
+            raise await self._mail_error(r)
+        return r.json()
+
+    async def mail_send(self, account_id: str, message: dict[str, Any]) -> str:
+        try:
+            r = await self._http.post(f"{self._mail}/v1/mail/accounts/{account_id}/send", headers=self._headers, json=message)
+        except httpx.HTTPError as exc:
+            raise AiError("Couldn't reach the mail service. Try again in a moment.") from exc
+        if r.status_code != 200:
+            raise await self._mail_error(r)
+        return str(r.json().get("messageId") or "")
+
     async def mail_trash(self, account_id: str, folder: str, uids: list[int]) -> int:
         moved = 0
         for start in range(0, len(uids), 100):

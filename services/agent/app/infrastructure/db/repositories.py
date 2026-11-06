@@ -4,6 +4,8 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.ports import (
+    Alert,
+    AlertRepository,
     Channel,
     ChannelRepository,
     Conversation,
@@ -15,7 +17,14 @@ from app.application.ports import (
     SettingsRepository,
     UserSettings,
 )
-from app.infrastructure.db.models import ChannelModel, ConversationModel, DayPlanModel, ProposalModel, SettingsModel
+from app.infrastructure.db.models import (
+    AlertModel,
+    ChannelModel,
+    ConversationModel,
+    DayPlanModel,
+    ProposalModel,
+    SettingsModel,
+)
 from app.infrastructure.security import SecretBox
 
 
@@ -28,7 +37,7 @@ class SqlSettingsRepository(SettingsRepository):
         if row is None:
             return None
         keys = {k: v for k, v in self._box.open(row.keys_sealed).items() if isinstance(v, str)}
-        return UserSettings(row.user_id, row.email, keys, dict(row.selection or {}), row.decision, dict(row.prompt or {}), dict(row.workspaces or {}), row.updated_at, dict(row.planner or {}), dict(row.reminders or {}))
+        return UserSettings(row.user_id, row.email, keys, dict(row.selection or {}), row.decision, dict(row.prompt or {}), dict(row.workspaces or {}), row.updated_at, dict(row.planner or {}), dict(row.reminders or {}), list(row.themes or []))
 
     async def save(self, s: UserSettings) -> None:
         row = await self._s.get(SettingsModel, s.user_id) or SettingsModel(user_id=s.user_id)
@@ -37,6 +46,7 @@ class SqlSettingsRepository(SettingsRepository):
         # Reassigned (not mutated) so the change is noticed.
         row.selection, row.decision, row.prompt, row.workspaces, row.planner = dict(s.selections), s.decision, dict(s.prompts), dict(s.workspaces), dict(s.planner)
         row.reminders = dict(s.reminders)
+        row.themes = list(s.themes)
         row.updated_at = datetime.now(UTC)
         self._s.add(row)
         await self._s.flush()
@@ -62,6 +72,48 @@ class SqlSettingsRepository(SettingsRepository):
         return out
 
 
+def _alert(r: AlertModel) -> Alert:
+    return Alert(
+        r.id, r.user_id, r.item_id, r.workflow_id, r.workspace, r.account_id, r.folder, r.uid, r.subject, r.sender_name, r.sender_address, r.message_id, r.summary, r.action, r.due, r.priority,
+        list(r.replies or []), r.theme_id, r.status, dict(r.draft) if r.draft else None, dict(r.awaiting) if r.awaiting else None, list(r.chats or []), bool(r.sample), r.created_at, r.updated_at,
+    )
+
+
+class SqlAlertRepository(AlertRepository):
+    def __init__(self, session: AsyncSession) -> None:
+        self._s = session
+
+    async def get(self, alert_id: str) -> Alert | None:
+        row = await self._s.get(AlertModel, alert_id)
+        return _alert(row) if row else None
+
+    async def by_item(self, user_id: str, item_id: str) -> Alert | None:
+        row = (await self._s.execute(select(AlertModel).where(AlertModel.user_id == user_id, AlertModel.item_id == item_id))).scalar_one_or_none()
+        return _alert(row) if row else None
+
+    async def waiting_for(self, user_id: str, chat: int | str) -> Alert | None:
+        rows = (await self._s.execute(select(AlertModel).where(AlertModel.user_id == user_id, AlertModel.status == "open").order_by(AlertModel.updated_at.desc()).limit(20))).scalars()
+        for r in rows:
+            if r.awaiting and str(r.awaiting.get("chat")) == str(chat):
+                return _alert(r)
+        return None
+
+    async def recent(self, user_id: str, limit: int = 30) -> list[Alert]:
+        rows = (await self._s.execute(select(AlertModel).where(AlertModel.user_id == user_id).order_by(AlertModel.created_at.desc()).limit(limit))).scalars()
+        return [_alert(r) for r in rows]
+
+    async def save(self, a: Alert) -> None:
+        now = datetime.now(UTC)
+        row = await self._s.get(AlertModel, a.id) or AlertModel(id=a.id, user_id=a.user_id, item_id=a.item_id, created_at=a.created_at or now)
+        row.workflow_id, row.workspace, row.account_id, row.folder, row.uid = a.workflow_id, a.workspace, a.account_id, a.folder, a.uid
+        row.subject, row.sender_name, row.sender_address, row.message_id = a.subject[:400], a.sender_name[:200], a.sender_address[:320], a.message_id[:998]
+        row.summary, row.action, row.due, row.priority = a.summary, a.action[:300], a.due, a.priority
+        row.replies, row.theme_id, row.status, row.draft, row.awaiting, row.chats, row.sample = list(a.replies), a.theme_id, a.status, a.draft, a.awaiting, list(a.chats), a.sample
+        row.updated_at = now
+        self._s.add(row)
+        await self._s.flush()
+
+
 class SqlChannelRepository(ChannelRepository):
     def __init__(self, session: AsyncSession, box: SecretBox) -> None:
         self._s, self._box = session, box
@@ -85,6 +137,10 @@ class SqlChannelRepository(ChannelRepository):
         row.public, row.state = dict(c.public), dict(c.state)
         self._s.add(row)
         await self._s.flush()
+
+    async def all_telegram(self) -> list[Channel]:
+        rows = (await self._s.execute(select(ChannelModel).where(ChannelModel.kind == "telegram"))).scalars()
+        return [self._entity(r) for r in rows]
 
     async def delete(self, channel_id: str) -> None:
         await self._s.execute(delete(ChannelModel).where(ChannelModel.id == channel_id))

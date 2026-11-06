@@ -51,12 +51,15 @@ class ChannelService:
         memory: dict[tuple[str, str], list[dict[str, Any]]] | None = None,
         proposals: ProposalService | None = None,
         conversations: ConversationService | None = None,
+        alerts: Any = None,
     ) -> None:
         self._repo, self._agent, self._tg, self._tw, self._tokens = repo, agent, telegram, twilio, tokens
         self._public, self._pairing = public_url.rstrip("/"), pairing_minutes
         self._memory = memory if memory is not None else {}
         self._proposals = proposals
         self._conversations = conversations
+        #: Urgent-email alerts: the buttons under them, and the words typed for "write my own" (see alerts.py). Set once both exist.
+        self.alerts = alerts
 
     # --- what is connected -----------------------------------------------------------------------------
 
@@ -212,6 +215,55 @@ class ChannelService:
                     log.warning("could not send a voice message on channel %s", c.id)
         return sent
 
+    # --- alerts: messages with buttons ----------------------------------------------------------------------------------
+
+    async def push(self, who: Who, html: str, buttons: list[list[dict[str, str]]] | None = None) -> list[dict[str, Any]]:
+        """Sends a message with buttons to every Telegram chat the person has paired. Returns where each went, so the buttons can be taken away later."""
+        refs: list[dict[str, Any]] = []
+        for c in await self._repo.for_user(who.user_id):
+            if c.kind != "telegram":
+                continue
+            for p in c.public.get("paired", []):
+                try:
+                    mid = await self._tg.send_message(c.secrets["botToken"], p["id"], clip(html, TELEGRAM_MAX), html=True, buttons=buttons)
+                except Exception:  # noqa: BLE001  one chat that fails doesn't stop the rest
+                    log.warning("could not push to chat %s of channel %s", p["id"], c.id)
+                    continue
+                if mid:
+                    refs.append({"channel": c.id, "chat": p["id"], "message": mid})
+        return refs
+
+    async def say(self, channel_id: str, chat: int | str, html: str, buttons: list[list[dict[str, str]]] | None = None) -> int | None:
+        c = await self._repo.get(channel_id)
+        if c is None or c.kind != "telegram":
+            return None
+        return await self._tg.send_message(c.secrets["botToken"], chat, clip(html, TELEGRAM_MAX), html=True, buttons=buttons)
+
+    async def strip(self, channel_id: str, chat: int | str, message_id: int) -> None:
+        c = await self._repo.get(channel_id)
+        if c is not None and c.kind == "telegram":
+            await self._tg.edit_buttons(c.secrets["botToken"], chat, message_id, None)
+
+    async def ack(self, channel_id: str, callback_id: str, text: str = "") -> None:
+        c = await self._repo.get(channel_id)
+        if c is not None and c.kind == "telegram":
+            try:
+                await self._tg.answer_callback(c.secrets["botToken"], callback_id, text)
+            except Exception:  # noqa: BLE001  a spinner that won't stop is not worth failing for
+                log.info("could not answer a button press")
+
+    async def resync_webhooks(self) -> int:
+        """Telegram sends button presses only to a webhook that asked for them. Bots connected before alerts existed are set up again, once,
+        when the service starts. Returns how many were refreshed."""
+        done = 0
+        for c in await self._repo.all_telegram():
+            try:
+                await self._tg.set_webhook(c.secrets["botToken"], self._webhook("telegram", c.id), c.secrets["webhookSecret"])
+                done += 1
+            except Exception:  # noqa: BLE001
+                log.warning("could not refresh the webhook of channel %s", c.id)
+        return done
+
     async def remove(self, who: Who, channel_id: str) -> None:
         c = await self._mine(who, channel_id)
         if c.kind == "telegram":
@@ -268,6 +320,9 @@ class ChannelService:
                     return  # Telegram sent this one before
                 c.state = {**c.state, "lastUpdate": uid}
                 await self._repo.save(c)
+            if update.get("callback_query"):
+                await self._handle_press(c, update["callback_query"])
+                return
             msg = update.get("message") or {}
             text, chat = (msg.get("text") or "").strip(), (msg.get("chat") or {}).get("id")
             if not text or chat is None:
@@ -290,10 +345,26 @@ class ChannelService:
             if not any(p["id"] == chat for p in paired):
                 await self._tg.send_message(token, chat, NOT_LINKED)
                 return
+            if self.alerts is not None and not text.startswith("/"):
+                who = Who(c.user_id, c.public.get("ownerEmail", ""))
+                if await self.alerts.take_text(who, self._tokens.mint(who.user_id, who.email), c.id, chat, text):
+                    return
             await self._tg.send_typing(token, chat)
             await self._tg.send_message(token, chat, await self._answer(c, str(chat), text, "Telegram", TELEGRAM_MAX, "telegram"), html=True)
         except Exception:  # noqa: BLE001
             log.exception("telegram update failed for channel %s", c.id)
+
+    async def _handle_press(self, c: Channel, press: dict[str, Any]) -> None:
+        """A button under an alert was pressed, by someone in a chat paired with this bot."""
+        message = press.get("message") or {}
+        chat = (message.get("chat") or {}).get("id")
+        if chat is None or not any(p["id"] == chat for p in c.public.get("paired", [])):
+            await self._tg.answer_callback(c.secrets["botToken"], str(press.get("id", "")), "This chat isn't linked to Stiamo.")
+            return
+        if self.alerts is None:
+            return
+        who = Who(c.user_id, c.public.get("ownerEmail", ""))
+        await self.alerts.on_callback(who, self._tokens.mint(who.user_id, who.email), c.id, chat, int(message.get("message_id") or 0), str(press.get("id", "")), str(press.get("data") or ""))
 
     def check_whatsapp(self, c: Channel | None) -> Channel:
         if c is None or c.kind != "whatsapp":

@@ -42,23 +42,32 @@ class HttpTelegramApi(TelegramApi):
         return await self._call(token, "getMe")
 
     async def set_webhook(self, token: str, url: str, secret: str) -> None:
-        await self._call(token, "setWebhook", {"url": url, "secret_token": secret, "allowed_updates": ["message"], "drop_pending_updates": True})
+        await self._call(token, "setWebhook", {"url": url, "secret_token": secret, "allowed_updates": ["message", "callback_query"], "drop_pending_updates": True})
 
     async def delete_webhook(self, token: str) -> None:
         await self._call(token, "deleteWebhook", {"drop_pending_updates": True})
 
-    async def send_message(self, token: str, chat_id: int | str, text: str, html: bool = False) -> None:
+    async def send_message(self, token: str, chat_id: int | str, text: str, html: bool = False, buttons: list[list[dict[str, str]]] | None = None) -> int | None:
         """`html`: the text carries Telegram's tags (bold, italic, links). If Telegram can't read them the words are sent without."""
-        body = {"chat_id": chat_id, "text": clip(text, TELEGRAM_MAX), "disable_web_page_preview": True}
+        body: dict[str, Any] = {"chat_id": chat_id, "text": clip(text, TELEGRAM_MAX), "disable_web_page_preview": True}
+        if buttons:
+            body["reply_markup"] = {"inline_keyboard": buttons}
         if not html:
-            await self._call(token, "sendMessage", body)
-            return
-        try:
-            await self._call(token, "sendMessage", {**body, "parse_mode": "HTML"})
-        except ValidationFailed as exc:
-            if "parse" not in str(exc).lower():
-                raise
-            await self._call(token, "sendMessage", {**body, "text": clip(strip_markup(text), TELEGRAM_MAX)})
+            sent = await self._call(token, "sendMessage", body)
+        else:
+            try:
+                sent = await self._call(token, "sendMessage", {**body, "parse_mode": "HTML"})
+            except ValidationFailed as exc:
+                if "parse" not in str(exc).lower():
+                    raise
+                sent = await self._call(token, "sendMessage", {**body, "text": clip(strip_markup(text), TELEGRAM_MAX)})
+        return (sent or {}).get("message_id") if isinstance(sent, dict) else None
+
+    async def answer_callback(self, token: str, callback_id: str, text: str = "") -> None:
+        await self._call(token, "answerCallbackQuery", {"callback_query_id": callback_id, "text": text[:180]})
+
+    async def edit_buttons(self, token: str, chat_id: int | str, message_id: int, buttons: list[list[dict[str, str]]] | None) -> None:
+        await self._call(token, "editMessageReplyMarkup", {"chat_id": chat_id, "message_id": message_id, "reply_markup": {"inline_keyboard": buttons or []}})
 
     async def send_typing(self, token: str, chat_id: int | str) -> None:
         await self._call(token, "sendChatAction", {"chat_id": chat_id, "action": "typing"})
