@@ -138,3 +138,11 @@ async def test_logging_attempts_walks_the_chase(client, alice):
 async def test_attempt_on_unknown_follow_up(client, alice):
     r = await client.post("/v1/follow-ups/zzz/attempts", json={"result": "reached"}, headers=alice)
     assert r.status_code == 404
+
+
+async def test_a_task_can_name_who_to_reach_for_it(client, alice):
+    made = (await client.post("/v1/tasks", json={**TASK, "contact": "Ada Lovelace · +91 98765 43210"}, headers=alice)).json()
+    assert made["contact"] == "Ada Lovelace · +91 98765 43210"
+    assert (await client.get(f"/v1/tasks/{made['id']}", headers=alice)).json()["contact"] == "Ada Lovelace · +91 98765 43210"
+    cleared = (await client.put(f"/v1/tasks/{made['id']}", json={**TASK, "contact": None}, headers=alice)).json()
+    assert cleared.get("contact") is None

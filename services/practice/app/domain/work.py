@@ -36,6 +36,8 @@ class Task(Entity):
     order: int | None = None
     #: Where the task came from (a meeting, hearing, follow-up…).
     related: EntityRef | None = None
+    #: Who it is about or who to reach for it: a name and/or number (a phone call is a tap away in the app).
+    contact: str | None = None
     outcome: Outcome = Field(default_factory=Outcome)
 
 
