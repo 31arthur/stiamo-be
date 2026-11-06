@@ -31,6 +31,9 @@ def _message(r: httpx.Response) -> str:
 
 
 class HttpGoogle(GoogleGateway):
+    #: What the person is asked to allow. Contacts ask for their own, separately (see HttpPeople).
+    scopes = SCOPES
+
     def __init__(self, http: httpx.AsyncClient, client_id: str, client_secret: str, redirect_uri: str) -> None:
         self._http, self._id, self._secret, self._redirect = http, client_id, client_secret, redirect_uri
 
@@ -41,7 +44,7 @@ class HttpGoogle(GoogleGateway):
             raise GoogleError("Couldn't reach Google. Try again in a moment.") from exc
 
     def auth_url(self, state: str, login_hint: str | None) -> str:
-        q = {"client_id": self._id, "redirect_uri": self._redirect, "response_type": "code", "scope": SCOPES, "access_type": "offline", "prompt": "consent", "include_granted_scopes": "true", "state": state}
+        q = {"client_id": self._id, "redirect_uri": self._redirect, "response_type": "code", "scope": self.scopes, "access_type": "offline", "prompt": "consent", "include_granted_scopes": "true", "state": state}
         if login_hint:
             q["login_hint"] = login_hint
         return f"{AUTH}?{urlencode(q)}"
@@ -124,6 +127,34 @@ class HttpGoogle(GoogleGateway):
         r = await self._send("POST", REVOKE, data={"token": token})
         if r.status_code not in (200, 400):  # 400: already revoked
             raise GoogleError(_message(r))
+
+
+PEOPLE = "https://people.googleapis.com/v1"
+#: Read the person's contacts and nothing more: Stiamo can't change, add or delete a contact in Google.
+CONTACT_SCOPES = "openid email https://www.googleapis.com/auth/contacts.readonly"
+PERSON_FIELDS = "names,emailAddresses,phoneNumbers,organizations,biographies,photos,metadata"
+MAX_CONTACT_PAGES = 20
+
+
+class HttpPeople(HttpGoogle):
+    """The same Google sign-in and token handling as the calendar, asking only to read contacts."""
+
+    scopes = CONTACT_SCOPES
+
+    async def connections(self, access: str) -> list[dict[str, Any]]:
+        people: list[dict[str, Any]] = []
+        page: str | None = None
+        for _ in range(MAX_CONTACT_PAGES):
+            params: dict[str, Any] = {"personFields": PERSON_FIELDS, "pageSize": 1000, "sortOrder": "LAST_NAME_ASCENDING", **({"pageToken": page} if page else {})}
+            r = await self._send("GET", f"{PEOPLE}/people/me/connections", headers={"Authorization": f"Bearer {access}"}, params=params)
+            if r.status_code != 200:
+                raise GoogleError(f"Couldn't read the contacts: {_message(r)}", auth=r.status_code == 401)
+            body = r.json()
+            people += body.get("connections", [])
+            page = body.get("nextPageToken")
+            if not page:
+                break
+        return people
 
 
 class HttpPractice(PracticeGateway):

@@ -1,9 +1,10 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
+from typing import Any, Protocol
 
 from app.domain.calendar import Account, Event, Link, Prefs, Source
+from app.domain.contacts import Contact, ContactAccount
 
 
 class GoogleError(Exception):
@@ -59,6 +60,50 @@ class GoogleGateway(ABC):
 
     @abstractmethod
     async def revoke(self, token: str) -> None: ...
+
+
+class PeopleGateway(Protocol):
+    """Google's OAuth, and the person's contacts (the People API). The same sign-in as the calendar, with its own permission: read contacts."""
+
+    def auth_url(self, state: str, login_hint: str | None) -> str: ...
+
+    async def exchange(self, code: str) -> Tokens: ...
+
+    async def refresh(self, refresh_token: str) -> str: ...
+
+    async def email(self, access: str) -> str: ...
+
+    async def revoke(self, token: str) -> None: ...
+
+    async def connections(self, access: str) -> list[dict[str, Any]]:
+        """Every contact in the account, as Google's people (names, emailAddresses, phoneNumbers, organizations, biographies, photos)."""
+        ...
+
+
+class ContactRepository(ABC):
+    @abstractmethod
+    async def accounts(self, user_id: str) -> list[ContactAccount]: ...
+
+    @abstractmethod
+    async def all_accounts(self) -> list[ContactAccount]: ...
+
+    @abstractmethod
+    async def account(self, user_id: str, account_id: str) -> ContactAccount | None: ...
+
+    @abstractmethod
+    async def save_account(self, a: ContactAccount) -> None: ...
+
+    @abstractmethod
+    async def delete_account(self, user_id: str, account_id: str) -> None:
+        """The link and the contacts kept for it."""
+
+    @abstractmethod
+    async def replace_contacts(self, account: ContactAccount, contacts: list[Contact]) -> int:
+        """Makes the contacts kept for this link match what Google has now. Returns how many there are."""
+
+    @abstractmethod
+    async def contacts(self, user_id: str, workspace: str | None, query: str | None, limit: int) -> list[Contact]:
+        """Sorted by name. `query` (lower case) is looked for in the name, organisation, addresses, numbers and notes."""
 
 
 class PracticeGateway(ABC):

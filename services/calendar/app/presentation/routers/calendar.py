@@ -2,12 +2,14 @@ from datetime import date
 from typing import Annotated, Any
 from urllib.parse import urlencode
 
+import jwt
 from fastapi import APIRouter, Query, Request, Response
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 from stiamo_common.errors import ValidationFailed
 
-from app.presentation.deps import Calendar, CurrentPrincipal, Session, Token, build_service
+from app.application.contacts import STATE_TYPE as CONTACTS_STATE
+from app.presentation.deps import Calendar, CurrentPrincipal, Session, Token, build_contacts, build_service
 
 router = APIRouter(prefix="/v1/calendar", tags=["calendar"])
 
@@ -45,13 +47,20 @@ async def start(body: StartIn, me: CurrentPrincipal, cal: Calendar) -> dict[str,
 async def callback(request: Request, session: Session, code: str | None = None, state: str | None = None, error: str | None = None) -> RedirectResponse:
     """Public: the browser arrives here from Google, not from the app, so what proves who it is is the signed `state`."""
     app_url = request.app.state.settings.app_url.rstrip("/")
+    try:  # which connection this was is in the state; the service checks its signature
+        kind = jwt.decode(state or "", options={"verify_signature": False}).get("typ")
+    except jwt.PyJWTError:
+        kind = None
+    contacts = kind == CONTACTS_STATE
 
     def back(workspace: str, **q: str) -> RedirectResponse:
-        return RedirectResponse(f"{app_url}/{workspace}/calendar?{urlencode(q)}", status_code=303)
+        if contacts:
+            q = {k.replace("calendar_", "contacts_"): v for k, v in q.items()}
+        return RedirectResponse(f"{app_url}/{workspace}/{'contacts' if contacts else 'calendar'}?{urlencode(q)}", status_code=303)
 
     if error or not code or not state:
         return back("sb", calendar_error="Google did not allow it." if error == "access_denied" else "Connecting the calendar did not finish.")
-    cal = build_service(request.app, session)
+    cal = build_contacts(request.app, session) if contacts else build_service(request.app, session)
     try:
         workspace, email = await cal.complete(code, state)
     except ValidationFailed as exc:

@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Boolean, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 from stiamo_common.db import Base, UTCDateTime
 
@@ -21,6 +21,47 @@ class AccountModel(Base):
     last_sync_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
 
     __table_args__ = (Index("ix_calendar_accounts_user", "user_id"), UniqueConstraint("user_id", "workspace", "email", name="uq_calendar_account"))
+
+
+class ContactAccountModel(Base):
+    """A Google account linked to a workspace for its contacts. A Google account in two workspaces is two rows; a workspace can have many."""
+
+    __tablename__ = "contact_accounts"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(36))
+    workspace: Mapped[str] = mapped_column(String(16))
+    email: Mapped[str] = mapped_column(String(320))
+    refresh_sealed: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(10), default="ok")
+    error: Mapped[str] = mapped_column(String(300), default="")
+    count: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime)
+    last_sync_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+
+    __table_args__ = (Index("ix_contact_accounts_user", "user_id"), UniqueConstraint("user_id", "workspace", "email", name="uq_contact_account"))
+
+
+class ContactModel(Base):
+    """What Google has for a contact, kept so a workspace's contacts open at once. Google stays the truth: it is read again from there."""
+
+    __tablename__ = "contacts"
+
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(36))
+    account_id: Mapped[str] = mapped_column(String(36))
+    workspace: Mapped[str] = mapped_column(String(16))
+    google_id: Mapped[str] = mapped_column(String(200))
+    name: Mapped[str] = mapped_column(String(200))
+    organisation: Mapped[str] = mapped_column(String(200), default="")
+    title: Mapped[str] = mapped_column(String(200), default="")
+    emails: Mapped[list] = mapped_column(JSON, default=list)
+    phones: Mapped[list] = mapped_column(JSON, default=list)
+    notes: Mapped[str] = mapped_column(Text, default="")
+    photo: Mapped[str] = mapped_column(Text, default="")
+    search: Mapped[str] = mapped_column(Text, default="")
+
+    __table_args__ = (Index("ix_contacts_user_ws", "user_id", "workspace"), Index("ix_contacts_account", "account_id"))
 
 
 class SourceModel(Base):
