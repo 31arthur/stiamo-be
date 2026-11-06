@@ -21,6 +21,12 @@ class SettingsBody(DomainModel):
     enabled: bool
     #: Also speak it, as a voice message on Telegram (needs a Deepgram key).
     voice: bool = True
+    #: Also ring me on Telegram (through CallMeBot), reading the reminder aloud.
+    call: bool = False
+    #: Who to ring: a Telegram @username, or a number with its country code.
+    call_user: Annotated[str, Field(max_length=64)] = ""
+    #: A Google standard voice, like en-GB-Standard-B.
+    call_voice: Annotated[str, Field(max_length=40)] = ""
 
 
 class KeyBody(DomainModel):
@@ -34,7 +40,7 @@ async def get_settings(reminders: Reminders, me: deps.Me) -> dict[str, Any]:
 
 @router.put("", summary="Switch the reminders on or off")
 async def set_settings(body: SettingsBody, reminders: Reminders, me: deps.Me, request: Request) -> dict[str, Any]:
-    out = await reminders.set_settings(me, body.enabled, body.voice)
+    out = await reminders.set_settings(me, body.enabled, body.voice, body.call, body.call_user, body.call_voice)
     deps.sync_reminders(request.app, me, out["enabled"])
     return out
 

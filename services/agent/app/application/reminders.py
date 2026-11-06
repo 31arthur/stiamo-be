@@ -16,10 +16,10 @@ from typing import Any
 from stiamo_common.errors import ValidationFailed
 
 from app.application.dayplans import planner_settings, zone_of
-from app.application.ports import DataGateway, SettingsRepository, UserSettings, VoiceApi
+from app.application.ports import CallApi, DataGateway, SettingsRepository, UserSettings, VoiceApi
 from app.application.services import Who
 from app.domain.dayplan import clock, hearings_on
-from app.domain.nudge import DEFAULT_VOICE, due_run, free_now, speech
+from app.domain.nudge import DEFAULT_CALL_VOICE, DEFAULT_VOICE, call_speech, due_run, free_now, speech
 from app.domain.phone import Style, render
 
 log = logging.getLogger(__name__)
@@ -29,7 +29,14 @@ VOICE_KEY = "deepgram"
 
 def reminder_settings(raw: dict[str, Any] | None) -> dict[str, Any]:
     r = raw or {}
-    return {"enabled": bool(r.get("enabled")), "voice": r.get("voice", True) is not False, "model": r.get("model") or DEFAULT_VOICE}
+    return {
+        "enabled": bool(r.get("enabled")),
+        "voice": r.get("voice", True) is not False,
+        "model": r.get("model") or DEFAULT_VOICE,
+        "call": bool(r.get("call")),
+        "callUser": r.get("callUser") or "",
+        "callVoice": r.get("callVoice") or DEFAULT_CALL_VOICE,
+    }
 
 
 class ReminderService:
@@ -39,11 +46,12 @@ class ReminderService:
         data_factory: Callable[[str], DataGateway],
         tokens: Any,
         voice: VoiceApi,
+        caller: CallApi,
         announce: Callable[[Who, Callable[[Style, int], str]], Awaitable[int]],
         announce_voice: Callable[[Who, bytes, str], Awaitable[int]],
         clock_now: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
-        self._settings, self._data, self._tokens, self._voice, self._announce, self._announce_voice, self._now = settings, data_factory, tokens, voice, announce, announce_voice, clock_now
+        self._settings, self._data, self._tokens, self._voice, self._caller, self._announce, self._announce_voice, self._now = settings, data_factory, tokens, voice, caller, announce, announce_voice, clock_now
 
     async def _load(self, who: Who) -> UserSettings:
         s = await self._settings.get(who.user_id) or UserSettings(who.user_id)
@@ -57,9 +65,12 @@ class ReminderService:
         key = s.keys.get(VOICE_KEY)
         return {**reminder_settings(s.reminders), "voiceKey": {"connected": bool(key), "last4": key[-4:] if key else None}, "timezone": planner_settings(s.planner)["timezone"]}
 
-    async def set_settings(self, who: Who, enabled: bool, voice: bool) -> dict[str, Any]:
+    async def set_settings(self, who: Who, enabled: bool, voice: bool, call: bool = False, call_user: str = "", call_voice: str = "") -> dict[str, Any]:
+        user = call_user.strip()
+        if call and not (user.startswith("@") and len(user) > 2 or user.startswith("+") and len(user) > 6):
+            raise ValidationFailed("To be rung, give your Telegram username (like @yourname) or your phone number with its country code (like +919876543210).")
         s = await self._load(who)
-        s.reminders = {**s.reminders, "enabled": enabled, "voice": voice}
+        s.reminders = {**s.reminders, "enabled": enabled, "voice": voice, "call": call, "callUser": user, "callVoice": call_voice.strip() or DEFAULT_CALL_VOICE}
         await self._settings.save(s)
         return await self.view(who)
 
@@ -93,6 +104,18 @@ class ReminderService:
             log.warning("could not make the voice reminder for %s", s.user_id)
             return None
 
+    async def _ring(self, s: UserSettings, text: str) -> bool:
+        """Rings the person on Telegram and reads the reminder, when that is on. A call that can't be placed leaves the written message to do."""
+        cfg = reminder_settings(s.reminders)
+        if not cfg["call"] or not cfg["callUser"]:
+            return False
+        try:
+            await self._caller.call(cfg["callUser"], text, cfg["callVoice"], 2)
+        except ValidationFailed as exc:
+            log.warning("could not ring %s: %s", s.user_id, exc)
+            return False
+        return True
+
     async def check(self, who: Who) -> dict[str, Any] | None:
         """Reminds now if a reminder is due: returns what was said ({calls, step}), or None. Called every minute, and by hand."""
         s = await self._load(who)
@@ -120,10 +143,11 @@ class ReminderService:
         audio = await self._speak(s, speech(run["step"], run["pending"]))
         if audio:
             await self._announce_voice(who, audio, f"{n} call{'s' if n != 1 else ''} still pending")
+        rang = await self._ring(s, call_speech(run["step"], run["pending"]))
         runs[run["key"]] = {"step": run["step"] + 1, "last": minute}
         s.reminders = {**s.reminders, "state": {"day": day, "runs": runs}}
         await self._settings.save(s)
-        return {"calls": [c.get("id") for c in run["pending"]], "step": run["step"] + 1, "spoken": bool(audio)}
+        return {"calls": [c.get("id") for c in run["pending"]], "step": run["step"] + 1, "spoken": bool(audio), "rang": rang}
 
     @staticmethod
     def _item(call: dict[str, Any], cases: dict[str, Any]) -> dict[str, Any]:
@@ -141,7 +165,8 @@ class ReminderService:
         audio = await self._speak(s, text)
         if audio:
             await self._announce_voice(who, audio, "A test reminder")
-        return {"sent": reached, "spoken": bool(audio)}
+        rang = await self._ring(s, call_speech(0, [{"title": "Call the advocate"}, {"title": "Chase the labour office"}]))
+        return {"sent": reached, "spoken": bool(audio), "rang": rang}
 
 
 class ReminderManager:

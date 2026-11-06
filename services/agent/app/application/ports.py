@@ -259,6 +259,14 @@ class TelegramApi(ABC):
         """A spoken message (MP3 or OGG/Opus), which Telegram shows as a voice message that plays in the chat."""
 
 
+class CallApi(ABC):
+    """Rings a Telegram account and reads a message aloud when it is answered."""
+
+    @abstractmethod
+    async def call(self, user: str, text: str, lang: str, repeat: int) -> None:
+        """`user` is a Telegram @username or a phone number with its country code. Raises ValidationFailed when the call can't be placed."""
+
+
 class VoiceApi(ABC):
     """Turns words into speech."""
 

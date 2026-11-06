@@ -35,7 +35,7 @@ async def test_the_reminders_come_after_the_calls_end_then_an_hour_half_an_hour_
     await ready(rig)
     assert await check(rig, at(9, 39)) is None  # the calls end at 09:30: ten minutes on is 09:40
     first = await check(rig, at(9, 40))
-    assert first == {"calls": ["a", "b"], "step": 1, "spoken": True}
+    assert first == {"calls": ["a", "b"], "step": 1, "spoken": True, "rang": False}
     text = strip_markup(rig.telegram.sent[-1][1])
     assert "🔔 2 calls still pending" in text and "Call him again" in text and "Followup with Hemla Pawar" in text and "Mark them done in Stiamo" in text
     chat, audio, _ = rig.telegram.voices[-1]
@@ -85,4 +85,30 @@ async def test_nothing_is_sent_while_the_reminders_are_off_and_a_bad_key_is_refu
 async def test_a_test_reminder_can_be_sent_to_hear_the_voice(rig):
     await ready(rig)
     out = (await rig.client.post(f"{R}/test", headers=headers())).json()
-    assert out == {"sent": 1, "spoken": True} and "A test reminder" in strip_markup(rig.telegram.sent[-1][1])
+    assert out == {"sent": 1, "spoken": True, "rang": False} and "A test reminder" in strip_markup(rig.telegram.sent[-1][1])
+
+
+async def test_it_rings_on_telegram_each_time_when_that_is_on_and_a_failed_call_does_not_stop_the_message(rig):
+    await ready(rig)
+    bad = await rig.client.put(R, json={"enabled": True, "voice": True, "call": True, "callUser": "me"}, headers=headers())
+    assert bad.status_code == 422 and "@yourname" in bad.json()["error"]["message"]
+    on = (await rig.client.put(R, json={"enabled": True, "voice": True, "call": True, "callUser": "@arjun"}, headers=headers())).json()
+    assert on["call"] is True and on["callUser"] == "@arjun" and on["callVoice"] == "en-GB-Standard-B"
+    first = await check(rig, at(9, 40))
+    assert first["rang"] is True and len(rig.caller.calls) == 1
+    user, said, lang, repeat = rig.caller.calls[0]
+    assert (user, lang, repeat) == ("@arjun", "en-GB-Standard-B", 2) and said.startswith("Stiamo. 2 calls pending: Call him again; Followup with Hemla Pawar") and len(said) <= 256
+    rig.caller.fail = True
+    second = await check(rig, at(10, 40))
+    assert second["step"] == 2 and second["rang"] is False and "🔔" in rig.telegram.sent[-1][1]  # the message still went
+    rig.caller.fail = False
+    await rig.client.put(R, json={"enabled": True, "voice": True}, headers=headers())  # call switched off
+    await check(rig, at(11, 10))
+    assert len(rig.caller.calls) == 1
+
+
+async def test_the_test_reminder_rings_too(rig):
+    await ready(rig)
+    await rig.client.put(R, json={"enabled": True, "voice": False, "call": True, "callUser": "+919876543210"}, headers=headers())
+    out = (await rig.client.post(f"{R}/test", headers=headers())).json()
+    assert out["rang"] is True and rig.caller.calls[-1][0] == "+919876543210"

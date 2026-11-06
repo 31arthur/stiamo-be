@@ -1,4 +1,4 @@
-from app.domain.nudge import LADDER, due_run, free_now, next_due, runs, speech
+from app.domain.nudge import LADDER, call_speech, due_run, free_now, next_due, runs, speech
 
 
 def call(i, start, duration=15, status="open", day="2026-11-06"):
@@ -45,3 +45,12 @@ def test_the_spoken_reminder_names_the_calls_and_gets_firmer_each_time():
     assert "A reminder." in first and "2 calls are still pending" in first and "1, Call him again; 2, Chase the labour office" in first
     assert "last reminder" in last and "A call is still pending" in speech(0, pending[:1])
     assert "and 2 more" in speech(0, [{"title": f"C{i}"} for i in range(7)])
+
+
+def test_a_phone_call_says_the_same_in_256_characters_naming_as_many_calls_as_fit():
+    pending = [{"title": "Call him again"}, {"title": "Chase the labour office"}]
+    assert call_speech(0, pending) == "Stiamo. 2 calls pending: Call him again; Chase the labour office. Please mark them done."
+    assert "Last reminder." in call_speech(3, pending[:1]) and "1 call pending" in call_speech(3, pending[:1])
+    many = [{"title": f"Follow up with the opposing counsel number {i} about the order"} for i in range(12)]
+    out = call_speech(1, many)
+    assert len(out) <= 256 and out.startswith("Stiamo. 12 calls pending: Follow up") and " more. Please mark them done." in out
