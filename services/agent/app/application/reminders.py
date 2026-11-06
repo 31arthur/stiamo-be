@@ -27,6 +27,13 @@ log = logging.getLogger(__name__)
 VOICE_KEY = "deepgram"
 
 
+BAD_USER = "To be rung, give your Telegram username (like @yourname) or your phone number with its country code (like +919876543210)."
+
+
+def valid_call_user(user: str) -> bool:
+    return (user.startswith("@") and len(user) > 2) or (user.startswith("+") and len(user) > 6)
+
+
 def reminder_settings(raw: dict[str, Any] | None) -> dict[str, Any]:
     r = raw or {}
     return {
@@ -67,8 +74,8 @@ class ReminderService:
 
     async def set_settings(self, who: Who, enabled: bool, voice: bool, call: bool = False, call_user: str = "", call_voice: str = "") -> dict[str, Any]:
         user = call_user.strip()
-        if call and not (user.startswith("@") and len(user) > 2 or user.startswith("+") and len(user) > 6):
-            raise ValidationFailed("To be rung, give your Telegram username (like @yourname) or your phone number with its country code (like +919876543210).")
+        if call and not valid_call_user(user):
+            raise ValidationFailed(BAD_USER)
         s = await self._load(who)
         s.reminders = {**s.reminders, "enabled": enabled, "voice": voice, "call": call, "callUser": user, "callVoice": call_voice.strip() or DEFAULT_CALL_VOICE}
         await self._settings.save(s)
@@ -139,6 +146,17 @@ class ReminderService:
         case = cases.get(call.get("caseId") or (rel.get("id") if rel.get("kind") == "case" else None)) or {}
         due = call.get("due") or {}
         return {"type": "followUp", "id": call.get("id"), "title": call.get("title"), "time": clock(due.get("time")), "channel": call.get("channel"), "contact": call.get("contact"), "caseRef": case.get("reference"), "tries": len(call.get("attempts") or []) or None}
+
+    async def test_call(self, who: Who, call_user: str | None = None) -> dict[str, Any]:
+        """Rings now, to check the call works before it is needed. Unlike a real reminder it says why when it can't (CallMeBot's own answer).
+        Rings `call_user` if given, so it can be tried before it is saved; otherwise the saved one."""
+        s = await self._load(who)
+        cfg = reminder_settings(s.reminders)
+        user = (call_user if call_user is not None else cfg["callUser"]).strip()
+        if not valid_call_user(user):
+            raise ValidationFailed(BAD_USER)
+        await self._caller.call(user, "Stiamo. This is a test call. If you can hear this, your call reminders are working.", cfg["callVoice"], 1)
+        return {"called": True, "user": user}
 
     async def test(self, who: Who) -> dict[str, Any]:
         """A sample reminder to the connected chats, so the voice can be heard before it is needed."""

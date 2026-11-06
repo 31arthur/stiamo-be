@@ -41,6 +41,16 @@ async def set_settings(body: SettingsBody, reminders: Reminders, me: deps.Me, re
     return out
 
 
+class TestCallBody(DomainModel):
+    #: Who to ring, to try it before saving; the saved one when left out.
+    call_user: Annotated[str | None, Field(max_length=64)] = None
+
+
+@router.post("/test-call", summary="Ring now with a short test message, and say why if the call can't be placed")
+async def test_call(reminders: Reminders, me: deps.Me, body: TestCallBody | None = None) -> dict[str, Any]:
+    return await reminders.test_call(me, body.call_user if body else None)
+
+
 @router.post("/test", summary="Send a sample reminder to the connected chats")
 async def test(reminders: Reminders, me: deps.Me) -> dict[str, Any]:
     return await reminders.test(me)
