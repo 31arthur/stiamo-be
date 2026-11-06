@@ -199,7 +199,9 @@ class FakeTelegram(TelegramApi):
             from stiamo_common.errors import ValidationFailed
 
             raise ValidationFailed("Telegram doesn't recognise that bot token.")
-        return {"id": 777, "username": "stiamo_bot", "first_name": "Stiamo"}
+        if token == "123:abc":
+            return {"id": 777, "username": "stiamo_bot", "first_name": "Stiamo"}
+        return {"id": 1000 + len(token) + sum(map(ord, token)), "username": "bot_" + token.split(":")[0], "first_name": "Bot"}
 
     async def set_webhook(self, token, url, secret):
         self.webhooks.append((url, secret))

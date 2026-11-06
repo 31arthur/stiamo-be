@@ -637,13 +637,18 @@ class WorkflowService:
                     return
                 o.data = parsed
                 o.status = "event_proposed" if routes[o.label or ""] == "event" and parsed.get("event") else "queued"
-                if routes[o.label or ""] == "alert" and mode == "run" and self._alerts is not None and cfg.source.kind in ("mail", "agent"):
+                route = routes[o.label or ""]
+                # A label set to ping Telegram is always an alert. An agent set to send updates also sends what it queues: as an alert when the model
+                # finds it high priority, otherwise as a quiet update.
+                tell = route == "alert" or (cfg.notify.telegram and route in ("attention", "event"))
+                if tell and mode == "run" and self._alerts is not None and cfg.source.kind in ("mail", "agent"):
                     sender = full.get("sender") or {}
+                    urgent = route == "alert" or parsed.get("priority") == "high"
                     try:  # telling the phone must never undo the judging
                         await self._alerts.raise_alert(
                             who, token, workflow_id=workflow_id, account_id=account_of(o.item.id), folder=folder, uid=uid_of(o.item.id), item_id=o.item.id,
                             subject=str(full.get("subject") or o.item.title), sender_name=str(sender.get("name") or ""), sender_address=str(sender.get("address") or o.item.meta.get("from") or ""),
-                            message_id=str(full.get("messageId") or ""), analysis=parsed,
+                            message_id=str(full.get("messageId") or ""), analysis={**parsed, "priority": "high" if urgent else "normal"}, call=cfg.notify.call and urgent,
                         )
                     except Exception:  # noqa: BLE001
                         log.exception("could not raise the alert for %s", o.item.id)

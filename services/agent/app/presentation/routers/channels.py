@@ -13,6 +13,8 @@ class TelegramBody(DomainModel):
     bot_token: Annotated[str, Field(max_length=200)]
     #: Which agent answers. Without one, the first registered.
     agent: str | None = None
+    #: Make it a workspace's email bot (personal, sb, fsa or media): alerts about that workspace's mail go to it alone.
+    workspace: str | None = None
 
 
 class WhatsAppBody(DomainModel):
@@ -40,7 +42,7 @@ async def list_channels(channels: deps.Channels, me: deps.Me) -> dict[str, Any]:
 
 @router.post("/telegram", status_code=status.HTTP_201_CREATED, summary="Connect a Telegram bot (sets its webhook)")
 async def connect_telegram(body: TelegramBody, channels: deps.Channels, me: deps.Me) -> dict[str, Any]:
-    return await channels.connect_telegram(me, body.bot_token, body.agent)
+    return await channels.connect_telegram(me, body.bot_token, body.agent, body.workspace)
 
 
 @router.post("/whatsapp", status_code=status.HTTP_201_CREATED, summary="Connect WhatsApp through Twilio")

@@ -143,6 +143,8 @@ def create_app(settings: Settings | None = None, *, mail_events=None, registry=N
     app.state.reminders = ReminderManager()
     app.state.voice = voice or DeepgramVoice(http)
     app.state.caller = caller or CallMeBot(http)
+    #: When a call about a workspace's priority mail was last placed (see application/alerts.py).
+    app.state.alert_calls = {}
     #: The time, which a test can set.
     app.state.clock = clock or (lambda: datetime.now(UTC))
     #: Agents listening to their mailbox (see application/listeners.py).

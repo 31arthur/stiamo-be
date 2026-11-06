@@ -152,3 +152,134 @@ async def test_themes_are_kept_per_person_and_previewed(rig):
     assert bad.status_code == 422
     shown = (await rig.client.post(f"{T}/preview", json={"theme": THEME}, headers=headers())).json()
     assert shown["text"].startswith("Respected Priya,") and "#8b1e3f" in shown["html"]
+
+
+WS = "/v1/agent/channels/telegram"
+
+
+async def email_bot(rig, workspace="sb", token="456:def", chat=888):
+    r = await rig.client.post(WS, json={"botToken": token, "workspace": workspace}, headers=headers())
+    assert r.status_code == 201, r.text
+    bot = r.json()
+    await send(rig, bot, f"/start {bot['pairingCode']}", chat=chat, update=1)
+    return bot
+
+
+async def test_a_workspace_email_bot_gets_its_alerts_and_nothing_else_does(rig):
+    wid, general = await alert_agent(rig)
+    bot = await email_bot(rig)
+    assert bot["workspace"] == "sb"
+    chats_before = len(rig.telegram.sent)
+    rig.script += [answer("urgent"), READ]
+    await rig.client.post(f"{BASE}/{wid}/run", json={}, headers=headers())
+    new = rig.telegram.sent[chats_before:]
+    assert [chat for chat, _ in new] == [888] and "URGENT" in new[0][1]  # the S&B bot only: the general chat heard nothing
+    # what goes to every chat (here a test reminder) stays off the email bot
+    sent = len(rig.telegram.sent)
+    await rig.client.post("/v1/agent/reminders/test", headers=headers())
+    assert all(chat != 888 for chat, _ in rig.telegram.sent[sent:]) and any(chat == 555 for chat, _ in rig.telegram.sent[sent:])
+
+
+async def test_one_email_bot_per_workspace_and_only_for_real_workspaces(rig):
+    await email_bot(rig)
+    again = await rig.client.post(WS, json={"botToken": "789:ghi", "workspace": "sb"}, headers=headers())
+    assert again.status_code == 422 and "already has an email bot" in again.json()["error"]["message"]
+    other = await rig.client.post(WS, json={"botToken": "789:ghi", "workspace": "fsa"}, headers=headers())
+    assert other.status_code == 201 and other.json()["workspace"] == "fsa"
+    bad = await rig.client.post(WS, json={"botToken": "999:xyz", "workspace": "nowhere"}, headers=headers())
+    assert bad.status_code == 422
+
+
+async def attention_agent(rig, **notify):
+    """An S&B mail agent that only queues for Attention, with an option to send updates to the phone."""
+    return await make(
+        rig,
+        labels=[{"name": "issue", "description": "Needs the owner.", "route": "attention"}, {"name": "fyi", "description": "Nothing to do."}],
+        action={"trashLabel": None, "auto": False}, rules={"protectedDomains": [], "protectedPhrases": [], "protectCorrespondents": False},
+        filters={"sinceDays": 365, "newOnly": True, "limit": 50, "contains": "Partnership"}, notify=notify,
+    )
+
+
+def read(priority):
+    return ChatResult(json.dumps({"summary": "The lead asks for a quote.", "priority": priority, "action": "Reply with a quote", "due": None, "event": None, "replies": [{"label": "Send a quote", "intent": "Say a quote follows."}]}))
+
+
+def another(rig, uid):
+    rig.data.mail.append({"uid": uid, "subject": f"Partnership: notice {uid}", "sender": {"name": "Lead", "address": "lead@client.io"}, "snippet": "Respond today", "date": f"2026-10-{uid:02d}T10:00:00Z"})
+
+
+async def test_an_agent_that_sends_updates_tells_the_phone_quietly_and_loudly_when_it_is_priority(rig):
+    rig.app.state.settings.app_url = "https://app.example.com"
+    wid = await attention_agent(rig, telegram=True)
+    await email_bot(rig)
+    rig.script += [answer("issue"), read("normal")]
+    await rig.client.post(f"{BASE}/{wid}/run", json={}, headers=headers())
+    assert rig.telegram.sent[-1][0] == 888 and rig.telegram.sent[-1][1].startswith("📬 <b>Needs you · S&amp;B</b>") and "URGENT" not in rig.telegram.sent[-1][1]
+    assert "replies" in rig.llm_log[-1]["system"] and any("Send a quote" in b["text"] for b in last_keyboard(rig))  # a quiet update still offers a reply
+    another(rig, 9)  # the same agent, when the model finds the next one high priority
+    rig.script += [answer("issue"), read("high")]
+    await rig.client.post(f"{BASE}/{wid}/run", json={}, headers=headers())
+    assert rig.telegram.sent[-1][1].startswith("🚨🚨 <b>URGENT · S&amp;B</b>")
+
+
+async def test_an_agent_with_updates_off_says_nothing_for_attention_mail(rig):
+    wid = await attention_agent(rig)
+    await email_bot(rig)
+    sent = len(rig.telegram.sent)
+    rig.script += [answer("issue"), read("high")]
+    run = (await rig.client.post(f"{BASE}/{wid}/run", json={}, headers=headers())).json()
+    assert run["counts"]["queued"] == 1 and len(rig.telegram.sent) == sent  # it is in Attention, and that is all
+
+
+async def test_a_call_is_made_for_priority_mail_only_and_not_again_within_fifteen_minutes(rig):
+    from datetime import UTC, datetime, timedelta
+
+    wid = await attention_agent(rig, telegram=True, call=True)
+    await email_bot(rig)
+    t0 = datetime(2026, 11, 6, 12, 0, tzinfo=UTC)
+    clock = {"now": t0}
+    rig.app.state.clock = lambda: clock["now"]
+    await rig.client.put("/v1/agent/reminders", json={"enabled": False, "voice": False, "call": True, "callUser": "@arjun"}, headers=headers())
+    rig.script += [answer("issue"), read("normal")]
+    await rig.client.post(f"{BASE}/{wid}/run", json={}, headers=headers())
+    assert rig.caller.calls == []  # an update is not worth a call
+
+    another(rig, 9)
+    rig.script += [answer("issue"), read("high")]
+    await rig.client.post(f"{BASE}/{wid}/run", json={}, headers=headers())
+    user, said, lang, repeat = rig.caller.calls[0]
+    assert user == "@arjun" and said == "Stiamo. Urgent email in S&B, from Lead: Partnership: notice 9. Check Telegram." and len(said) <= 256
+
+    another(rig, 10)
+    clock["now"] = t0 + timedelta(minutes=5)
+    rig.script += [answer("issue"), read("high")]
+    await rig.client.post(f"{BASE}/{wid}/run", json={}, headers=headers())
+    assert len(rig.caller.calls) == 1  # the same burst: the Telegram alerts say the rest
+    another(rig, 11)
+    clock["now"] = t0 + timedelta(minutes=20)
+    rig.script += [answer("issue"), read("high")]
+    await rig.client.post(f"{BASE}/{wid}/run", json={}, headers=headers())
+    assert len(rig.caller.calls) == 2
+
+
+async def test_no_call_without_a_number_to_ring(rig):
+    wid = await attention_agent(rig, telegram=True, call=True)
+    await email_bot(rig)
+    rig.script += [answer("issue"), read("high")]
+    await rig.client.post(f"{BASE}/{wid}/run", json={}, headers=headers())  # no number is set under Call reminders
+    assert rig.caller.calls == [] and "URGENT" in rig.telegram.sent[-1][1]
+
+
+async def test_no_call_when_the_agent_did_not_ask_for_calls(rig):
+    wid = await attention_agent(rig, telegram=True)
+    await email_bot(rig)
+    await rig.client.put("/v1/agent/reminders", json={"enabled": False, "voice": False, "call": True, "callUser": "@arjun"}, headers=headers())
+    rig.script += [answer("issue"), read("high")]
+    await rig.client.post(f"{BASE}/{wid}/run", json={}, headers=headers())
+    assert rig.caller.calls == [] and "URGENT" in rig.telegram.sent[-1][1]
+
+
+async def test_spoken_reminders_are_off_unless_asked_for(rig):
+    got = (await rig.client.put("/v1/agent/reminders", json={"enabled": True}, headers=headers())).json()
+    assert got["voice"] is False
+    assert (await rig.client.get("/v1/agent/reminders", headers=headers())).json()["voice"] is False

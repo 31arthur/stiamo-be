@@ -10,6 +10,22 @@ An agent that watches a mailbox can ping your phone the moment something arrives
 4. **Themes** (Developer → Design). One for each organisation you write to: how a reply sounds (tone, language), how it opens and closes (greeting, sign-off, signature) and how it looks (letterhead, accent colour, footer). A theme is chosen by the sender's address, then their domain, then words in the mail, then your default.
 5. **Try it.** Developer → Design → *Send a sample alert* sends a made-up urgent email to your phone so you can see the look and try the buttons. Nothing is sent to anyone from a sample.
 
+## A Telegram bot for each workspace
+
+Each workspace can have its own **email bot**, so S&B's mail doesn't land in the same chat as personal mail. Make a bot in @BotFather for the workspace, then in the app: Assistant → **On your phone** → **Email bots**, paste its token and press Start in the bot. One bot per workspace.
+
+- An alert about a mailbox goes to the bot of **that mailbox's workspace**, never another's. A workspace with no email bot of its own falls back to your general bot (the one under Telegram).
+- Email bots carry email alerts only: the evening plan, call reminders and voice messages go to the general bot.
+
+## Each agent chooses
+
+On a mail agent's setup (Developer → the agent → Settings) there is an **Email updates** option:
+
+- **Send updates to Telegram**: what the agent queues for you (Attention, events) also arrives on the workspace's bot. Mail the model judges high priority, and any label set to *Ping me on Telegram*, comes as the loud 🚨 alert; the rest as a calmer 📬 *Needs you* update. Both carry the link and suggested replies.
+- **Call me for priority mail**: for a loud alert, also ring you on Telegram (CallMeBot, at the username or number set under Call reminders): "Stiamo. Urgent email in S&B, from …: …. Check Telegram." A burst of urgent mail is one call: the same workspace isn't called again within 15 minutes.
+
+No voice messages are sent for email: the Telegram notification is enough, and the call is kept for what is urgent.
+
 ## What happens on an alert
 
 The message is built to look nothing like Stiamo's quiet ones (plans, reminders, answers): `🚨🚨 URGENT · S&B 🚨🚨`, the organisation's theme, the subject, who it is from, what it asks, what to do and by when. Under it:

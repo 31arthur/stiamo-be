@@ -38,7 +38,7 @@ def reminder_settings(raw: dict[str, Any] | None) -> dict[str, Any]:
     r = raw or {}
     return {
         "enabled": bool(r.get("enabled")),
-        "voice": r.get("voice", True) is not False,
+        "voice": bool(r.get("voice")),
         "model": r.get("model") or DEFAULT_VOICE,
         "call": bool(r.get("call")),
         "callUser": r.get("callUser") or "",

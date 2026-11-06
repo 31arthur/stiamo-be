@@ -16,12 +16,22 @@ from typing import Any, Protocol
 
 from stiamo_common.errors import NotFound, ValidationFailed
 
-from app.application.ports import Alert, AlertRepository, DataGateway, LlmClient, SettingsRepository, UserSettings
+from app.application.ports import (
+    Alert,
+    AlertRepository,
+    CallApi,
+    DataGateway,
+    LlmClient,
+    SettingsRepository,
+    UserSettings,
+)
+from app.application.reminders import reminder_settings, valid_call_user
 from app.application.services import Who, selection_of
 from app.domain.alerts import (
     AWAIT_MINUTES,
     alert_buttons,
     alert_text,
+    call_text,
     clean_replies,
     draft_buttons,
     draft_text,
@@ -36,13 +46,15 @@ from app.domain.themes import first_name, render_email
 
 log = logging.getLogger(__name__)
 
+#: A call about priority mail is not made again for the same workspace within this long: the Telegram alerts say the rest.
+CALL_COOLDOWN = timedelta(minutes=15)
 WORKSPACE_LABELS = {"personal": "Personal", "sb": "S&B", "fsa": "FSA", "media": "Media"}
 
 
 class Phone(Protocol):
     """What the alerts need of the phone chats (the channel service)."""
 
-    async def push(self, who: Who, html: str, buttons: list[list[dict[str, str]]] | None) -> list[dict[str, Any]]: ...
+    async def push(self, who: Who, html: str, buttons: list[list[dict[str, str]]] | None, workspace: str | None = None) -> list[dict[str, Any]]: ...
 
     async def say(self, channel_id: str, chat: int | str, html: str, buttons: list[list[dict[str, str]]] | None = None) -> int | None: ...
 
@@ -71,8 +83,13 @@ class AlertService:
         *,
         app_url: str = "",
         clock_now: Callable[[], datetime] = lambda: datetime.now(UTC),
+        caller: CallApi | None = None,
+        calls: dict[tuple[str, str], datetime] | None = None,
     ) -> None:
         self._alerts, self._settings, self._llm, self._data, self._tokens, self._phone, self._app_url, self._now = alerts, settings, llm_factory, data_factory, tokens, phone, app_url, clock_now
+        self._caller = caller
+        #: When a call about a workspace's priority mail was last placed, shared by every request of this process.
+        self._calls = calls if calls is not None else {}
 
     # --- raising -----------------------------------------------------------------------------------------------
 
@@ -92,6 +109,7 @@ class AlertService:
         message_id: str,
         analysis: dict[str, Any],
         sample: bool = False,
+        call: bool = False,
     ) -> Alert | None:
         """Pings the phone about one email. Once per email: raising it again does nothing. Returns None when it was raised before."""
         if await self._alerts.by_item(who.user_id, item_id):
@@ -117,9 +135,28 @@ class AlertService:
         await self._alerts.save(alert)
         view = _view(alert)
         url = mail_url(self._app_url, workspace, account_id, folder, uid) if not sample else (self._app_url.rstrip("/") + f"/{workspace}/mail" if self._app_url else "")
-        alert.chats = await self._phone.push(who, alert_text({**view, "sender_name": sender_name, "sender_address": sender_address}, theme, label), alert_buttons(view, url))
+        alert.chats = await self._phone.push(who, alert_text({**view, "priority": alert.priority, "sender_name": sender_name, "sender_address": sender_address}, theme, label), alert_buttons(view, url), workspace)
         await self._alerts.save(alert)
+        if call and alert.priority == "high" and not sample:
+            await self._ring(who, s, workspace, label, sender_name or sender_address, subject)
         return alert
+
+    async def _ring(self, who: Who, s: UserSettings | None, workspace: str, label: str, sender: str, subject: str) -> bool:
+        """Rings the owner on Telegram about a priority email: once for a burst, and only if a number to ring is set under Call reminders."""
+        cfg = reminder_settings(s.reminders if s else {})
+        if self._caller is None or not valid_call_user(cfg["callUser"]):
+            return False
+        now = self._now()
+        last = self._calls.get((who.user_id, workspace))
+        if last is not None and now - last < CALL_COOLDOWN:
+            return False
+        try:
+            await self._caller.call(cfg["callUser"], call_text(label, sender, subject), cfg["callVoice"], 2)
+        except Exception:  # noqa: BLE001  the alert is already on the phone
+            log.warning("could not ring about priority mail for %s", who.user_id)
+            return False
+        self._calls[(who.user_id, workspace)] = now
+        return True
 
     async def sample(self, who: Who, token: str) -> Alert | None:
         """A made-up urgent email, to see what an alert looks like and to try the buttons. Nothing is sent to anyone from it."""

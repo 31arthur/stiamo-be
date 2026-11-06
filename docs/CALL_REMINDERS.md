@@ -15,7 +15,7 @@ The ladder is `LADDER` in `services/agent/app/domain/nudge.py`.
 ## What is sent
 
 - A written message to every connected Telegram chat and WhatsApp number, listing the calls.
-- On Telegram, a **voice message** too, if you have a Deepgram key. It arrives as a spoken message with a notification.
+- On Telegram, a **voice message** too, only if you switch it on and have a Deepgram key. It is off by default: the notification is enough, and a call is for what is urgent.
 - A **Telegram call**, if you switch it on. A bot can't start a call (Telegram gives bots no way to), so Stiamo uses [CallMeBot](https://www.callmebot.com/?p=5310), a third-party service that rings your own Telegram account and reads the reminder aloud when you answer. It is not part of Telegram.
 
 ## Setting up the voice
