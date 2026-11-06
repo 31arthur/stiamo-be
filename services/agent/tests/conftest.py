@@ -6,7 +6,16 @@ from typing import Any
 import jwt
 import pytest
 from app.agents import AGENTS
-from app.application.ports import AccessTokens, DataGateway, DecisionClient, LlmClient, TelegramApi, TwilioApi, VoiceApi
+from app.application.ports import (
+    AccessTokens,
+    CallApi,
+    DataGateway,
+    DecisionClient,
+    LlmClient,
+    TelegramApi,
+    TwilioApi,
+    VoiceApi,
+)
 from app.application.registry import AgentRegistry
 from app.application.toolpacks import PackRegistry
 from app.application.toolpacks.agenda import AgendaPack
@@ -226,6 +235,21 @@ class FakeVoice(VoiceApi):
         return text.encode()
 
 
+class FakeCaller(CallApi):
+    """Rings by writing the call down."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str, str, int]] = []
+        self.fail = False
+
+    async def call(self, user, text, lang, repeat):
+        if self.fail:
+            from stiamo_common.errors import ValidationFailed
+
+            raise ValidationFailed("CallMeBot couldn't place the call. Calls are disabled in Telegram.")
+        self.calls.append((user, text, lang, repeat))
+
+
 class FakeMailEvents:
     """The mail service's feed, in the test: nothing happens until `poke()` says new mail came."""
 
@@ -258,8 +282,8 @@ def test_registry() -> AgentRegistry:
 class Rig:
     """Everything a test needs: the app, a client and the fakes."""
 
-    def __init__(self, app, client, script, llm_log, decision_log, telegram, twilio, data, events, voice=None):
-        self.app, self.client, self.script, self.llm_log, self.decision_log, self.telegram, self.twilio, self.data, self.events, self.voice = app, client, script, llm_log, decision_log, telegram, twilio, data, events, voice
+    def __init__(self, app, client, script, llm_log, decision_log, telegram, twilio, data, events, voice=None, caller=None):
+        self.app, self.client, self.script, self.llm_log, self.decision_log, self.telegram, self.twilio, self.data, self.events, self.voice, self.caller = app, client, script, llm_log, decision_log, telegram, twilio, data, events, voice, caller
 
 
 @pytest.fixture
@@ -269,6 +293,7 @@ async def rig():
     decision_log: list[dict[str, Any]] = []
     models = [ModelInfo("o3", "o3", ("low", "medium", "high")), ModelInfo("gpt-4o", "gpt-4o", ())]
     telegram, twilio, data, events, voice = FakeTelegram(), FakeTwilio(), FakeData(), FakeMailEvents(), FakeVoice()
+    caller = FakeCaller()
     settings = Settings(database_url="sqlite+aiosqlite:///:memory:", public_url=PUBLIC)
     app = create_app(
         settings,
@@ -281,9 +306,10 @@ async def rig():
         twilio=twilio,
         tokens=FakeTokens(),
         voice=voice,
+        caller=caller,
     )
     async with app.router.lifespan_context(app):
         async with app.state.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            yield Rig(app, client, script, llm_log, decision_log, telegram, twilio, data, events, voice)
+            yield Rig(app, client, script, llm_log, decision_log, telegram, twilio, data, events, voice, caller)

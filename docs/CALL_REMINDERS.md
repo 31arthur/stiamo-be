@@ -15,7 +15,8 @@ The ladder is `LADDER` in `services/agent/app/domain/nudge.py`.
 ## What is sent
 
 - A written message to every connected Telegram chat and WhatsApp number, listing the calls.
-- On Telegram, a **voice message** too. A bot can't ring your phone (Telegram gives bots no way to start a call), so the reminder arrives as a spoken message that shows as a new message with a notification.
+- On Telegram, a **voice message** too, if you have a Deepgram key. It arrives as a spoken message with a notification.
+- A **Telegram call**, if you switch it on. A bot can't start a call (Telegram gives bots no way to), so Stiamo uses [CallMeBot](https://www.callmebot.com/?p=5310), a third-party service that rings your own Telegram account and reads the reminder aloud when you answer. It is not part of Telegram.
 
 ## Setting up the voice
 
@@ -25,6 +26,20 @@ The voice is [Deepgram Aura](https://deepgram.com/). A new account gets a free c
 2. In Stiamo, Assistant → **On your phone** → **Call reminders**: paste the key, switch the reminders on, and press **Send a test**.
 
 Without a key, or with the voice switched off, the reminders are written only.
+
+## Setting up the Telegram call
+
+1. Open Telegram and send `/start` to **@CallMeBot_txtbot** (this lets CallMeBot call you).
+2. In Telegram, Settings → Privacy and Security → Calls: allow calls from everyone, or add CallMeBot as an exception. A call Telegram blocks fails with no sound.
+3. In Stiamo, Assistant → **On your phone** → **Call reminders**: switch on *Ring me on Telegram*, give your `@username` (or your number with country code, like `+919876543210`), and press **Send a test**.
+
+Good to know:
+
+- It reads at most **256 characters**, so a call names as many pending calls as fit ("Stiamo. 3 calls pending: …. Please mark them done.") and says "and N more" for the rest. The written message has the whole list.
+- The voice is a Google *Standard* voice (default `en-GB-Standard-B`; `en-IN-Standard-A` to `D` are the Indian English ones to try).
+- The message is spoken twice per call.
+- CallMeBot documents no response format and no rate limit, and its pages don't say the shared bot is free for good. If it stops working, the written message and the Deepgram voice message still arrive. A dedicated bot is $15 a month on their site.
+- A known Telegram bug on some iOS versions connects the call with no sound.
 
 ## Deploying
 

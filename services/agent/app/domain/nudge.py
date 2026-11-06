@@ -73,6 +73,24 @@ def due_run(minute: int, day: str, follow_ups: list[dict[str, Any]], states: dic
     return None
 
 
+#: CallMeBot reads at most this many characters of a call and cuts the rest.
+CALL_LIMIT = 256
+DEFAULT_CALL_VOICE = "en-GB-Standard-B"
+
+
+def call_speech(step: int, pending: list[dict[str, Any]], limit: int = CALL_LIMIT) -> str:
+    """What a phone call says: the same reminder, short enough to be read whole (it names as many calls as fit)."""
+    names = [str(c.get("title") or "a call")[:60] for c in pending]
+    n = len(names)
+    head = f"Stiamo. {'Last reminder. ' if step >= len(TONES) - 1 else ''}{n} call{'s' if n != 1 else ''} pending: "
+    tail = ". Please mark them done."
+    for k in range(n, -1, -1):
+        text = head + "; ".join(names[:k]) + (f" and {n - k} more" if k < n else "") + tail
+        if len(text) <= limit:
+            return text
+    return (head + tail)[:limit]
+
+
 def speech(step: int, pending: list[dict[str, Any]]) -> str:
     """What is said aloud: short, with the names of the calls and no references."""
     names = [str(c.get("title") or "a call") for c in pending]

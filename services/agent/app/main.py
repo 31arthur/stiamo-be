@@ -16,6 +16,7 @@ from app.application.schedules import ScheduleManager
 from app.application.services import Who
 from app.application.sweeps import SweepManager
 from app.config import Settings, get_settings
+from app.infrastructure.callmebot import CallMeBot
 from app.infrastructure.data import HttpDataGateway
 from app.infrastructure.db.repositories import SqlSettingsRepository
 from app.infrastructure.db.runs import SqlRunLog
@@ -81,7 +82,7 @@ async def _config_of(repo, user_id: str, workflow_id: str):
     return w.config if w else None
 
 
-def create_app(settings: Settings | None = None, *, mail_events=None, registry=None, llm_factory=None, decision_factory=None, data_factory=None, telegram=None, twilio=None, tokens=None, voice=None, clock=None) -> FastAPI:
+def create_app(settings: Settings | None = None, *, mail_events=None, registry=None, llm_factory=None, decision_factory=None, data_factory=None, telegram=None, twilio=None, tokens=None, voice=None, caller=None, clock=None) -> FastAPI:
     """Application factory. Run with: uvicorn app.main:create_app --factory
 
     The keyword arguments swap in fakes for tests; in production they are the real thing.
@@ -123,6 +124,7 @@ def create_app(settings: Settings | None = None, *, mail_events=None, registry=N
     #: Reminders about calls not marked done, checked every minute (see application/reminders.py).
     app.state.reminders = ReminderManager()
     app.state.voice = voice or DeepgramVoice(http)
+    app.state.caller = caller or CallMeBot(http)
     #: The time, which a test can set.
     app.state.clock = clock or (lambda: datetime.now(UTC))
     #: Agents listening to their mailbox (see application/listeners.py).
