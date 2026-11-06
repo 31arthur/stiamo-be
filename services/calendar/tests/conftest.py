@@ -104,6 +104,64 @@ class FakeGoogle(GoogleGateway):
         return code
 
 
+class FakePeople:
+    """Google's contacts in memory: accounts by authorisation code, and the people each account has."""
+
+    def __init__(self) -> None:
+        self.codes: dict[str, tuple[str, str | None]] = {}
+        self.live: dict[str, str] = {}
+        self.people: dict[str, list[dict[str, Any]]] = {}
+        self.revoked: list[str] = []
+        self.reads = 0
+
+    def auth_url(self, state: str, login_hint: str | None) -> str:
+        return f"https://accounts.google.com/o/oauth2/v2/auth?state={state}&scope=contacts.readonly"
+
+    async def exchange(self, code: str) -> Tokens:
+        if code not in self.codes:
+            raise GoogleError("Google didn't accept the sign-in: bad code")
+        email, refresh = self.codes[code]
+        if refresh:
+            self.live[refresh] = email
+        return Tokens(f"acc-{email}", refresh, 3600)
+
+    async def refresh(self, refresh_token: str) -> str:
+        if refresh_token not in self.live:
+            raise GoogleError("Google no longer allows Stiamo to read this calendar.", auth=True)
+        return f"acc-{self.live[refresh_token]}"
+
+    async def email(self, access: str) -> str:
+        return access.removeprefix("acc-")
+
+    async def revoke(self, token: str) -> None:
+        self.revoked.append(token)
+        self.live.pop(token, None)
+
+    async def connections(self, access: str) -> list[dict[str, Any]]:
+        self.reads += 1
+        return list(self.people.get(access.removeprefix("acc-"), []))
+
+    def connect(self, email: str, people: list[dict[str, Any]], refresh: str | None = "r") -> str:
+        code = f"code-{email}"
+        self.codes[code] = (email, f"{refresh}-{email}" if refresh else None)
+        self.people[email] = people
+        return code
+
+
+def person(resource: str, name: str | None = None, email: str | None = None, phone: str | None = None, org: str | None = None, **over: Any) -> dict[str, Any]:
+    """A Google person, with only what is given."""
+    out: dict[str, Any] = {"resourceName": f"people/{resource}"}
+    if name:
+        out["names"] = [{"displayName": name, "metadata": {"primary": True}}]
+    if email:
+        out["emailAddresses"] = [{"value": email, "type": "work"}]
+    if phone:
+        out["phoneNumbers"] = [{"value": phone, "type": "mobile"}]
+    if org:
+        out["organizations"] = [{"name": org, "title": "Registrar"}]
+    return {**out, **over}
+
+
 class FakePractice(PracticeGateway):
     def __init__(self) -> None:
         self.tables: dict[str, list[dict[str, Any]]] = {"meetings": [], "hearings": [], "cases": [], "tasks": [], "follow-ups": []}
@@ -115,8 +173,8 @@ class FakePractice(PracticeGateway):
 
 
 class Rig:
-    def __init__(self, app, client, google, practice) -> None:
-        self.app, self.client, self.google, self.practice = app, client, google, practice
+    def __init__(self, app, client, google, practice, people=None) -> None:
+        self.app, self.client, self.google, self.practice, self.people = app, client, google, practice, people
 
     async def start(self, workspace: str = "sb", who: dict[str, str] | None = None) -> str:
         r = await self.client.post("/v1/calendar/oauth/start", json={"workspace": workspace}, headers=who or headers())
@@ -144,11 +202,11 @@ class Rig:
 
 @pytest.fixture
 async def rig():
-    google, practice = FakeGoogle(), FakePractice()
-    settings = Settings(database_url="sqlite+aiosqlite:///:memory:", google_client_id="client-id", google_client_secret="client-secret", public_url=PUBLIC, app_url=APP, sync_minutes=0, practice_url="http://practice")
-    app = create_app(settings, google=google, practice=practice)
+    google, practice, people = FakeGoogle(), FakePractice(), FakePeople()
+    settings = Settings(database_url="sqlite+aiosqlite:///:memory:", google_client_id="client-id", google_client_secret="client-secret", public_url=PUBLIC, app_url=APP, sync_minutes=0, contacts_sync_minutes=0, practice_url="http://practice")
+    app = create_app(settings, google=google, practice=practice, people=people)
     async with app.router.lifespan_context(app):
         async with app.state.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            yield Rig(app, client, google, practice)
+            yield Rig(app, client, google, practice, people)

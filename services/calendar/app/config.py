@@ -41,6 +41,8 @@ class Settings(BaseSettings):
     practice_url: str = "http://practice:8000"
     #: Calendars are read again this often, for everyone, in the background. 0 turns the background run off.
     sync_minutes: int = 5
+    #: Contacts are read again this often, for everyone, in the background (they change rarely). 0 turns it off.
+    contacts_sync_minutes: int = 60
     #: How far back and ahead Google's events are read, in days.
     window_back_days: int = 30
     window_ahead_days: int = 400

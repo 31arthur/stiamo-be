@@ -11,8 +11,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from stiamo_common.errors import Unauthorized
 from stiamo_common.security import Principal, make_principal_dependency
 
+from app.application.contacts import ContactService
 from app.application.service import CalendarService
 from app.config import get_settings
+from app.infrastructure.db.contacts import SqlContactRepository
 from app.infrastructure.db.repositories import SqlCalendarRepository
 
 current_principal = make_principal_dependency(lambda: get_settings().token_settings())
@@ -54,3 +56,15 @@ def calendar_service(request: Request, session: Session) -> CalendarService:
 
 
 Calendar = Annotated[CalendarService, Depends(calendar_service)]
+
+
+def build_contacts(app: FastAPI, session: AsyncSession) -> ContactService:
+    s = app.state
+    return ContactService(SqlContactRepository(session, s.box), s.people, s.settings, s.people_access)
+
+
+def contact_service(request: Request, session: Session) -> ContactService:
+    return build_contacts(request.app, session)
+
+
+Contacts = Annotated[ContactService, Depends(contact_service)]

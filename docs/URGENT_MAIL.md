@@ -6,7 +6,7 @@ An agent that watches a mailbox can ping your phone the moment something arrives
 
 1. **The agent.** In Developer, make an agent that reads the S&B mailbox (the *Urgent mail watch* template does this). Give one label the route **Ping me on Telegram** (`alert`) and describe in its prompt what is urgent: something to share, register for, confirm or pay by a deadline. Switch on **Listen to the mailbox** so it runs the moment mail arrives.
 2. **Telegram.** Connect your bot and pair your chat (Assistant → On your phone). Alerts go to every paired chat.
-3. **The link.** Set `AGENT_APP_URL` on the agent service to your site's address (for example `https://your-stiamo-site.netlify.app`). Without it the alert has no "Open the email" button.
+3. **The link.** `AGENT_APP_URL` is the address of the web app, `https://stiamo.fullstackarthur.com`; the production compose file already uses it as the default, so there is nothing to add unless the site moves. To change it, set `AGENT_APP_URL` in `~/stiamo-be/.env` on the VPS and run `./deploy.sh`. Without an address the alert has no "Open the email" button. An alert's link looks like `https://stiamo.fullstackarthur.com/sb/mail?a=<mailbox>&f=INBOX&m=<message>`.
 4. **Themes** (Developer → Design). One for each organisation you write to: how a reply sounds (tone, language), how it opens and closes (greeting, sign-off, signature) and how it looks (letterhead, accent colour, footer). A theme is chosen by the sender's address, then their domain, then words in the mail, then your default.
 5. **Try it.** Developer → Design → *Send a sample alert* sends a made-up urgent email to your phone so you can see the look and try the buttons. Nothing is sent to anyone from a sample.
 
@@ -30,7 +30,7 @@ No voice messages are sent for email: the Telegram notification is enough, and t
 
 The message is built to look nothing like Stiamo's quiet ones (plans, reminders, answers): `🚨🚨 URGENT · S&B 🚨🚨`, the organisation's theme, the subject, who it is from, what it asks, what to do and by when. Under it:
 
-- **Open the email in Stiamo** opens it in the app (`/sb/mail?a=…&m=…`).
+- **Open the email in Stiamo** opens it in the app at `https://stiamo.fullstackarthur.com/sb/mail?a=…&m=…`. You need to be signed in there; Telegram opens it in its own browser or your default one.
 - **1, 2, 3**: suggested replies (the agent reads the whole email and suggests up to three). Pressing one has a model write it in the organisation's theme and shows you the draft.
 - **Send / Redo / Cancel** under the draft. Nothing is sent until you press **Send**; it goes out from the mailbox itself, as a reply in the same thread, dressed in the theme's letterhead.
 - **Write my own**: type what you want to say, as roughly as you like, and it is written up in the theme.

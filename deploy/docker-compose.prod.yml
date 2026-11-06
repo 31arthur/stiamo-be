@@ -198,7 +198,7 @@ services:
       AGENT_SECRET_KEY: ${AGENT_SECRET_KEY:?set AGENT_SECRET_KEY (docs/AGENT_SETUP.md)}
       # Where Telegram and Twilio send messages: this host's public https address.
       AGENT_PUBLIC_URL: ${AGENT_PUBLIC_URL:-https://stiamo-be.fullstackarthur.com}
-      AGENT_APP_URL: ${AGENT_APP_URL:-}
+      AGENT_APP_URL: ${AGENT_APP_URL:-https://stiamo.fullstackarthur.com}
       AGENT_CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
       AGENT_PRACTICE_URL: http://practice:8000
       AGENT_FILES_URL: http://files:8000
@@ -274,6 +274,8 @@ services:
       CALENDAR_GOOGLE_CLIENT_SECRET: ${GOOGLE_OAUTH_CLIENT_SECRET:-}
       CALENDAR_PUBLIC_URL: https://stiamo-be.fullstackarthur.com
       CALENDAR_APP_URL: ${CALENDAR_APP_URL:-https://stiamo.fullstackarthur.com}
+      # How often Google contacts are read again (minutes; 0 turns the background read off).
+      CALENDAR_CONTACTS_SYNC_MINUTES: ${CALENDAR_CONTACTS_SYNC_MINUTES:-60}
       CALENDAR_PRACTICE_URL: http://practice:8000
       CALENDAR_CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
     depends_on:
