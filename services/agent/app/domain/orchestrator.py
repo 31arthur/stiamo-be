@@ -131,6 +131,16 @@ def update_digest(digest: list[str], turn: dict[str, Any]) -> list[str]:
     return [*digest, line][-DIGEST_TURNS:]
 
 
+SCOPE_NAMES = {"personal": "Personal", "sb": "S&B Consultants (a legal and advocacy practice)", "fsa": "FSA (a software and technology consultancy)", "media": "Media duties"}
+
+
+def scope_line(workspace: str) -> str:
+    """Told to every agent that answers in a workspace's assistant: stay inside that workspace."""
+    if workspace not in SCOPE_NAMES:
+        return ""
+    return f"You are the assistant of the {SCOPE_NAMES[workspace]} workspace. Everything you can see and everything you add belongs to this workspace only; do not mention or act on the person's other workspaces."
+
+
 def build_preface(turns: list[dict[str, Any]], context: dict[str, Any]) -> str:
     """What every agent is told before the message: who and what this conversation has been about, and the latest exchanges in the person's
     words and the agents'. Plain text, so any agent can read it, whichever agents answered before."""

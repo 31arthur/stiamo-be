@@ -37,6 +37,7 @@ class ChangesPack(ToolPack):
         if ctx.propose is None:
             return []
         data, offer = ctx.data, ctx.propose
+        scope = ctx.workspace  # in a workspace's assistant everything proposed belongs to that workspace
         cases = await data.cases()
         hearings = await data.hearings()
         tasks, follow_ups = await data.records("tasks"), await data.records("follow-ups")
@@ -92,7 +93,7 @@ class ChangesPack(ToolPack):
             if (c := case_of(a.get("case"))) is not None:
                 f["related"] = {"kind": "case", "id": c["id"]}
                 shown.append(f"On {c.get('reference')} {c.get('title', '')}".strip())
-            if (ws := p.pick(a.get("workspace"), p.WORKSPACES, "The workspace")) is not None:
+            if (ws := p.pick(a.get("workspace"), p.WORKSPACES, "The workspace")) is not None and not scope:
                 f["workspace"] = ws
             date, start = p.day(a.get("date"), "The planned day"), p.minutes(a.get("start"), "The start time")
             if date or start is not None:
@@ -104,7 +105,7 @@ class ChangesPack(ToolPack):
 
         async def add_task(a: dict[str, Any]) -> ToolOutput:
             f, shown = task_fields(a, creating=True)
-            f.setdefault("workspace", "sb" if f.get("related") else "personal")
+            f.setdefault("workspace", scope or ("sb" if f.get("related") else "personal"))
             tid = str(uuid.uuid4())
             record = {"id": tid, "notes": "", "priority": "normal", "estimate": 30, "outcome": {"status": "open"}, **f}
             return await propose("task.create", f"New task: {f['title']}", shown, [{"table": "tasks", "id": tid, "create": True, "patch": record}])
@@ -152,13 +153,13 @@ class ChangesPack(ToolPack):
             if (c := case_of(a.get("case"))) is not None:
                 f["subject"] = {"kind": "case", "id": c["id"]}
                 shown.append(f"About {c.get('reference')}")
-            if (ws := p.pick(a.get("workspace"), p.WORKSPACES, "The workspace")) is not None:
+            if (ws := p.pick(a.get("workspace"), p.WORKSPACES, "The workspace")) is not None and not scope:
                 f["workspace"] = ws
             return f, shown
 
         async def add_follow_up(a: dict[str, Any]) -> ToolOutput:
             f, shown = follow_fields(a, creating=True)
-            f.setdefault("workspace", "sb" if f.get("subject") else "personal")
+            f.setdefault("workspace", scope or ("sb" if f.get("subject") else "personal"))
             fid = str(uuid.uuid4())
             record = {"id": fid, "channel": "call", "duration": 15, "outcome": {"status": "open"}, **f}
             return await propose("followUp.create", f"New follow-up: {f['title']}", shown, [{"table": "follow-ups", "id": fid, "create": True, "patch": record}])
@@ -223,7 +224,7 @@ class ChangesPack(ToolPack):
                 raise p.Bad("A plan needs steps: give a list, each with a title.")
             if len(raw) > p.MAX_STEPS:
                 raise p.Bad(f"At most {p.MAX_STEPS} steps in one plan.")
-            workspace = p.pick(a.get("workspace"), p.WORKSPACES, "The workspace", "sb" if linked else "personal")
+            workspace = scope or p.pick(a.get("workspace"), p.WORKSPACES, "The workspace", "sb" if linked else "personal")
             pid = str(uuid.uuid4())
             due = p.day(a.get("due"), "The plan's due date")
             plan: dict[str, Any] = {"id": pid, "title": title, "objective": p.long_text(a.get("objective"), "The objective") or "", "workspace": workspace, "status": "active"}

@@ -26,9 +26,10 @@ from app.application.ports import (
 )
 from app.application.registry import AgentRegistry
 from app.application.runner import AgentRun, Tool, run_agent
+from app.application.scope import ScopedData
 from app.application.toolpacks import PackContext
 from app.application.usage_totals import Bucket
-from app.domain.agents import AgentDefinition, UnknownAgent, clean_workspaces
+from app.domain.agents import WORKSPACES, AgentDefinition, UnknownAgent, clean_workspaces
 from app.domain.llm import DECISION_MODELS, PROVIDER_IDS, THINKING_LEVELS, AiError, Message, ModelInfo, clamp_thinking
 from app.domain.prompt import Package, PromptConfig, build_package
 
@@ -351,13 +352,17 @@ class AgentService:
 
     # --- asking ----------------------------------------------------------------------------------------------
 
-    async def _prepare(self, who: Who, token: str, agent: AgentDefinition, channel: str, prompt: PromptConfig | None = None, channel_id: str | None = None) -> Prepared:
+    async def _prepare(self, who: Who, token: str, agent: AgentDefinition, channel: str, prompt: PromptConfig | None = None, channel_id: str | None = None, workspace: str | None = None) -> Prepared:
         """Builds the agent for this person: their tools (from the agent's packs, bound to their data) and the prompt's variables."""
         s = await self._load(who)
         today = local_today(s).isoformat()
         decision = s.decision or {}
         decisions = self._decisions(s.keys["openrouter"]) if decision.get("enabled") and "openrouter" in s.keys else None
-        ctx = PackContext(Memo(self._data(token)), today, decisions, decision.get("modelId") or DECISION_MODELS[0]["id"], lambda: self._waiting(who), self._proposer(who, agent.id, channel_id), channel != "the evening plan")
+        scope = workspace if workspace in WORKSPACES else None
+        data: DataGateway = Memo(self._data(token))
+        if scope:
+            data = ScopedData(data, scope)  # a workspace's assistant sees that workspace's data only
+        ctx = PackContext(data, today, decisions, decision.get("modelId") or DECISION_MODELS[0]["id"], lambda: self._waiting(who, scope), self._proposer(who, agent.id, channel_id), channel != "the evening plan", scope)
         tools: list[Tool] = []
         context: dict[str, Any] = {"today": today, "user": who.name, "channel": channel}
         for name in agent.packs:
@@ -382,11 +387,14 @@ class AgentService:
 
         return propose
 
-    async def _waiting(self, who: Who) -> list[dict[str, Any]]:
-        """What is waiting in the Attention queue, for the agents that read it."""
+    async def _waiting(self, who: Who, workspace: str | None = None) -> list[dict[str, Any]]:
+        """What is waiting in the Attention queue, for the agents that read it. For a workspace: what its agents put there."""
         agents = {w.id: w for w in await self._workflows.all(who.user_id)}
+        mine = (await self._load(who)).workspaces if workspace else {}
         out = []
         for r in await self._workflows.queue(who.user_id, ["queued", "event_proposed"]):
+            if workspace and workspace not in (mine.get(r.agent_id) or ["sb"]):  # an agent nobody placed is the S&B desk's
+                continue
             d = r.data or {}
             out.append({"from": agents[r.agent_id].name if r.agent_id in agents else "", "title": r.title, "summary": d.get("summary") or r.title, "priority": d.get("priority") or "normal", "action": d.get("action"), "due": d.get("due"), "event": d.get("event"), "status": r.status})
         return out
@@ -406,7 +414,7 @@ class AgentService:
 
     async def chat(
         self, who: Who, token: str, agent_id: str, message: str, history: list[dict[str, Any]] | None = None, channel: str = "the web app",
-        *, trigger: str = "chat", channel_id: str | None = None, preface: str = "",
+        *, trigger: str = "chat", channel_id: str | None = None, preface: str = "", workspace: str | None = None,
     ) -> AgentRun:
         """Asks an agent. Every question that reaches a model is kept in the run log, whether it worked or not."""
         agent = self._registry.get(agent_id)
@@ -414,7 +422,7 @@ class AgentService:
         if not message:
             raise ValidationFailed("Ask something first.")
         try:
-            p = await self._prepare(who, token, agent, channel, channel_id=channel_id)
+            p = await self._prepare(who, token, agent, channel, channel_id=channel_id, workspace=workspace)
         except AiError as exc:
             raise ValidationFailed(str(exc)) from exc
         sel, _ = self._selection(p.settings, agent.id)

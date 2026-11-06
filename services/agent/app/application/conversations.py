@@ -21,6 +21,7 @@ from app.domain.orchestrator import (
     jev_question,
     jev_state,
     route_by_rules,
+    scope_line,
     update_digest,
     update_focus,
 )
@@ -143,16 +144,20 @@ class ConversationService:
         last = next((t.get("agentId") for t in reversed(c.turns) if t.get("agentId")), None)
         preface = build_preface(c.turns, c.context)
         agent_id, why, by = await self._route(who, candidates, message, preface, last)
-        run = await self._agent.chat(who, token, agent_id, message, [], channel_name, trigger=trigger, channel_id=channel_id, preface=preface)
+        scope = scope_line(c.workspace)
+        if scope:
+            preface = f"{scope}\n\n{preface}".strip()
+        run = await self._agent.chat(who, token, agent_id, message, [], channel_name, trigger=trigger, channel_id=channel_id, preface=preface, workspace=c.workspace if c.workspace != "all" else None)
         name = next(a["name"] for a in candidates if a["id"] == agent_id)
         turn = self._turn(message, run, agentId=agent_id, agentName=name, routedBy=by, why=why, gist=gist_of(run.found))
         context = c.context or {}
         c.context = {"focus": update_focus(context.get("focus") or {}, message, run.found), "digest": update_digest(context.get("digest") or [], turn)}
         return turn
 
-    async def channel_ask(self, who: Who, token: str, channel_key: str, channel_name: str, message: str, channel_id: str) -> tuple[str, list[dict[str, Any]], str | None]:
+    async def channel_ask(self, who: Who, token: str, channel_key: str, channel_name: str, message: str, channel_id: str, workspace: str = "all") -> tuple[str, list[dict[str, Any]], str | None]:
         """A message from a phone chat. It goes into that chat's thread (the same thread, on any day within a few hours of each other), which
-        also shows in the web app. Returns the answer, the cards, and the name of the agent that answered."""
+        also shows in the web app. `workspace`: a bot that belongs to one workspace is that workspace's assistant and answers only about it.
+        Returns the answer, the cards, and the name of the agent that answered."""
         now = datetime.now(UTC)
         c = await self._repo.by_channel(who.user_id, channel_key)
         fresh = message.strip().lower() in NEW_THREAD
@@ -163,11 +168,11 @@ class ConversationService:
         if fresh:
             return "Started a new conversation. What do you need?", [], None
         if c is None:
-            c = Conversation(str(uuid.uuid4()), who.user_id, ORCHESTRATOR_ID, "all", "", [], [], now, now, {}, channel_key)
+            c = Conversation(str(uuid.uuid4()), who.user_id, ORCHESTRATOR_ID, workspace, "", [], [], now, now, {}, channel_key)
         if len(c.turns) >= MAX_TURNS:
             c.channel_key = None
             await self._repo.save(c)
-            c = Conversation(str(uuid.uuid4()), who.user_id, ORCHESTRATOR_ID, "all", "", [], [], now, now, {}, channel_key)
+            c = Conversation(str(uuid.uuid4()), who.user_id, ORCHESTRATOR_ID, workspace, "", [], [], now, now, {}, channel_key)
         turn = await self._orchestrated(who, token, c, message, channel_name=channel_name, channel_id=channel_id, trigger=channel_name.lower())
         c.turns = [*c.turns, turn]
         c.title = c.title or _title_from(f"{channel_name}: {message}")
