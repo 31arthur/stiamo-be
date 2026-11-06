@@ -25,6 +25,9 @@ log = logging.getLogger(__name__)
 #: How much of a conversation a chat remembers, per sender.
 REMEMBER = 12
 
+#: How a workspace is named to the person who talks to its assistant.
+WORKSPACE_NAMES = {"personal": "Personal", "sb": "S&B", "fsa": "FSA", "media": "Media"}
+
 NOT_LINKED = "This chat isn't linked to a Stiamo account. Open AI agents → Channels in Stiamo to connect it."
 
 
@@ -174,7 +177,7 @@ class ChannelService:
 
     async def send_test(self, who: Who, channel_id: str) -> None:
         c = await self._mine(who, channel_id)
-        text = "Stiamo is connected. Ask me about a case."
+        text = self._hello(c)
         if c.kind == "telegram":
             paired = c.public.get("paired", [])
             if not paired:
@@ -292,6 +295,15 @@ class ChannelService:
 
     # --- messages arriving -----------------------------------------------------------------------------
 
+    @staticmethod
+    def _hello(c: Channel) -> str:
+        """What a new chat is told it can do. A workspace's bot is that workspace's assistant."""
+        ws = c.public.get("workspace")
+        if ws:
+            name = WORKSPACE_NAMES.get(ws, ws)
+            return f"I'm the {name} assistant. Ask me what's pending, what's on today, to plan the day or to add a task or follow-up for {name}. I only see {name}."
+        return "Ask me about a case or a document."
+
     async def _answer(self, c: Channel, sender: str, text: str, channel_name: str, limit: int, style: Style) -> str:
         """Runs the agent for the channel's owner and returns what to say back, written for the chat."""
         words = Writer(style).text
@@ -307,7 +319,7 @@ class ChannelService:
         if agent_id == ORCHESTRATOR_ID and self._conversations is not None:
             # The assistant: it picks the agent for each message and keeps the thread, which is also visible in the web app.
             try:
-                answer, found, name = await self._conversations.channel_ask(who, self._tokens.mint(who.user_id, who.email), f"{c.kind}:{c.id}:{sender}", channel_name, text, c.id)
+                answer, found, name = await self._conversations.channel_ask(who, self._tokens.mint(who.user_id, who.email), f"{c.kind}:{c.id}:{sender}", channel_name, text, c.id, c.public.get("workspace") or "all")
             except (ValidationFailed, AiError) as exc:
                 return words(str(getattr(exc, "message", None) or exc))
             return format_answer(answer, found, limit, name, style)
@@ -355,9 +367,9 @@ class ChannelService:
                     c.public = {**c.public, "paired": paired}
                     c.state = {k: v for k, v in c.state.items() if k != "pairing"}
                     await self._repo.save(c)
-                    await self._tg.send_message(token, chat, "Connected. Ask me about a case or a document.")
+                    await self._tg.send_message(token, chat, "Connected. " + self._hello(c))
                 else:
-                    await self._tg.send_message(token, chat, NOT_LINKED if not any(p["id"] == chat for p in paired) else "Ask me about a case or a document.")
+                    await self._tg.send_message(token, chat, NOT_LINKED if not any(p["id"] == chat for p in paired) else self._hello(c))
                 return
             if not any(p["id"] == chat for p in paired):
                 await self._tg.send_message(token, chat, NOT_LINKED)

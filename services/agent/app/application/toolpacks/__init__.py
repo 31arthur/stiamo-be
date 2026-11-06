@@ -29,6 +29,8 @@ class PackContext:
     propose: Callable[[str, str, list[str], list[dict[str, Any]]], Awaitable[str]] | None = None
     #: Someone is there to approve what is proposed (a chat), as opposed to a run by itself (the evening plan, which keeps its own plan).
     interactive: bool = True
+    #: The one workspace this is for (a workspace's assistant): what it proposes to add belongs to it. None: any.
+    workspace: str | None = None
 
 
 class ToolPack(ABC):
