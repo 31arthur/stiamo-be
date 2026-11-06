@@ -63,7 +63,7 @@ class ReminderService:
     async def view(self, who: Who) -> dict[str, Any]:
         s = await self._load(who)
         key = s.keys.get(VOICE_KEY)
-        return {**reminder_settings(s.reminders), "voiceKey": {"connected": bool(key), "last4": key[-4:] if key else None}, "timezone": planner_settings(s.planner)["timezone"]}
+        return {**reminder_settings(s.reminders), "voiceKey": {"connected": bool(key)}, "timezone": planner_settings(s.planner)["timezone"]}
 
     async def set_settings(self, who: Who, enabled: bool, voice: bool, call: bool = False, call_user: str = "", call_voice: str = "") -> dict[str, Any]:
         user = call_user.strip()
@@ -71,22 +71,6 @@ class ReminderService:
             raise ValidationFailed("To be rung, give your Telegram username (like @yourname) or your phone number with its country code (like +919876543210).")
         s = await self._load(who)
         s.reminders = {**s.reminders, "enabled": enabled, "voice": voice, "call": call, "callUser": user, "callVoice": call_voice.strip() or DEFAULT_CALL_VOICE}
-        await self._settings.save(s)
-        return await self.view(who)
-
-    async def put_key(self, who: Who, key: str) -> dict[str, Any]:
-        key = key.strip()
-        if not key:
-            raise ValidationFailed("Paste the key first.")
-        await self._voice.check(key)
-        s = await self._load(who)
-        s.keys[VOICE_KEY] = key
-        await self._settings.save(s)
-        return await self.view(who)
-
-    async def remove_key(self, who: Who) -> dict[str, Any]:
-        s = await self._load(who)
-        s.keys.pop(VOICE_KEY, None)
         await self._settings.save(s)
         return await self.view(who)
 

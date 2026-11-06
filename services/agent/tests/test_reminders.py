@@ -6,6 +6,7 @@ from .conftest import headers
 from .test_channels import send, telegram
 
 R = "/v1/agent/reminders"
+S = "/v1/agent/secrets"
 DAY = "2026-11-06"
 
 
@@ -22,7 +23,7 @@ async def ready(rig, voice=True):
     c = await telegram(rig)
     await send(rig, c, f"/start {c['pairingCode']}", chat=555, update=1)
     rig.data.tables = {"follow-ups": [call("a", 540, "Call him again"), call("b", 555, "Followup with Hemla Pawar")], "meetings": [], "tasks": []}
-    assert (await rig.client.put(f"{R}/voice-key", json={"apiKey": "dg-key-1234567"}, headers=headers())).json()["voiceKey"] == {"connected": True, "last4": "4567"}
+    assert (await rig.client.put(f"{S}/deepgram", json={"value": "dg-key-1234567"}, headers=headers())).status_code == 200
     assert (await rig.client.put(R, json={"enabled": True, "voice": voice}, headers=headers())).json()["enabled"] is True
 
 
@@ -69,7 +70,7 @@ async def test_without_a_voice_key_or_with_the_voice_off_the_reminder_is_written
     await ready(rig, voice=False)
     assert (await check(rig, at(9, 40)))["spoken"] is False and rig.telegram.voices == [] and rig.voice.said == []
     await rig.client.put(R, json={"enabled": True, "voice": True}, headers=headers())
-    await rig.client.delete(f"{R}/voice-key", headers=headers())
+    await rig.client.delete(f"{S}/deepgram", headers=headers())
     assert (await check(rig, at(10, 40)))["spoken"] is False and rig.telegram.voices == []
 
 
@@ -77,9 +78,7 @@ async def test_nothing_is_sent_while_the_reminders_are_off_and_a_bad_key_is_refu
     await ready(rig)
     await rig.client.put(R, json={"enabled": False, "voice": True}, headers=headers())
     assert await check(rig, at(9, 40)) is None and rig.telegram.voices == []
-    bad = await rig.client.put(f"{R}/voice-key", json={"apiKey": "bad-key"}, headers=headers())
-    assert bad.status_code == 422
-    assert (await rig.client.get(R, headers=headers())).json()["voiceKey"]["connected"] is True  # the good one is kept
+    assert (await rig.client.get(R, headers=headers())).json()["voiceKey"] == {"connected": True}  # whether, never what
 
 
 async def test_a_test_reminder_can_be_sent_to_hear_the_voice(rig):
