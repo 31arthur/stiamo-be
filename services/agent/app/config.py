@@ -30,6 +30,8 @@ class Settings(BaseSettings):
 
     #: Where Telegram and Twilio can reach this API from the internet (https), without a trailing slash.
     public_url: str = ""
+    #: Where the Stiamo web app lives (https), so an urgent-email alert can link to the email: https://stiamo.example.com
+    app_url: str = ""
 
     practice_url: str = "http://practice:8000"
     files_url: str = "http://files:8000"

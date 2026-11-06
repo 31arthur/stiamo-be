@@ -168,6 +168,7 @@ class WorkflowService:
         data_factory: Callable[[str], DataGateway],
         running: set[str] | None = None,
         sweeping: Callable[[str], bool] | None = None,
+        alerts: Any = None,
     ) -> None:
         self._repo, self._settings, self._runs = repo, settings, runs
         #: Agents being run right now, shared by every request of this process. One run of an agent at a time.
@@ -175,6 +176,8 @@ class WorkflowService:
         #: Whether a run through the whole inbox is going for an agent (see sweeps.py).
         self._sweeping = sweeping or (lambda _id: False)
         self._llm, self._decisions, self._data = llm_factory, decision_factory, data_factory
+        #: Raises an urgent email on the phone (see alerts.py); None where there is no phone to tell.
+        self._alerts = alerts
 
     # --- the agents themselves -----------------------------------------------------------------------------------
 
@@ -476,7 +479,7 @@ class WorkflowService:
         decider = await self._decider(who, cfg, s, workflow.id if workflow else None)
         outcomes, batches = await self._decide_all(cfg, items, decider) if items else ([], 0)
         trash_note = await self._act(token, cfg, outcomes, mode)
-        await self._route(who, token, cfg, s, workflow.id if workflow else None, outcomes)
+        await self._route(who, token, cfg, s, workflow.id if workflow else None, outcomes, mode)
 
         counts = {"items": len(outcomes), "proposed": 0, "needsReview": 0, "failed": 0}
         if cfg.source.kind == "mail":  # what a mailbox agent adds: judged fine, moved to Trash, set aside by the rules
@@ -588,7 +591,7 @@ class WorkflowService:
             }
             o.status = "published"
 
-    async def _route(self, who: Who, token: str, cfg: WorkflowConfig, s: UserSettings, workflow_id: str | None, outcomes: list[Outcome]) -> None:
+    async def _route(self, who: Who, token: str, cfg: WorkflowConfig, s: UserSettings, workflow_id: str | None, outcomes: list[Outcome], mode: str = "run") -> None:
         """What a label means when it has a route: the email is read in full, summarised and put in the Attention queue; if it names a
         date, a calendar event is proposed for the owner to approve. A label with no route is simply kept."""
         routes = {lb.name: lb.route for lb in cfg.labels if lb.route != "none"}
@@ -600,7 +603,7 @@ class WorkflowService:
         publishing = [o for o in outcomes if routes.get(o.label or "") == "publish" and o.status in ("proposed", "needs_review")]
         if publishing:
             await self._publish(who, cfg, s, workflow_id, publishing)
-        targets = [o for o in outcomes if routes.get(o.label or "") in ("attention", "event") and o.status in ("proposed", "needs_review")]
+        targets = [o for o in outcomes if routes.get(o.label or "") in ("attention", "event", "alert") and o.status in ("proposed", "needs_review")]
         if not targets:
             return
         read = await self._analyst(who, cfg, s, workflow_id)
@@ -614,6 +617,7 @@ class WorkflowService:
         async def one(o: Outcome) -> None:
             async with gate:
                 email = o.item.text
+                full: dict[str, Any] = {}
                 try:  # the list only has the start of an email: a date or a deadline may be further down
                     full = await data.mail_message(account_of(o.item.id), folder, uid_of(o.item.id))
                     email = f"From: {(full.get('sender') or {}).get('name', '')} <{(full.get('sender') or {}).get('address', '')}>\nSubject: {full.get('subject', '')}\n\n{str(full.get('text') or '')[:4000]}"
@@ -633,6 +637,16 @@ class WorkflowService:
                     return
                 o.data = parsed
                 o.status = "event_proposed" if routes[o.label or ""] == "event" and parsed.get("event") else "queued"
+                if routes[o.label or ""] == "alert" and mode == "run" and self._alerts is not None and cfg.source.kind in ("mail", "agent"):
+                    sender = full.get("sender") or {}
+                    try:  # telling the phone must never undo the judging
+                        await self._alerts.raise_alert(
+                            who, token, workflow_id=workflow_id, account_id=account_of(o.item.id), folder=folder, uid=uid_of(o.item.id), item_id=o.item.id,
+                            subject=str(full.get("subject") or o.item.title), sender_name=str(sender.get("name") or ""), sender_address=str(sender.get("address") or o.item.meta.get("from") or ""),
+                            message_id=str(full.get("messageId") or ""), analysis=parsed,
+                        )
+                    except Exception:  # noqa: BLE001
+                        log.exception("could not raise the alert for %s", o.item.id)
 
         await asyncio.gather(*(one(o) for o in targets))
 

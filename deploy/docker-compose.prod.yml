@@ -198,6 +198,7 @@ services:
       AGENT_SECRET_KEY: ${AGENT_SECRET_KEY:?set AGENT_SECRET_KEY (docs/AGENT_SETUP.md)}
       # Where Telegram and Twilio send messages: this host's public https address.
       AGENT_PUBLIC_URL: ${AGENT_PUBLIC_URL:-https://stiamo-be.fullstackarthur.com}
+      AGENT_APP_URL: ${AGENT_APP_URL:-}
       AGENT_CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
       AGENT_PRACTICE_URL: http://practice:8000
       AGENT_FILES_URL: http://files:8000

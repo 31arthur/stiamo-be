@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, Float, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Boolean, Float, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 from stiamo_common.db import Base, UTCDateTime
@@ -28,6 +28,8 @@ class SettingsModel(Base):
     planner: Mapped[dict[str, Any] | None] = mapped_column(Json)
     #: Reminders about calls not marked done: whether they are on, spoken or not, and where each day's have got to.
     reminders: Mapped[dict[str, Any] | None] = mapped_column(Json)
+    #: Organisation themes: how replies to each organisation sound and look.
+    themes: Mapped[list[dict[str, Any]] | None] = mapped_column(Json)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime)
 
 
@@ -177,6 +179,40 @@ class LedgerModel(Base):
     data: Mapped[dict[str, Any] | None] = mapped_column(Json)
 
     __table_args__ = (UniqueConstraint("agent_id", "item_id", name="uq_ledger_item"), Index("ix_ledger_status", "agent_id", "status"))
+
+
+class AlertModel(Base):
+    """An urgent email raised on the phone, and where it has got to (the replies suggested, the draft being approved)."""
+
+    __tablename__ = "mail_alerts"
+
+    id: Mapped[str] = mapped_column(String(12), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(36))
+    item_id: Mapped[str] = mapped_column(String(200))
+    workflow_id: Mapped[str | None] = mapped_column(String(64))
+    workspace: Mapped[str] = mapped_column(String(16), default="")
+    account_id: Mapped[str] = mapped_column(String(64), default="")
+    folder: Mapped[str] = mapped_column(String(300), default="INBOX")
+    uid: Mapped[int] = mapped_column(Integer, default=0)
+    subject: Mapped[str] = mapped_column(String(400), default="")
+    sender_name: Mapped[str] = mapped_column(String(200), default="")
+    sender_address: Mapped[str] = mapped_column(String(320), default="")
+    message_id: Mapped[str] = mapped_column(String(998), default="")
+    summary: Mapped[str] = mapped_column(Text, default="")
+    action: Mapped[str] = mapped_column(String(300), default="")
+    due: Mapped[str] = mapped_column(String(10), default="")
+    priority: Mapped[str] = mapped_column(String(8), default="high")
+    replies: Mapped[list[dict[str, Any]]] = mapped_column(Json, default=list)
+    theme_id: Mapped[str | None] = mapped_column(String(40))
+    status: Mapped[str] = mapped_column(String(10), default="open")
+    draft: Mapped[dict[str, Any] | None] = mapped_column(Json)
+    awaiting: Mapped[dict[str, Any] | None] = mapped_column(Json)
+    chats: Mapped[list[dict[str, Any]]] = mapped_column(Json, default=list)
+    sample: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime)
+
+    __table_args__ = (UniqueConstraint("user_id", "item_id", name="uq_mail_alerts_item"), Index("ix_mail_alerts_user", "user_id", "created_at"))
 
 
 class DayPlanModel(Base):
