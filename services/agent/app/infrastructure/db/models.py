@@ -26,6 +26,8 @@ class SettingsModel(Base):
     workspaces: Mapped[dict[str, list[str]] | None] = mapped_column(Json)
     #: The daily planner's evening run: whether it is on, when, in which time zone.
     planner: Mapped[dict[str, Any] | None] = mapped_column(Json)
+    #: Reminders about calls not marked done: whether they are on, spoken or not, and where each day's have got to.
+    reminders: Mapped[dict[str, Any] | None] = mapped_column(Json)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime)
 
 

@@ -105,6 +105,8 @@ class UserSettings:
     updated_at: datetime | None = None
     #: The daily planner's evening run: {enabled, time "HH:MM", timezone, channels}. Empty: never set.
     planner: dict[str, Any] = field(default_factory=dict)
+    #: Reminders about calls not marked done: {enabled, voice, model, state}. `state` is where each day's reminders have got to.
+    reminders: dict[str, Any] = field(default_factory=dict)
 
 
 class SettingsRepository(ABC):
@@ -117,6 +119,10 @@ class SettingsRepository(ABC):
     @abstractmethod
     async def planners(self) -> list[UserSettings]:
         """Everyone whose evening plan is switched on."""
+
+    @abstractmethod
+    async def with_reminders(self) -> list[UserSettings]:
+        """Everyone whose reminders about calls are switched on."""
 
 
 @dataclass
@@ -247,6 +253,22 @@ class TelegramApi(ABC):
 
     @abstractmethod
     async def send_typing(self, token: str, chat_id: int | str) -> None: ...
+
+    @abstractmethod
+    async def send_voice(self, token: str, chat_id: int | str, audio: bytes, caption: str = "") -> None:
+        """A spoken message (MP3 or OGG/Opus), which Telegram shows as a voice message that plays in the chat."""
+
+
+class VoiceApi(ABC):
+    """Turns words into speech."""
+
+    @abstractmethod
+    async def check(self, key: str) -> None:
+        """Raises ValidationFailed when the service doesn't accept the key."""
+
+    @abstractmethod
+    async def speak(self, key: str, text: str, model: str) -> bytes:
+        """The words as MP3 audio, read by the voice `model`."""
 
 
 class TwilioApi(ABC):

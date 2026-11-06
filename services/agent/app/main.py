@@ -1,5 +1,6 @@
 import logging
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 
 import httpx
 from fastapi import FastAPI
@@ -10,6 +11,7 @@ from stiamo_common.errors import install_error_handlers
 from app.agents import default_registry
 from app.application.daily import DailyManager
 from app.application.listeners import ListenerManager
+from app.application.reminders import ReminderManager
 from app.application.schedules import ScheduleManager
 from app.application.services import Who
 from app.application.sweeps import SweepManager
@@ -24,7 +26,8 @@ from app.infrastructure.llm.openai_compat import OpenAiCompatibleClient
 from app.infrastructure.mailevents import HttpMailEvents
 from app.infrastructure.messaging import HttpTelegramApi, HttpTwilioApi
 from app.infrastructure.security import JwtAccessTokens, SecretBox
-from app.presentation.deps import sync_evening, sync_listener
+from app.infrastructure.voice import DeepgramVoice
+from app.presentation.deps import sync_evening, sync_listener, sync_reminders
 from app.presentation.routers import (
     agent,
     attention,
@@ -33,6 +36,7 @@ from app.presentation.routers import (
     dayplans,
     news,
     proposals,
+    reminders,
     usage,
     webhooks,
     workflows,
@@ -62,12 +66,22 @@ async def start_evenings(app: FastAPI) -> None:
         logging.getLogger(__name__).exception("could not start the evening plans")
 
 
+async def start_reminders(app: FastAPI) -> None:
+    """After a restart, everyone who has the reminders on is checked again each minute."""
+    try:
+        async with app.state.session_factory() as session:
+            for s in await SqlSettingsRepository(session, app.state.box).with_reminders():
+                sync_reminders(app, Who(s.user_id, s.email), True)
+    except Exception:  # noqa: BLE001  a problem here must not keep the service from starting
+        logging.getLogger(__name__).exception("could not start the call reminders")
+
+
 async def _config_of(repo, user_id: str, workflow_id: str):
     w = await repo.get(user_id, workflow_id)
     return w.config if w else None
 
 
-def create_app(settings: Settings | None = None, *, mail_events=None, registry=None, llm_factory=None, decision_factory=None, data_factory=None, telegram=None, twilio=None, tokens=None) -> FastAPI:
+def create_app(settings: Settings | None = None, *, mail_events=None, registry=None, llm_factory=None, decision_factory=None, data_factory=None, telegram=None, twilio=None, tokens=None, voice=None, clock=None) -> FastAPI:
     """Application factory. Run with: uvicorn app.main:create_app --factory
 
     The keyword arguments swap in fakes for tests; in production they are the real thing.
@@ -82,7 +96,9 @@ def create_app(settings: Settings | None = None, *, mail_events=None, registry=N
         app.state.session_factory = make_session_factory(engine)
         await start_listening(app)
         await start_evenings(app)
+        await start_reminders(app)
         yield
+        await app.state.reminders.close()
         await app.state.daily.close()
         await app.state.listeners.close()
         await app.state.schedules.close()
@@ -104,6 +120,11 @@ def create_app(settings: Settings | None = None, *, mail_events=None, registry=N
     app.state.schedules = ScheduleManager()
     #: The daily planner's evening run, once a day at the time each person chose (see application/daily.py).
     app.state.daily = DailyManager()
+    #: Reminders about calls not marked done, checked every minute (see application/reminders.py).
+    app.state.reminders = ReminderManager()
+    app.state.voice = voice or DeepgramVoice(http)
+    #: The time, which a test can set.
+    app.state.clock = clock or (lambda: datetime.now(UTC))
     #: Agents listening to their mailbox (see application/listeners.py).
     app.state.listeners = ListenerManager(mail_events or HttpMailEvents(http, settings.mail_url))
     app.state.llm_factory = llm_factory or (lambda provider, key: GeminiClient(key, http) if provider == "gemini" else OpenAiCompatibleClient(provider, key, http))
@@ -124,6 +145,7 @@ def create_app(settings: Settings | None = None, *, mail_events=None, registry=N
     app.include_router(news.router)
     app.include_router(dayplans.router)
     app.include_router(proposals.router)
+    app.include_router(reminders.router)
     app.include_router(conversations.router)
     app.include_router(workflows.router)
     app.include_router(webhooks.router)
