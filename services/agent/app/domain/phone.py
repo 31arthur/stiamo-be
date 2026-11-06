@@ -166,6 +166,7 @@ def render(answer: str, found: list[dict[str, Any]], limit: int, agent: str | No
     say = w.text(answer) if answer and answer.strip() else ""
     blocks: list[tuple[str, bool]] = []  # (text, may be left out when the message is too long)
     briefing = next((f for f in found if f.get("kind") == "briefing"), None)
+    reminder = next((f for f in found if f.get("kind") == "reminder"), None)
     if briefing:
         day = str(briefing.get("date") or "")
         head = [f"🗓️ {w.bold(w.raw(((title + ' ') if title else '') + _day(day)))}"]
@@ -180,6 +181,12 @@ def render(answer: str, found: list[dict[str, Any]], limit: int, agent: str | No
                 blocks.append((_section(s, w, day), True))
         if _free(briefing, w):
             blocks.append((_free(briefing, w), False))
+    elif reminder:
+        day = str(reminder.get("date") or "")
+        blocks.append((f"🔔 {w.bold(w.raw(str(reminder.get('headline') or 'Pending')))}", False))
+        blocks.append(("\n".join(line for it in reminder.get("items", []) for line in _item(it, w, day)), False))
+        if reminder.get("footer"):
+            blocks.append((w.italic(w.raw(str(reminder["footer"]))), False))
     else:
         blocks.append((say or w.raw("I found nothing to say about that."), False))
     cases = [f for f in found if f.get("kind") == "case"]

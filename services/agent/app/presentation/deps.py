@@ -15,6 +15,7 @@ from app.application.channels import ChannelService
 from app.application.conversations import ConversationService
 from app.application.dayplans import DayPlanService, planner_settings
 from app.application.proposals import ProposalService
+from app.application.reminders import ReminderService
 from app.application.services import AgentService, Who
 from app.application.workflows import WorkflowService
 from app.config import get_settings
@@ -102,6 +103,36 @@ def sync_evening(app: FastAPI, who: Who, planner: dict) -> None:
         app.state.daily.ensure(who.user_id, p["time"], p["timezone"], evening_run(app, who))
     else:
         app.state.daily.stop(who.user_id)
+
+
+def build_reminders(app: FastAPI, session: AsyncSession) -> ReminderService:
+    s = app.state
+    _, channels = build_services(app, session)
+    return ReminderService(SqlSettingsRepository(session, s.box), s.data_factory, s.tokens, s.voice, channels.announce, channels.announce_voice, lambda: s.clock())
+
+
+def reminder_check(app: FastAPI, who: Who):
+    """One minute's check, in its own session: nobody is signed in, so it runs as the owner."""
+
+    async def run_once() -> object:
+        async with app.state.session_factory() as session:
+            try:
+                out = await build_reminders(app, session).check(who)
+                await session.commit()
+                return out
+            except Exception:
+                await session.rollback()
+                raise
+
+    return run_once
+
+
+def sync_reminders(app: FastAPI, who: Who, enabled: bool) -> None:
+    """Starts or stops the minute-by-minute check to match whether the reminders are on."""
+    if enabled:
+        app.state.reminders.ensure(who.user_id, reminder_check(app, who))
+    else:
+        app.state.reminders.stop(who.user_id)
 
 
 def build_workflow_service(app: FastAPI, session: AsyncSession) -> WorkflowService:

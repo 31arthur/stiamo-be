@@ -6,7 +6,7 @@ from typing import Any
 import jwt
 import pytest
 from app.agents import AGENTS
-from app.application.ports import AccessTokens, DataGateway, DecisionClient, LlmClient, TelegramApi, TwilioApi
+from app.application.ports import AccessTokens, DataGateway, DecisionClient, LlmClient, TelegramApi, TwilioApi, VoiceApi
 from app.application.registry import AgentRegistry
 from app.application.toolpacks import PackRegistry
 from app.application.toolpacks.agenda import AgendaPack
@@ -169,6 +169,7 @@ class FakeTelegram(TelegramApi):
         self.sent: list[tuple[Any, str]] = []
         self.webhooks: list[tuple[str, str]] = []
         self.deleted = 0
+        self.voices: list[tuple[int | str, bytes, str]] = []
 
     async def get_me(self, token):
         if token == "bad":
@@ -189,6 +190,9 @@ class FakeTelegram(TelegramApi):
     async def send_typing(self, token, chat_id):
         pass
 
+    async def send_voice(self, token, chat_id, audio, caption=""):
+        self.voices.append((chat_id, audio, caption))
+
 
 class FakeTwilio(TwilioApi):
     def __init__(self) -> None:
@@ -203,6 +207,23 @@ class FakeTwilio(TwilioApi):
 
     async def send_whatsapp(self, sid, auth_token, sender, to, text):
         self.sent.append((sender, to, text))
+
+
+class FakeVoice(VoiceApi):
+    """Speaks by returning the words as bytes, and remembers what it was asked to say."""
+
+    def __init__(self) -> None:
+        self.said: list[tuple[str, str]] = []
+
+    async def check(self, key):
+        if key.startswith("bad"):
+            from stiamo_common.errors import ValidationFailed
+
+            raise ValidationFailed("Deepgram didn't accept that key.")
+
+    async def speak(self, key, text, model):
+        self.said.append((model, text))
+        return text.encode()
 
 
 class FakeMailEvents:
@@ -237,8 +258,8 @@ def test_registry() -> AgentRegistry:
 class Rig:
     """Everything a test needs: the app, a client and the fakes."""
 
-    def __init__(self, app, client, script, llm_log, decision_log, telegram, twilio, data, events):
-        self.app, self.client, self.script, self.llm_log, self.decision_log, self.telegram, self.twilio, self.data, self.events = app, client, script, llm_log, decision_log, telegram, twilio, data, events
+    def __init__(self, app, client, script, llm_log, decision_log, telegram, twilio, data, events, voice=None):
+        self.app, self.client, self.script, self.llm_log, self.decision_log, self.telegram, self.twilio, self.data, self.events, self.voice = app, client, script, llm_log, decision_log, telegram, twilio, data, events, voice
 
 
 @pytest.fixture
@@ -247,7 +268,7 @@ async def rig():
     llm_log: list[dict[str, Any]] = []
     decision_log: list[dict[str, Any]] = []
     models = [ModelInfo("o3", "o3", ("low", "medium", "high")), ModelInfo("gpt-4o", "gpt-4o", ())]
-    telegram, twilio, data, events = FakeTelegram(), FakeTwilio(), FakeData(), FakeMailEvents()
+    telegram, twilio, data, events, voice = FakeTelegram(), FakeTwilio(), FakeData(), FakeMailEvents(), FakeVoice()
     settings = Settings(database_url="sqlite+aiosqlite:///:memory:", public_url=PUBLIC)
     app = create_app(
         settings,
@@ -259,9 +280,10 @@ async def rig():
         telegram=telegram,
         twilio=twilio,
         tokens=FakeTokens(),
+        voice=voice,
     )
     async with app.router.lifespan_context(app):
         async with app.state.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            yield Rig(app, client, script, llm_log, decision_log, telegram, twilio, data, events)
+            yield Rig(app, client, script, llm_log, decision_log, telegram, twilio, data, events, voice)

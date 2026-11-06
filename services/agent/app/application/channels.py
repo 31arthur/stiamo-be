@@ -198,6 +198,20 @@ class ChannelService:
                 log.warning("could not announce on channel %s", c.id)
         return sent
 
+    async def announce_voice(self, who: Who, audio: bytes, caption: str = "") -> int:
+        """Sends a spoken message to every Telegram chat the person has paired (WhatsApp through Twilio can't carry one without a public file)."""
+        sent = 0
+        for c in await self._repo.for_user(who.user_id):
+            if c.kind != "telegram":
+                continue
+            for p in c.public.get("paired", []):
+                try:
+                    await self._tg.send_voice(c.secrets["botToken"], p["id"], audio, caption)
+                    sent += 1
+                except Exception:  # noqa: BLE001
+                    log.warning("could not send a voice message on channel %s", c.id)
+        return sent
+
     async def remove(self, who: Who, channel_id: str) -> None:
         c = await self._mine(who, channel_id)
         if c.kind == "telegram":
