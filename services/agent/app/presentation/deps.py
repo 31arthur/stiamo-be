@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator
 from typing import Annotated
 
@@ -15,6 +16,7 @@ from app.application.alerts import AlertService
 from app.application.channels import ChannelService
 from app.application.conversations import ConversationService
 from app.application.dayplans import DayPlanService, planner_settings
+from app.application.mailwatch import MailWatchService
 from app.application.proposals import ProposalService
 from app.application.reminders import ReminderService
 from app.application.services import AgentService, Who
@@ -136,6 +138,36 @@ def sync_reminders(app: FastAPI, who: Who, enabled: bool) -> None:
         app.state.reminders.ensure(who.user_id, reminder_check(app, who))
     else:
         app.state.reminders.stop(who.user_id)
+
+
+def build_mailwatch(app: FastAPI, session: AsyncSession) -> MailWatchService:
+    s = app.state
+    _, channels = build_services(app, session)
+
+    async def listen(who: Who, w) -> None:
+        async def resolve(_wid: str):
+            return None  # a watch reads mailboxes directly
+
+        await sync_listener(app, who, w.id, w.config, resolve)
+
+    return MailWatchService(SqlWorkflowRepository(session), SqlSettingsRepository(session, s.box), s.data_factory, listen, s.listeners.status, channels.phone_for)
+
+
+async def watch_everyone(app: FastAPI) -> None:
+    """Every person's workspaces with a mailbox get a watch, and the watches listen. Runs when the service starts and every so often, so a
+    mailbox connected since is picked up without anyone opening anything."""
+    async with app.state.session_factory() as session:
+        try:
+            for s in await SqlSettingsRepository(session, app.state.box).everyone():
+                who = Who(s.user_id, s.email)
+                try:
+                    await build_mailwatch(app, session).ensure(who, app.state.tokens.mint(who.user_id, who.email))
+                except Exception:  # noqa: BLE001  one person's trouble is not everyone's
+                    logging.getLogger(__name__).exception("could not set up the mail watch for %s", s.user_id)
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
 
 
 def build_workflow_service(app: FastAPI, session: AsyncSession) -> WorkflowService:

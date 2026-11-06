@@ -1,3 +1,5 @@
+import asyncio
+import contextlib
 import logging
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -28,7 +30,7 @@ from app.infrastructure.mailevents import HttpMailEvents
 from app.infrastructure.messaging import HttpTelegramApi, HttpTwilioApi
 from app.infrastructure.security import JwtAccessTokens, SecretBox
 from app.infrastructure.voice import DeepgramVoice
-from app.presentation.deps import sync_evening, sync_listener, sync_reminders
+from app.presentation.deps import sync_evening, sync_listener, sync_reminders, watch_everyone
 from app.presentation.routers import (
     agent,
     alerts,
@@ -36,6 +38,7 @@ from app.presentation.routers import (
     channels,
     conversations,
     dayplans,
+    mailwatch,
     news,
     proposals,
     reminders,
@@ -80,6 +83,21 @@ async def start_reminders(app: FastAPI) -> None:
         logging.getLogger(__name__).exception("could not start the call reminders")
 
 
+async def start_watches(app: FastAPI) -> None:
+    """After a restart every workspace with a mailbox has its watch, and the watches are listening."""
+    try:
+        await watch_everyone(app)
+    except Exception:  # noqa: BLE001  a problem here must not keep the service from starting
+        logging.getLogger(__name__).exception("could not start the mail watches")
+
+
+async def watch_loop(app: FastAPI, minutes: int) -> None:
+    """A mailbox connected since the last look gets its watch, without anyone opening anything."""
+    while True:
+        await asyncio.sleep(minutes * 60)
+        await start_watches(app)
+
+
 async def refresh_webhooks(app: FastAPI) -> None:
     """Bots connected before urgent-email alerts existed are told to send button presses too (best effort, once per start)."""
     if not app.state.settings.public_url.startswith("https://"):
@@ -113,10 +131,16 @@ def create_app(settings: Settings | None = None, *, mail_events=None, registry=N
         app.state.engine = engine
         app.state.session_factory = make_session_factory(engine)
         await start_listening(app)
+        await start_watches(app)
+        watching = asyncio.create_task(watch_loop(app, settings.mailwatch_minutes)) if settings.mailwatch_minutes > 0 else None
         await start_evenings(app)
         await start_reminders(app)
         await refresh_webhooks(app)
         yield
+        if watching:
+            watching.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await watching
         await app.state.reminders.close()
         await app.state.daily.close()
         await app.state.listeners.close()
@@ -171,6 +195,7 @@ def create_app(settings: Settings | None = None, *, mail_events=None, registry=N
     app.include_router(secrets.router)
     app.include_router(themes.router)
     app.include_router(alerts.router)
+    app.include_router(mailwatch.router)
     app.include_router(conversations.router)
     app.include_router(workflows.router)
     app.include_router(webhooks.router)

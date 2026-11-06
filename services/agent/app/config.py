@@ -30,6 +30,8 @@ class Settings(BaseSettings):
 
     #: Where Telegram and Twilio can reach this API from the internet (https), without a trailing slash.
     public_url: str = ""
+    #: How often (minutes) every person's mailboxes are checked for a workspace that has none watching it yet. 0 turns it off.
+    mailwatch_minutes: int = 60
     #: Where the Stiamo web app lives (https), so an urgent-email alert can link to the email: https://stiamo.example.com
     app_url: str = ""
 
