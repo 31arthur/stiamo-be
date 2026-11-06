@@ -32,6 +32,7 @@ class FakeMail(MailGateway):
         self.idling = 0
         self.checked: list[Credentials] = []
         self.trashed: list[tuple[str, int]] = []
+        self.sent: list[tuple[str, str, object]] = []
 
     def check(self, creds: Credentials) -> None:
         self.checked.append(creds)
@@ -92,6 +93,12 @@ class FakeMail(MailGateway):
             raise MailError("That folder isn't on the server.")
         self.trashed.extend((folder, u) for u in uids)
         return len(uids)
+
+    def send(self, creds, address, name, out):
+        if creds.password == "nosend":
+            raise MailError("The mail server (smtp.example.com) didn’t accept the username and password for sending.", auth=True)
+        self.sent.append((address, name, out))
+        return "<new-id@example.com>"
 
     def idle(self, creds, folder, stop: Event, on_change, on_state):
         self.idling += 1

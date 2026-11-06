@@ -89,6 +89,21 @@ class Message:
 
 
 @dataclass(frozen=True)
+class Outgoing:
+    """A message to send: what the person (or an agent on their behalf, after they approved it) wrote."""
+
+    to: list[str]
+    subject: str
+    text: str
+    cc: list[str] = field(default_factory=list)
+    #: The same message as a page (a letterhead, a signature). The plain text goes with it for mail programs that don't show pages.
+    html: str = ""
+    #: The Message-ID of the mail this answers, so the reply sits in the same thread.
+    in_reply_to: str = ""
+    references: str = ""
+
+
+@dataclass(frozen=True)
 class Page:
     messages: list[MessageSummary]
     total: int

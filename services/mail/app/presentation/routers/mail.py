@@ -9,6 +9,7 @@ from fastapi.responses import StreamingResponse
 from stiamo_common.errors import ValidationFailed
 
 from app.application.accounts import MailService
+from app.domain.mail import Outgoing
 from app.infrastructure.db.repositories import SqlAccountRepository
 from app.presentation.deps import CurrentPrincipal, Mail
 from app.presentation.schemas import (
@@ -19,6 +20,7 @@ from app.presentation.schemas import (
     MarkIn,
     MessageOut,
     PageOut,
+    SendIn,
     SummariesIn,
     SummaryOut,
     TrashIn,
@@ -57,6 +59,13 @@ async def disconnect(account_id: str, me: CurrentPrincipal, mail: Mail):
 async def test(account_id: str, me: CurrentPrincipal, mail: Mail):
     await mail.test(me.user_id, account_id)
     return Response(status_code=204)
+
+
+@router.post("/accounts/{account_id}/send")
+async def send(account_id: str, body: SendIn, me: CurrentPrincipal, mail: Mail):
+    """Sends a message from this mailbox (it is always From the mailbox itself). Returns the new message's id."""
+    message_id = await mail.send(me.user_id, account_id, Outgoing(body.to, body.subject, body.text, body.cc, body.html, body.in_reply_to, body.references))
+    return {"sent": True, "messageId": message_id, "to": body.to}
 
 
 @router.get("/accounts/{account_id}/folders", response_model=list[FolderOut])

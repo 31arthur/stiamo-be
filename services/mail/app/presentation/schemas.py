@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Annotated
 
 from pydantic import Field
 from stiamo_common.models import DomainModel, to_iso
@@ -42,6 +43,17 @@ class ConnectIn(DomainModel):
     security: str = "ssl"
     username: str = Field("", max_length=320)
     password: str = Field(max_length=500)
+
+
+class SendIn(DomainModel):
+    to: list[Annotated[str, Field(max_length=320, pattern=r"^[^@\s,;<>]+@[^@\s,;<>]+\.[^@\s,;<>]+$")]] = Field(min_length=1, max_length=10)
+    cc: list[Annotated[str, Field(max_length=320, pattern=r"^[^@\s,;<>]+@[^@\s,;<>]+\.[^@\s,;<>]+$")]] = Field(default_factory=list, max_length=10)
+    subject: str = Field(max_length=300, pattern=r"^[^\r\n]*$")
+    text: str = Field(max_length=30000)
+    html: str = Field("", max_length=200000)
+    #: The Message-ID of the mail being answered, so the reply stays in its thread.
+    in_reply_to: str = Field("", max_length=998, pattern=r"^[^\r\n]*$")
+    references: str = Field("", max_length=4000, pattern=r"^[^\r\n]*$")
 
 
 class EditIn(DomainModel):
