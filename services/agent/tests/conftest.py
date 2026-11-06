@@ -96,6 +96,8 @@ class FakeData(DataGateway):
         self.trashed_by: list[tuple[str, int]] = []
         #: Messages sent from a mailbox: (account id, what was sent).
         self.mail_sent: list[tuple[str, dict]] = []
+        #: The mailboxes the owner has connected.
+        self.accounts: list[dict] = [{"id": "acc1", "workspace": "sb", "label": "S&B Chambers", "address": "arjun@sb.example.com"}]
         self.mail = [
             {"uid": 4, "subject": "Partnership opportunity", "sender": {"name": "Lead", "address": "lead@client.io"}, "snippet": "We would like a quote for a new app", "date": "2026-10-04T10:00:00Z"},
             {"uid": 3, "subject": "50% off everything", "sender": {"name": "Shop", "address": "deals@shop.com"}, "snippet": "Huge sale", "date": "2026-10-03T10:00:00Z"},
@@ -142,7 +144,7 @@ class FakeData(DataGateway):
         return fresh[:limit], len(fresh)
 
     async def mail_accounts(self):
-        return [{"id": "acc1", "workspace": "sb", "label": "S&B Chambers", "address": "arjun@sb.example.com"}]
+        return self.accounts
 
     async def mail_send(self, account_id, message):
         self.mail_sent.append((account_id, message))

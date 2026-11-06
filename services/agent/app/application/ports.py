@@ -117,6 +117,8 @@ class UserSettings:
     reminders: dict[str, Any] = field(default_factory=dict)
     #: Organisation themes: how replies to each organisation sound and look (see domain/themes.py).
     themes: list[dict[str, Any]] = field(default_factory=list)
+    #: The priority mail watch: {off: [workspaces whose watch is switched off]}. See application/mailwatch.py.
+    mailwatch: dict[str, Any] = field(default_factory=dict)
 
 
 class SettingsRepository(ABC):
@@ -133,6 +135,10 @@ class SettingsRepository(ABC):
     @abstractmethod
     async def with_reminders(self) -> list[UserSettings]:
         """Everyone whose reminders about calls are switched on."""
+
+    @abstractmethod
+    async def everyone(self) -> list[UserSettings]:
+        """Everyone who has used the agents at all (they have a row of settings)."""
 
 
 @dataclass

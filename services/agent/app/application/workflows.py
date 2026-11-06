@@ -32,6 +32,7 @@ from app.application.ports import (
 from app.application.services import Memo, Who, selection_of
 from app.domain.agents import clean_workspaces
 from app.domain.llm import DECISION_MODELS, AiError, Message
+from app.domain.mailwatch import workspace_of
 from app.domain.workflows import (
     MAIL_FETCH,
     MAX_ITEM_CHARS,
@@ -236,6 +237,9 @@ class WorkflowService:
         await self._repo.delete(who.user_id, workflow_id)
         await self._runs.clear(who.user_id, workflow_id)
         s = await self._settings.get(who.user_id)
+        if s and workspace_of(workflow_id):  # a deleted mail watch counts as switched off, so it is not made again
+            s.mailwatch = {**s.mailwatch, "off": sorted({*(s.mailwatch.get("off") or []), workspace_of(workflow_id)})}
+            await self._settings.save(s)
         if s and (workflow_id in s.workspaces or workflow_id in s.selections):
             s.workspaces = {k: v for k, v in s.workspaces.items() if k != workflow_id}
             s.selections = {k: v for k, v in s.selections.items() if k != workflow_id}

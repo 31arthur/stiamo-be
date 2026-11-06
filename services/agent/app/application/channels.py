@@ -242,6 +242,14 @@ class ChannelService:
                     refs.append({"channel": c.id, "chat": p["id"], "message": mid})
         return refs
 
+    async def phone_for(self, who: Who, workspace: str) -> str:
+        """Where an email alert about a workspace would arrive: its own email bot ("workspace"), the general bot ("general"), or nowhere ("none"):
+        a bot only counts once a chat is paired with it."""
+        bots = [c for c in await self._repo.for_user(who.user_id) if c.kind == "telegram" and c.public.get("paired")]
+        if any(c.public.get("workspace") == workspace for c in bots):
+            return "workspace"
+        return "general" if any(not c.public.get("workspace") for c in bots) else "none"
+
     async def say(self, channel_id: str, chat: int | str, html: str, buttons: list[list[dict[str, str]]] | None = None) -> int | None:
         c = await self._repo.get(channel_id)
         if c is None or c.kind != "telegram":

@@ -30,6 +30,8 @@ class SettingsModel(Base):
     reminders: Mapped[dict[str, Any] | None] = mapped_column(Json)
     #: Organisation themes: how replies to each organisation sound and look.
     themes: Mapped[list[dict[str, Any]] | None] = mapped_column(Json)
+    #: The priority mail watch: which workspaces have it switched off.
+    mailwatch: Mapped[dict[str, Any] | None] = mapped_column(Json)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime)
 
 
