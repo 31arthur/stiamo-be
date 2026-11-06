@@ -125,6 +125,7 @@ class TaskModel(Owned, OutcomeCols, Base):
     step_order: Mapped[int | None] = mapped_column(Integer)
     related_kind: Mapped[str | None] = mapped_column(String(12))
     related_id: Mapped[str | None] = mapped_column(String(64))
+    contact: Mapped[str | None] = mapped_column(String(300))
     __table_args__ = (
         Index("ix_tasks_due", "user_id", "due_date"),
         Index("ix_tasks_slot", "user_id", "slot_date"),

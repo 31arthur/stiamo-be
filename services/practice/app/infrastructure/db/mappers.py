@@ -133,7 +133,7 @@ def _task_to_row(t: Task) -> dict[str, Any]:
     return {
         **base_row(t), "title": t.title, "notes": t.notes, "workspace": t.workspace, "priority": t.priority,
         "due_date": t.due_date, **slot_to_cols(t.slot), "estimate": t.estimate, "plan_id": t.plan_id,
-        "step_order": t.order, **ref_to_cols(t.related, "related"), **outcome_to_cols(t.outcome),
+        "step_order": t.order, **ref_to_cols(t.related, "related"), "contact": t.contact, **outcome_to_cols(t.outcome),
     }
 
 
@@ -141,7 +141,7 @@ def _task_from_row(m: TaskModel) -> Task:
     return Task(
         **base_fields(m), title=m.title, notes=m.notes, workspace=m.workspace, priority=m.priority,
         due_date=m.due_date, slot=slot_from_cols(m), estimate=m.estimate, plan_id=m.plan_id, order=m.step_order,
-        related=ref_from_cols(m, "related"), outcome=outcome_from_cols(m),
+        related=ref_from_cols(m, "related"), contact=m.contact, outcome=outcome_from_cols(m),
     )
 
 
