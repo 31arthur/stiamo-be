@@ -111,3 +111,19 @@ async def test_the_test_reminder_rings_too(rig):
     await rig.client.put(R, json={"enabled": True, "voice": False, "call": True, "callUser": "+919876543210"}, headers=headers())
     out = (await rig.client.post(f"{R}/test", headers=headers())).json()
     assert out["rang"] is True and rig.caller.calls[-1][0] == "+919876543210"
+
+
+async def test_the_call_can_be_tested_on_its_own_and_says_why_it_failed(rig):
+    await ready(rig)
+    TC = f"{R}/test-call"
+    assert (await rig.client.post(TC, headers=headers())).status_code == 422  # nobody to ring yet
+    assert (await rig.client.post(TC, json={"callUser": "me"}, headers=headers())).status_code == 422
+    out = (await rig.client.post(TC, json={"callUser": "@arjun"}, headers=headers())).json()  # before anything is saved
+    assert out == {"called": True, "user": "@arjun"}
+    user, said, lang, repeat = rig.caller.calls[-1]
+    assert (user, repeat) == ("@arjun", 1) and "test call" in said and rig.telegram.voices == [] and len(rig.telegram.sent) == 1  # only the call: no message, no voice
+    await rig.client.put(R, json={"enabled": True, "voice": False, "call": True, "callUser": "+919876543210"}, headers=headers())
+    assert (await rig.client.post(TC, headers=headers())).json()["user"] == "+919876543210"  # the saved one
+    rig.caller.fail = True
+    failed = await rig.client.post(TC, headers=headers())
+    assert failed.status_code == 422 and "Calls are disabled in Telegram" in failed.json()["error"]["message"]
