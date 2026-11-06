@@ -29,10 +29,6 @@ class SettingsBody(DomainModel):
     call_voice: Annotated[str, Field(max_length=40)] = ""
 
 
-class KeyBody(DomainModel):
-    api_key: Annotated[str, Field(max_length=300)]
-
-
 @router.get("", summary="Whether reminders about calls not marked done are on, and whether they are spoken")
 async def get_settings(reminders: Reminders, me: deps.Me) -> dict[str, Any]:
     return await reminders.view(me)
@@ -43,16 +39,6 @@ async def set_settings(body: SettingsBody, reminders: Reminders, me: deps.Me, re
     out = await reminders.set_settings(me, body.enabled, body.voice, body.call, body.call_user, body.call_voice)
     deps.sync_reminders(request.app, me, out["enabled"])
     return out
-
-
-@router.put("/voice-key", summary="Keep a Deepgram key, so reminders can be spoken")
-async def put_key(body: KeyBody, reminders: Reminders, me: deps.Me) -> dict[str, Any]:
-    return await reminders.put_key(me, body.api_key)
-
-
-@router.delete("/voice-key", summary="Forget the Deepgram key")
-async def remove_key(reminders: Reminders, me: deps.Me) -> dict[str, Any]:
-    return await reminders.remove_key(me)
 
 
 @router.post("/test", summary="Send a sample reminder to the connected chats")

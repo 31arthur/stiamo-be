@@ -23,7 +23,8 @@ The ladder is `LADDER` in `services/agent/app/domain/nudge.py`.
 The voice is [Deepgram Aura](https://deepgram.com/). A new account gets a free credit, and a reminder is a few hundred characters.
 
 1. Create a Deepgram account and an API key.
-2. In Stiamo, Assistant → **On your phone** → **Call reminders**: paste the key, switch the reminders on, and press **Send a test**.
+2. In Stiamo, Developer → **Environment**: paste it as `DEEPGRAM_API_KEY`. It is sealed with the server's key the moment it arrives and is never shown again: you can replace it, remove it, and press **Test connection**.
+3. Assistant → **On your phone** → **Call reminders**: switch the reminders on and press **Send a test**.
 
 Without a key, or with the voice switched off, the reminders are written only.
 
