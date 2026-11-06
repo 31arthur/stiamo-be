@@ -19,8 +19,8 @@ Reminders = Annotated[ReminderService, deps.Depends(_service)]
 
 class SettingsBody(DomainModel):
     enabled: bool
-    #: Also speak it, as a voice message on Telegram (needs a Deepgram key).
-    voice: bool = True
+    #: Also speak it, as a voice message on Telegram (needs a Deepgram key). Off unless asked for: the notification is enough.
+    voice: bool = False
     #: Also ring me on Telegram (through CallMeBot), reading the reminder aloud.
     call: bool = False
     #: Who to ring: a Telegram @username, or a number with its country code.

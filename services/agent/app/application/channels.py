@@ -14,6 +14,7 @@ from app.application.ports import AccessTokens, Channel, ChannelRepository, Tele
 from app.application.proposals import ProposalService, verdict_of
 from app.application.runner import AgentRun
 from app.application.services import AgentService, Who
+from app.domain.agents import WORKSPACES
 from app.domain.llm import AiError
 from app.domain.orchestrator import ORCHESTRATOR_ID
 from app.domain.phone import Style, Writer, render
@@ -91,18 +92,23 @@ class ChannelService:
 
     # --- Telegram --------------------------------------------------------------------------------------
 
-    async def connect_telegram(self, who: Who, bot_token: str, agent: str | None = None) -> dict[str, Any]:
+    async def connect_telegram(self, who: Who, bot_token: str, agent: str | None = None, workspace: str | None = None) -> dict[str, Any]:
+        """Connects a bot. With a `workspace` it is that workspace's email bot: alerts about its mailboxes go to it, and nothing else does."""
         bot_token = bot_token.strip()
+        if workspace is not None and workspace not in WORKSPACES:
+            raise ValidationFailed("That isn't one of your workspaces.")
         if not bot_token:
             raise ValidationFailed("Paste the bot token from @BotFather first.")
         me = await self._tg.get_me(bot_token)
         for existing in await self._repo.for_user(who.user_id):
             if existing.kind == "telegram" and existing.public.get("botId") == me.get("id"):
                 raise ValidationFailed("That bot is already connected.")
+            if workspace and existing.kind == "telegram" and existing.public.get("workspace") == workspace:
+                raise ValidationFailed("This workspace already has an email bot. Remove it first to connect another.")
         cid, secret = str(uuid.uuid4()), secrets.token_urlsafe(32)
         await self._tg.set_webhook(bot_token, self._webhook("telegram", cid), secret)
         agent_id = self._agent_id(agent)
-        c = Channel(cid, who.user_id, "telegram", {"botToken": bot_token, "webhookSecret": secret}, {"agent": agent_id, "ownerEmail": who.email, "botId": me.get("id"), "username": me.get("username", ""), "name": me.get("first_name", ""), "paired": []}, {}, datetime.now(UTC))
+        c = Channel(cid, who.user_id, "telegram", {"botToken": bot_token, "webhookSecret": secret}, {"agent": agent_id, "ownerEmail": who.email, "botId": me.get("id"), "username": me.get("username", ""), "name": me.get("first_name", ""), "paired": [], **({"workspace": workspace} if workspace else {})}, {}, datetime.now(UTC))
         await self._repo.save(c)
         return self.view(await self._new_pairing(c))
 
@@ -184,6 +190,8 @@ class ChannelService:
         `text` may be a function that writes the message for a chat (given its style and its length limit), so each gets it laid out its own way."""
         sent = 0
         for c in await self._repo.for_user(who.user_id):
+            if c.public.get("workspace"):
+                continue  # an email bot carries email alerts only
             try:
                 if c.kind == "telegram":
                     for p in c.public.get("paired", []):
@@ -205,7 +213,7 @@ class ChannelService:
         """Sends a spoken message to every Telegram chat the person has paired (WhatsApp through Twilio can't carry one without a public file)."""
         sent = 0
         for c in await self._repo.for_user(who.user_id):
-            if c.kind != "telegram":
+            if c.kind != "telegram" or c.public.get("workspace"):
                 continue
             for p in c.public.get("paired", []):
                 try:
@@ -217,12 +225,13 @@ class ChannelService:
 
     # --- alerts: messages with buttons ----------------------------------------------------------------------------------
 
-    async def push(self, who: Who, html: str, buttons: list[list[dict[str, str]]] | None = None) -> list[dict[str, Any]]:
-        """Sends a message with buttons to every Telegram chat the person has paired. Returns where each went, so the buttons can be taken away later."""
+    async def push(self, who: Who, html: str, buttons: list[list[dict[str, str]]] | None = None, workspace: str | None = None) -> list[dict[str, Any]]:
+        """Sends a message with buttons to the Telegram chats an email alert is for: those of the workspace's own email bot, or if it has none the
+        general bots. Never another workspace's. Returns where each went, so the buttons can be taken away later."""
+        bots = [c for c in await self._repo.for_user(who.user_id) if c.kind == "telegram"]
+        own = [c for c in bots if workspace and c.public.get("workspace") == workspace]
         refs: list[dict[str, Any]] = []
-        for c in await self._repo.for_user(who.user_id):
-            if c.kind != "telegram":
-                continue
+        for c in own or [c for c in bots if not c.public.get("workspace")]:
             for p in c.public.get("paired", []):
                 try:
                     mid = await self._tg.send_message(c.secrets["botToken"], p["id"], clip(html, TELEGRAM_MAX), html=True, buttons=buttons)

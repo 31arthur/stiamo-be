@@ -43,7 +43,10 @@ def alert_text(a: dict[str, Any], theme: dict[str, Any] | None, workspace_label:
     """The ping, as Telegram HTML."""
     e = escape
     org = f"{theme['emoji']} {e(theme['name'])}" if theme else e(workspace_label)
-    lines = [f"🚨🚨 <b>URGENT · {e(workspace_label)}</b> 🚨🚨", RULE, f"{org}", ""]
+    urgent = a.get("priority", "high") == "high"
+    # Urgent is loud; a plain update is calmer, so a phone that buzzes with both still tells them apart at a glance.
+    head = f"🚨🚨 <b>URGENT · {e(workspace_label)}</b> 🚨🚨" if urgent else f"📬 <b>Needs you · {e(workspace_label)}</b>"
+    lines = [head, RULE if urgent else "┈┈┈┈┈┈┈┈┈┈┈┈┈┈", f"{org}", ""]
     lines.append(f"✉️ <b>{e(a['subject'] or '(no subject)')}</b>")
     who = a["sender_name"] or a["sender_address"]
     lines.append(f"👤 {e(who)}" + (f" · <code>{e(a['sender_address'])}</code>" if a["sender_name"] and a["sender_address"] else ""))
@@ -53,8 +56,16 @@ def alert_text(a: dict[str, Any], theme: dict[str, Any] | None, workspace_label:
         lines += ["", f"⚡ <b>Do:</b> {e(a['action'])}"]
     if a.get("due"):
         lines.append(f"⏰ <b>By:</b> {e(a['due'])}")
-    lines += ["", RULE, "👇 Pick a reply, or open it."]
+    lines += ["", RULE if urgent else "┈┈┈┈┈┈┈┈┈┈┈┈┈┈", "👇 Pick a reply, or open it." if a.get("replies") else "👇 Open it, or answer it yourself."]
     return "\n".join(lines)
+
+
+def call_text(workspace_label: str, sender: str, subject: str, limit: int = 256) -> str:
+    """What the phone call says: short, and it sends the person to Telegram for the rest."""
+    head, tail = f"Stiamo. Urgent email in {workspace_label}", ". Check Telegram."
+    middle = f", from {sender}: {subject}"
+    room = limit - len(head) - len(tail)
+    return head + (middle if len(middle) <= room else middle[: max(room - 1, 0)].rstrip() + "…") + tail
 
 
 def alert_buttons(a: dict[str, Any], url: str) -> list[list[dict[str, str]]]:
