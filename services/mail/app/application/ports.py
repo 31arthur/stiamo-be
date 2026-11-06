@@ -7,7 +7,7 @@ from datetime import date
 from threading import Event
 from typing import Protocol
 
-from app.domain.mail import Account, Credentials, Download, Folder, Message, MessageSummary, Page
+from app.domain.mail import Account, Credentials, Download, Folder, Message, MessageSummary, Outgoing, Page
 
 
 class MailError(Exception):
@@ -48,6 +48,10 @@ class MailGateway(Protocol):
 
     def move_to_trash(self, creds: Credentials, folder: str, uids: list[int]) -> int:
         """Moves messages to the Trash folder (never deletes them). Returns how many were moved."""
+        ...
+
+    def send(self, creds: Credentials, address: str, name: str, out: Outgoing) -> str:
+        """Sends a message from this mailbox over its SMTP server (worked out from the IMAP one). Returns the new message's Message-ID."""
         ...
 
     def idle(self, creds: Credentials, folder: str, stop: Event, on_change: Callable[[], None], on_state: Callable[[str], None]) -> None:

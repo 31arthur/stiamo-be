@@ -19,8 +19,8 @@ from imapclient import IMAPClient
 from imapclient.exceptions import IMAPClientError, LoginError
 
 from app.application.ports import MailError, MailGateway
-from app.domain.mail import Credentials, Download, Folder, Message, MessageSummary, Page
-from app.infrastructure import parse
+from app.domain.mail import Credentials, Download, Folder, Message, MessageSummary, Outgoing, Page
+from app.infrastructure import parse, smtp
 
 log = logging.getLogger("stiamo.mail.imap")
 
@@ -49,6 +49,9 @@ class ImapGateway(MailGateway):
         self.timeout = timeout
         self.idle_seconds = idle_seconds
         self.allow_private = allow_private
+
+    def send(self, creds: Credentials, address: str, name: str, out: Outgoing) -> str:
+        return smtp.send(creds, address, name, out, timeout=self.timeout, check_host=lambda h: check_host(h, allow_private=self.allow_private))
 
     # -- connection ------------------------------------------------------------------------------------------------------------
 

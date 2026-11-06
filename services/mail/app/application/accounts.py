@@ -13,9 +13,10 @@ from stiamo_common.errors import AppError, NotFound, ValidationFailed
 
 from app.application.live import LiveHub
 from app.application.ports import AccountRepository, MailError, MailGateway
-from app.domain.mail import SECURITY, WORKSPACES, Account, Credentials, Download, Folder, Message, Page
+from app.domain.mail import SECURITY, WORKSPACES, Account, Credentials, Download, Folder, Message, Outgoing, Page
 
 MAX_ACCOUNTS = 12
+MAX_RECIPIENTS = 10
 _HOST = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$")
 
 
@@ -127,6 +128,14 @@ class MailService:
 
     async def trash(self, owner: str, account_id: str, folder: str, uids: list[int]) -> int:
         return await self._reading(owner, account_id, lambda a: self.gateway.move_to_trash(a.credentials, folder, uids))
+
+    async def send(self, owner: str, account_id: str, out: Outgoing) -> str:
+        """Sends from this mailbox. Who it is from is the mailbox itself, so it can't be used to send as anyone else."""
+        if not out.to or len(out.to) + len(out.cc) > MAX_RECIPIENTS:
+            raise ValidationFailed(f"Give between 1 and {MAX_RECIPIENTS} recipients.")
+        if not out.text.strip():
+            raise ValidationFailed("There is nothing to send: the message is empty.")
+        return await self._reading(owner, account_id, lambda a: self.gateway.send(a.credentials, a.address, a.label if a.label != a.address else "", out))
 
     async def mark(self, owner: str, account_id: str, folder: str, uid: int, *, seen: bool | None, flagged: bool | None) -> None:
         await self._reading(owner, account_id, lambda a: self.gateway.set_flags(a.credentials, folder, uid, seen=seen, flagged=flagged))
