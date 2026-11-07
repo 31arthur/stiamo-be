@@ -175,6 +175,11 @@ class FakeData(DataGateway):
     async def calendar_events(self, start, end):
         return [e for e in self.calendar if start <= e["date"] <= end]
 
+    google: dict | None = None  # what the calendar service says is connected; None = not asked
+
+    async def google_links(self):
+        return self.google or {}
+
     async def save_record(self, table, record):
         self.saved.append((table, record))
 
