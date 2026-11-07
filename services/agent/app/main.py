@@ -38,6 +38,7 @@ from app.presentation.routers import (
     channels,
     conversations,
     dayplans,
+    insights,
     mailwatch,
     news,
     proposals,
@@ -169,6 +170,8 @@ def create_app(settings: Settings | None = None, *, mail_events=None, registry=N
     app.state.caller = caller or CallMeBot(http)
     #: When a call about a workspace's priority mail was last placed (see application/alerts.py).
     app.state.alert_calls = {}
+    #: A day's written digest for each person, workspace and period, so asking again doesn't ask the model again.
+    app.state.insight_cache = {}
     #: The time, which a test can set.
     app.state.clock = clock or (lambda: datetime.now(UTC))
     #: Agents listening to their mailbox (see application/listeners.py).
@@ -196,6 +199,7 @@ def create_app(settings: Settings | None = None, *, mail_events=None, registry=N
     app.include_router(themes.router)
     app.include_router(alerts.router)
     app.include_router(mailwatch.router)
+    app.include_router(insights.router)
     app.include_router(conversations.router)
     app.include_router(workflows.router)
     app.include_router(webhooks.router)

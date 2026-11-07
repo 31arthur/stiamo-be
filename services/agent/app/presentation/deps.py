@@ -16,6 +16,7 @@ from app.application.alerts import AlertService
 from app.application.channels import ChannelService
 from app.application.conversations import ConversationService
 from app.application.dayplans import DayPlanService, planner_settings
+from app.application.insights import InsightService
 from app.application.mailwatch import MailWatchService
 from app.application.proposals import ProposalService
 from app.application.reminders import ReminderService
@@ -168,6 +169,11 @@ async def watch_everyone(app: FastAPI) -> None:
         except Exception:
             await session.rollback()
             raise
+
+
+def build_insights(app: FastAPI, session: AsyncSession) -> InsightService:
+    s = app.state
+    return InsightService(SqlWorkflowRepository(session), SqlSettingsRepository(session, s.box), s.data_factory, s.llm_factory, s.insight_cache, lambda: s.clock())
 
 
 def build_workflow_service(app: FastAPI, session: AsyncSession) -> WorkflowService:
