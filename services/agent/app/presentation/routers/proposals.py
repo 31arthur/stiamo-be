@@ -15,6 +15,11 @@ def _service(request: Request, session: deps.Session) -> ProposalService:
 Proposals = Annotated[ProposalService, deps.Depends(_service)]
 
 
+@router.get("", summary="What agents proposed that is still waiting for you, from any chat or the app")
+async def waiting(proposals: Proposals, me: deps.Me) -> dict[str, Any]:
+    return {"items": await proposals.waiting(me)}
+
+
 @router.post("/{proposal_id}/apply", summary="Approve: save what an agent proposed")
 async def apply(proposal_id: str, proposals: Proposals, me: deps.Me, token: deps.Token) -> dict[str, Any]:
     return await proposals.apply(me, token, proposal_id)

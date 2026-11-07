@@ -622,6 +622,10 @@ class ProposalRepository(ABC):
         """What was proposed in one chat since a time, still waiting, oldest first."""
 
     @abstractmethod
+    async def pending(self, user_id: str, since: datetime, limit: int = 50) -> list[Proposal]:
+        """Everything an agent proposed that is still waiting, in any chat or the app, newest first."""
+
+    @abstractmethod
     async def save(self, p: Proposal) -> None: ...
 
 
