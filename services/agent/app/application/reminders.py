@@ -10,7 +10,7 @@ import asyncio
 import contextlib
 import logging
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from stiamo_common.errors import ValidationFailed
@@ -18,8 +18,9 @@ from stiamo_common.errors import ValidationFailed
 from app.application.dayplans import planner_settings, zone_of
 from app.application.ports import CallApi, DataGateway, SettingsRepository, UserSettings, VoiceApi
 from app.application.services import Who
-from app.domain.dayplan import clock, hearings_on
+from app.domain.dayplan import clock, hearings_on, is_open
 from app.domain.nudge import DEFAULT_CALL_VOICE, DEFAULT_VOICE, call_speech, due_run, free_now, speech
+from app.domain.nudge import runs as nudge_runs
 from app.domain.phone import Style, render
 
 log = logging.getLogger(__name__)
@@ -54,7 +55,7 @@ class ReminderService:
         tokens: Any,
         voice: VoiceApi,
         caller: CallApi,
-        announce: Callable[[Who, Callable[[Style, int], str]], Awaitable[int]],
+        announce: Callable[[Who, Callable[[Style, int], str], list[list[dict[str, str]]] | None], Awaitable[int]],
         announce_voice: Callable[[Who, bytes, str], Awaitable[int]],
         clock_now: Callable[[], datetime] = lambda: datetime.now(UTC),
         deliveries: Any = None,
@@ -141,7 +142,7 @@ class ReminderService:
         items = [self._item(c, cases) for c in run["pending"]]
         n = len(items)
         card = {"kind": "reminder", "date": day, "headline": f"{n} call{'s' if n != 1 else ''} still pending", "items": items, "footer": "Mark them done in Stiamo when you have."}
-        await self._announce(who, lambda style, limit: render("", [card], limit, "Stiamo", style))
+        await self._announce(who, lambda style, limit: render("", [card], limit, "Stiamo", style), reminder_buttons(run["key"], run["pending"]))
         audio = await self._speak(s, speech(run["step"], run["pending"]))
         if audio:
             await self._announce_voice(who, audio, f"{n} call{'s' if n != 1 else ''} still pending")
@@ -174,12 +175,61 @@ class ReminderService:
         s = await self._load(who)
         text = speech(0, [{"title": "Call the advocate"}, {"title": "Chase the labour office"}])
         card = {"kind": "reminder", "date": "", "headline": "A test reminder", "items": [{"type": "followUp", "title": "Call the advocate"}, {"type": "followUp", "title": "Chase the labour office"}], "footer": "This is how a reminder will look."}
-        reached = await self._announce(who, lambda style, limit: render("", [card], limit, "Stiamo", style))
+        reached = await self._announce(who, lambda style, limit: render("", [card], limit, "Stiamo", style), None)
         audio = await self._speak(s, text)
         if audio:
             await self._announce_voice(who, audio, "A test reminder")
         rang = await self._ring(s, call_speech(0, [{"title": "Call the advocate"}, {"title": "Chase the labour office"}]))
         return {"sent": reached, "spoken": bool(audio), "rang": rang}
+
+
+def reminder_buttons(key: str, pending: list[dict[str, Any]]) -> list[list[dict[str, str]]]:
+    """Under a reminder: done for each call, and to be reminded again in half an hour or have them all moved to tomorrow. The ids fit Telegram's 64 bytes."""
+    rows = [[{"text": f"✅ {str(c.get('title') or 'Call')[:26]}", "callback_data": f"rm:d:{c['id']}"}] for c in pending[:4]]
+    rows.append([{"text": "⏰ In 30 min", "callback_data": f"rm:s:{key}"}, {"text": "📅 Tomorrow", "callback_data": f"rm:t:{key}"}])
+    return rows
+
+
+class ReminderActions:
+    """What the buttons under a reminder do: mark a call done, remind again in half an hour, or move the run's calls to tomorrow."""
+
+    SNOOZE = 30
+
+    def __init__(self, settings: SettingsRepository, data_factory: Callable[[str], DataGateway], clock_now: Callable[[], datetime] = lambda: datetime.now(UTC)) -> None:
+        self._settings, self._data, self._now = settings, data_factory, clock_now
+
+    async def press(self, who: Who, token: str, action: str, ident: str) -> str:
+        """Does it and says what happened, in words for the chat."""
+        s = await self._settings.get(who.user_id) or UserSettings(who.user_id)
+        local = self._now().astimezone(zone_of(planner_settings(s.planner)["timezone"]))
+        day, minute = local.date().isoformat(), local.hour * 60 + local.minute
+        data = self._data(token)
+        follow_ups = await data.records("follow-ups")
+        if action == "d":
+            rec = next((f for f in follow_ups if f.get("id") == ident), None)
+            if rec is None:
+                return "I can't find that call any more."
+            if not is_open(rec):
+                return "That one is already done."
+            tries = [*(rec.get("attempts") or []), {"date": day, "minute": minute, "result": "reached", "channel": rec.get("channel") or "call"}]
+            await data.save_record("follow-ups", {**rec, "attempts": tries, "outcome": {**(rec.get("outcome") or {}), "status": "done", "recordedAt": self._now().isoformat(timespec="seconds")}})
+            return f"✅ Done: {rec.get('title')}."
+        run = next((r for r in nudge_runs(day, follow_ups) if r["key"] == ident), None)
+        pending = [c for c in (run or {}).get("calls", []) if is_open(c)]
+        if run is None or not pending:
+            return "Those calls are done or have moved."
+        if action == "s":
+            state = dict(s.reminders.get("state") or {})
+            runs = dict(state.get("runs") or {}) if state.get("day") == day else {}
+            runs[ident] = {**runs.get(ident, {}), "until": minute + self.SNOOZE}
+            s.reminders = {**s.reminders, "state": {"day": day, "runs": runs}}
+            await self._settings.save(s)
+            return f"⏰ I'll remind you again at {clock(minute + self.SNOOZE)}."
+        tomorrow = (local.date() + timedelta(days=1)).isoformat()
+        for c in pending:
+            await data.save_record("follow-ups", {**c, "due": {**(c.get("due") or {}), "date": tomorrow}})
+        n = len(pending)
+        return f"📅 Moved {n} call{'s' if n != 1 else ''} to tomorrow."
 
 
 class ReminderManager:

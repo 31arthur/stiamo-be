@@ -197,6 +197,8 @@ class FakeTelegram(TelegramApi):
         self.next_id = 100
         #: Chats whose messages Telegram refuses.
         self.fail_chats: set = set()
+        #: file id -> the bytes Telegram would give (voice notes).
+        self.files: dict[str, bytes] = {}
 
     async def get_me(self, token):
         if token == "bad":
@@ -232,6 +234,9 @@ class FakeTelegram(TelegramApi):
     async def send_typing(self, token, chat_id):
         pass
 
+    async def download_file(self, token, file_id):
+        return self.files[file_id]
+
     async def send_voice(self, token, chat_id, audio, caption=""):
         self.voices.append((chat_id, audio, caption))
 
@@ -262,6 +267,9 @@ class FakeVoice(VoiceApi):
             from stiamo_common.errors import ValidationFailed
 
             raise ValidationFailed("Deepgram didn't accept that key.")
+
+    async def transcribe(self, key, audio, mime):
+        return audio.decode()
 
     async def speak(self, key, text, model):
         self.said.append((model, text))

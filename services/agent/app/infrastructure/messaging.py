@@ -72,6 +72,19 @@ class HttpTelegramApi(TelegramApi):
     async def send_typing(self, token: str, chat_id: int | str) -> None:
         await self._call(token, "sendChatAction", {"chat_id": chat_id, "action": "typing"})
 
+    async def download_file(self, token: str, file_id: str) -> bytes:
+        info = await self._call(token, "getFile", {"file_id": file_id})
+        path = (info or {}).get("file_path")
+        if not path:
+            raise ValidationFailed("Telegram didn't give that file.")
+        try:
+            r = await self._http.get(f"{TELEGRAM}/file/bot{token}/{path}")
+        except httpx.HTTPError as exc:
+            raise ValidationFailed("Couldn't reach Telegram. Try again in a moment.") from exc
+        if r.status_code != 200:
+            raise ValidationFailed(f"Telegram wouldn't hand over the file ({r.status_code}).")
+        return r.content
+
     async def send_voice(self, token: str, chat_id: int | str, audio: bytes, caption: str = "") -> None:
         try:
             r = await self._http.post(f"{TELEGRAM}/bot{token}/sendVoice", data={"chat_id": str(chat_id), "caption": caption[:1000]}, files={"voice": ("reminder.mp3", audio, "audio/mpeg")})

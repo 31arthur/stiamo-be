@@ -64,6 +64,9 @@ class ChannelService:
         self._conversations = conversations
         #: What was sent and whether it arrived (see ports.DeliveryLog); None where nothing keeps one.
         self.deliveries: Any = None
+        #: What the buttons under a reminder do (see reminders.py), and the voice notes that become text (see voicenotes.py). Set once both exist.
+        self.reminder_actions: Any = None
+        self.voice_notes: Any = None
         #: Urgent-email alerts: the buttons under them, and the words typed for "write my own" (see alerts.py). Set once both exist.
         self.alerts = alerts
 
@@ -383,6 +386,9 @@ class ChannelService:
                 return
             msg = update.get("message") or {}
             text, chat = (msg.get("text") or "").strip(), (msg.get("chat") or {}).get("id")
+            voice = msg.get("voice") or msg.get("audio")
+            if not text and voice and chat is not None and self.voice_notes is not None and any(p["id"] == chat for p in c.public.get("paired", [])):
+                text = await self._heard(c, chat, voice)
             if not text or chat is None:
                 return
             token = c.secrets["botToken"]
@@ -419,10 +425,46 @@ class ChannelService:
         if chat is None or not any(p["id"] == chat for p in c.public.get("paired", [])):
             await self._tg.answer_callback(c.secrets["botToken"], str(press.get("id", "")), "This chat isn't linked to Stiamo.")
             return
+        who = Who(c.user_id, c.public.get("ownerEmail", ""))
+        data = str(press.get("data") or "")
+        if data.startswith("rm:") and self.reminder_actions is not None:
+            await self._reminder_press(c, who, chat, message, press, data)
+            return
         if self.alerts is None:
             return
-        who = Who(c.user_id, c.public.get("ownerEmail", ""))
         await self.alerts.on_callback(who, self._tokens.mint(who.user_id, who.email), c.id, chat, int(message.get("message_id") or 0), str(press.get("id", "")), str(press.get("data") or ""))
+
+    async def _heard(self, c: Channel, chat: int | str, voice: dict[str, Any]) -> str:
+        """A voice note as the words said, shown back so a mishearing is seen. Empty (and the reason said) when it can't be read."""
+        token = c.secrets["botToken"]
+        who = Who(c.user_id, c.public.get("ownerEmail", ""))
+        try:
+            await self._tg.send_typing(token, chat)
+            audio = await self._tg.download_file(token, str(voice.get("file_id")))
+            words = await self.voice_notes.transcribe(who, audio, str(voice.get("mime_type") or "audio/ogg"), int(voice.get("duration") or 0))
+        except (ValidationFailed, AiError) as exc:
+            await self._tg.send_message(token, chat, str(getattr(exc, "message", None) or exc))
+            return ""
+        await self._tg.send_message(token, chat, f"🎙️ {words}")
+        return words
+
+    async def _reminder_press(self, c: Channel, who: Who, chat: int | str, message: dict[str, Any], press: dict[str, Any], data: str) -> None:
+        """A button under a reminder: done, remind again later, or tomorrow. A button pressed twice, or after the call moved, only says so."""
+        token = c.secrets["botToken"]
+        await self._tg.answer_callback(token, str(press.get("id", "")))
+        _, action, ident = (data.split(":", 2) + ["", ""])[:3]
+        try:
+            said = await self.reminder_actions.press(who, self._tokens.mint(who.user_id, who.email), action, ident)
+        except Exception as exc:  # noqa: BLE001  the button must always answer
+            said = "⚠️ " + (getattr(exc, "message", None) or "That did not work. Try it in Stiamo.")
+        mid = int(message.get("message_id") or 0)
+        rows = ((message.get("reply_markup") or {}).get("inline_keyboard")) or []
+        left = [r for r in rows if not any(b.get("callback_data") == data for b in r)] if action == "d" else []
+        try:  # a call done leaves the other buttons; anything else settles the reminder, so its buttons go
+            await self._tg.edit_buttons(token, chat, mid, left if any(b.get("callback_data", "").startswith("rm:d:") for r in left for b in r) else None)
+        except Exception:  # noqa: BLE001
+            log.info("could not update the buttons under a reminder")
+        await self._tg.send_message(token, chat, said)
 
     def check_whatsapp(self, c: Channel | None) -> Channel:
         if c is None or c.kind != "whatsapp":
