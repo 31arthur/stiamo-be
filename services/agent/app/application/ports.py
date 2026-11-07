@@ -422,6 +422,10 @@ class WorkflowRepository(ABC):
         """What an agent judged, in the given states, newest first: the mail a later agent goes on to read."""
 
     @abstractmethod
+    async def since(self, user_id: str, since: datetime, limit: int = 20000) -> list[LedgerEntry]:
+        """Everything every agent of the person decided since a moment, newest first: what the insights are counted from."""
+
+    @abstractmethod
     async def queue(self, user_id: str, statuses: list[str], limit: int = 500) -> list[LedgerEntry]:
         """Items waiting on the person across every agent they built, newest first."""
 

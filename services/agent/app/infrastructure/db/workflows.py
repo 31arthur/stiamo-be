@@ -125,6 +125,10 @@ class SqlWorkflowRepository(WorkflowRepository):
         q = select(LedgerModel).where(LedgerModel.user_id == user_id, LedgerModel.agent_id == workflow_id, LedgerModel.status.in_(statuses)).order_by(LedgerModel.created_at.desc()).limit(limit)
         return [_entry(r) for r in (await self._s.execute(q)).scalars()]
 
+    async def since(self, user_id: str, since: datetime, limit: int = 20000) -> list[LedgerEntry]:
+        q = select(LedgerModel).where(LedgerModel.user_id == user_id, LedgerModel.created_at >= since).order_by(LedgerModel.created_at.desc()).limit(limit)
+        return [_entry(r) for r in (await self._s.execute(q)).scalars()]
+
     async def queue(self, user_id: str, statuses: list[str], limit: int = 500) -> list[LedgerEntry]:
         q = select(LedgerModel).where(LedgerModel.user_id == user_id, LedgerModel.status.in_(statuses)).order_by(LedgerModel.created_at.desc()).limit(limit)
         return [_entry(r) for r in (await self._s.execute(q)).scalars()]
