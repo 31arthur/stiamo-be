@@ -122,6 +122,14 @@ class HttpDataGateway(DataGateway):
             raise await self._mail_error(r)
         return r.json()
 
+    async def mail_test(self, account_id: str) -> None:
+        try:
+            r = await self._http.post(f"{self._mail}/v1/mail/accounts/{account_id}/test", headers=self._headers)
+        except httpx.HTTPError as exc:
+            raise AiError("Couldn't reach the mail service. Try again in a moment.") from exc
+        if r.status_code >= 300:
+            raise await self._mail_error(r)
+
     async def mail_send(self, account_id: str, message: dict[str, Any]) -> str:
         try:
             r = await self._http.post(f"{self._mail}/v1/mail/accounts/{account_id}/send", headers=self._headers, json=message)

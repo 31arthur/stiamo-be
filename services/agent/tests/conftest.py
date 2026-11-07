@@ -146,6 +146,10 @@ class FakeData(DataGateway):
     async def mail_accounts(self):
         return self.accounts
 
+    async def mail_test(self, account_id):
+        if account_id == "down":
+            raise AiError("The server didn't accept that username and password.")
+
     async def mail_send(self, account_id, message):
         self.mail_sent.append((account_id, message))
         return "<sent-1@sb.example.com>"

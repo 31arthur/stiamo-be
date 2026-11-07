@@ -40,6 +40,7 @@ from app.presentation.routers import (
     conversations,
     dayplans,
     deliveries,
+    health,
     insights,
     mailwatch,
     news,
@@ -205,12 +206,13 @@ def create_app(settings: Settings | None = None, *, mail_events=None, registry=N
     app.include_router(mailwatch.router)
     app.include_router(insights.router)
     app.include_router(deliveries.router)
+    app.include_router(health.router)
     app.include_router(conversations.router)
     app.include_router(workflows.router)
     app.include_router(webhooks.router)
 
     @app.get("/health", tags=["ops"])
-    async def health() -> dict[str, str]:
+    async def liveness() -> dict[str, str]:
         return {"status": "ok"}
 
     return app

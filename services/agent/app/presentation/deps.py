@@ -16,6 +16,7 @@ from app.application.alerts import AlertService
 from app.application.channels import ChannelService
 from app.application.conversations import ConversationService
 from app.application.dayplans import DayPlanService, planner_settings
+from app.application.health import HealthService
 from app.application.insights import InsightService
 from app.application.mailwatch import MailWatchService
 from app.application.proposals import ProposalService
@@ -173,6 +174,12 @@ async def watch_everyone(app: FastAPI) -> None:
         except Exception:
             await session.rollback()
             raise
+
+
+def build_health(app: FastAPI, session: AsyncSession) -> HealthService:
+    s = app.state
+    agent, channels = build_services(app, session)
+    return HealthService(SqlSettingsRepository(session, s.box), agent, channels, build_mailwatch(app, session), s.deliveries, s.data_factory, s.settings.public_url, s.settings.app_url, lambda: s.clock())
 
 
 def build_insights(app: FastAPI, session: AsyncSession) -> InsightService:
