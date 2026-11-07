@@ -167,7 +167,12 @@ class ReminderService:
         user = (call_user if call_user is not None else cfg["callUser"]).strip()
         if not valid_call_user(user):
             raise ValidationFailed(BAD_USER)
-        await self._caller.call(user, "Stiamo. This is a test call. If you can hear this, your call reminders are working.", cfg["callVoice"], 1)
+        try:
+            await self._caller.call(user, "Stiamo. This is a test call. If you can hear this, your call reminders are working.", cfg["callVoice"], 1)
+        except ValidationFailed as exc:
+            await self._record(who.user_id, False, user, exc.message, "Test call")
+            raise
+        await self._record(who.user_id, True, user, "", "Test call")
         return {"called": True, "user": user}
 
     async def test(self, who: Who) -> dict[str, Any]:

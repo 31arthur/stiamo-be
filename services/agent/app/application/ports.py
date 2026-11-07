@@ -75,6 +75,10 @@ class DataGateway(ABC):
         """The mailboxes the owner has connected: {id, workspace, label, address, ...}."""
 
     @abstractmethod
+    async def mail_test(self, account_id: str) -> None:
+        """Opens a connection to the mailbox's server and signs in. Raises with the server's own reason when it can't."""
+
+    @abstractmethod
     async def mail_send(self, account_id: str, message: dict[str, Any]) -> str:
         """Sends a message from a mailbox ({to, subject, text, html, inReplyTo, references}). Returns the new message's id."""
 

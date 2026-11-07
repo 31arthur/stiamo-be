@@ -73,6 +73,10 @@ class ScopedData(DataGateway):
         await self._mine(account_id)
         return await self._inner.mail_trash(account_id, folder, uids)
 
+    async def mail_test(self, account_id: str):
+        await self._mine(account_id)
+        return await self._inner.mail_test(account_id)
+
     async def mail_send(self, account_id: str, message: dict[str, Any]):
         await self._mine(account_id)
         return await self._inner.mail_send(account_id, message)
