@@ -531,6 +531,38 @@ class AlertRepository(ABC):
     async def save(self, alert: Alert) -> None: ...
 
 
+@dataclass
+class Delivery:
+    """One thing sent to the person's phone: what, where, and whether it got there."""
+
+    id: str
+    user_id: str
+    #: alert, reminder, plan, voice, call, message or test.
+    kind: str
+    #: telegram, whatsapp or call.
+    channel: str
+    #: Who it went to, as the person would recognise it: a bot and chat, a number, a username.
+    target: str
+    ok: bool
+    error: str = ""
+    #: A few words on what it was (an email's subject, how many calls were pending).
+    summary: str = ""
+    workspace: str | None = None
+    created_at: datetime | None = None
+
+
+class DeliveryLog(ABC):
+    @abstractmethod
+    async def add(self, user_id: str, kind: str, channel: str, target: str, ok: bool, error: str = "", summary: str = "", workspace: str | None = None) -> None: ...
+
+    @abstractmethod
+    async def recent(self, user_id: str, limit: int = 50, failed_only: bool = False) -> list[Delivery]: ...
+
+    @abstractmethod
+    async def counts(self, user_id: str, since: datetime) -> dict[str, int]:
+        """{sent, failed} since a moment."""
+
+
 class DayPlanRepository(ABC):
     @abstractmethod
     async def for_day(self, user_id: str, day: str) -> DayPlan | None: ...

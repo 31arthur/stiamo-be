@@ -20,6 +20,7 @@ from app.application.sweeps import SweepManager
 from app.config import Settings, get_settings
 from app.infrastructure.callmebot import CallMeBot
 from app.infrastructure.data import HttpDataGateway
+from app.infrastructure.db.deliveries import SqlDeliveryLog
 from app.infrastructure.db.repositories import SqlSettingsRepository
 from app.infrastructure.db.runs import SqlRunLog
 from app.infrastructure.db.workflows import SqlWorkflowRepository
@@ -38,6 +39,7 @@ from app.presentation.routers import (
     channels,
     conversations,
     dayplans,
+    deliveries,
     insights,
     mailwatch,
     news,
@@ -170,6 +172,8 @@ def create_app(settings: Settings | None = None, *, mail_events=None, registry=N
     app.state.caller = caller or CallMeBot(http)
     #: When a call about a workspace's priority mail was last placed (see application/alerts.py).
     app.state.alert_calls = {}
+    #: What was sent to the phone and whether it arrived (kept a month).
+    app.state.deliveries = SqlDeliveryLog(lambda: app.state.session_factory())
     #: A day's written digest for each person, workspace and period, so asking again doesn't ask the model again.
     app.state.insight_cache = {}
     #: The time, which a test can set.
@@ -200,6 +204,7 @@ def create_app(settings: Settings | None = None, *, mail_events=None, registry=N
     app.include_router(alerts.router)
     app.include_router(mailwatch.router)
     app.include_router(insights.router)
+    app.include_router(deliveries.router)
     app.include_router(conversations.router)
     app.include_router(workflows.router)
     app.include_router(webhooks.router)

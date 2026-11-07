@@ -217,6 +217,25 @@ class AlertModel(Base):
     __table_args__ = (UniqueConstraint("user_id", "item_id", name="uq_mail_alerts_item"), Index("ix_mail_alerts_user", "user_id", "created_at"))
 
 
+class DeliveryModel(Base):
+    """What was sent to the person's phone (an alert, a reminder, a call) and whether it got there. Kept for a month."""
+
+    __tablename__ = "deliveries"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(36))
+    kind: Mapped[str] = mapped_column(String(12))
+    channel: Mapped[str] = mapped_column(String(12))
+    target: Mapped[str] = mapped_column(String(160), default="")
+    ok: Mapped[bool] = mapped_column(Boolean, default=True)
+    error: Mapped[str] = mapped_column(Text, default="")
+    summary: Mapped[str] = mapped_column(String(300), default="")
+    workspace: Mapped[str | None] = mapped_column(String(16))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime)
+
+    __table_args__ = (Index("ix_deliveries_user", "user_id", "created_at"),)
+
+
 class DayPlanModel(Base):
     """What the daily planner made for one day: the briefing and the schedule it proposed, until the person approves or dismisses it."""
 
