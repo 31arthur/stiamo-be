@@ -47,7 +47,7 @@ class HealthService:
             accounts = await data.mail_accounts()
         except AiError:
             accounts = None  # the mail service is away
-        items = [*await self._ai(who), *await self._phone(who, s, accounts), *self._mail(accounts), *await self._watches(who, token, accounts), *await self._alerts(who, s), *self._server()]
+        items = [*await self._ai(who), *await self._phone(who, s, accounts), *self._mail(accounts), *await self._watches(who, token, accounts), *await self._google(data), *await self._alerts(who, s), *self._server()]
         items.sort(key=lambda i: STATES.index(i["state"]))
         problems = sum(1 for i in items if i["state"] in ("error", "warn"))
         return {"items": items, "problems": problems, "errors": sum(1 for i in items if i["state"] == "error"), "checkedAt": self._now().isoformat(timespec="seconds")}
@@ -133,6 +133,42 @@ class HealthService:
                 out.append(check(f"watch-{w['workspace']}", "Mail", label, "warn", "Starting: it isn't listening to the mailbox yet.", f"/agents/{w['agentId']}"))
             else:
                 out.append(check(f"watch-{w['workspace']}", "Mail", label, "ok", f"Listening to {len(w['mailboxes'])} mailbox{'es' if len(w['mailboxes']) != 1 else ''}."))
+        return out
+
+    # --- Google: the calendar and the contacts -----------------------------------------------------------------------
+
+    @staticmethod
+    async def _google(data: DataGateway) -> list[dict[str, Any]]:
+        links = await data.google_links()
+        out: list[dict[str, Any]] = []
+        for key, label, page, why in (
+            ("calendar", "Google Calendar", "/calendar", "the day plan and Today can't see your meetings"),
+            ("contacts", "Google Contacts", "/contacts", "tasks and follow-ups can't pick a contact"),
+        ):
+            if key not in links:
+                continue
+            status = links[key]
+            if status is None:
+                out.append(check(key, "Google", label, "warn", f"The calendar service didn't answer, so {why}."))
+                continue
+            accounts = status.get("accounts") or []
+            if not status.get("configured"):
+                out.append(check(key, "Google", label, "off", "Google sign-in isn't set up on the server yet (the Google client id and secret). See the setup guide."))
+            elif not accounts:
+                out.append(check(key, "Google", label, "off", f"No Google account is connected, so {why}.", page))
+            else:
+                broken = [a for a in accounts if a.get("status") != "ok"]
+                empty = [a for a in accounts if a.get("status") == "ok" and key == "contacts" and not a.get("contacts")]
+                names = ", ".join(sorted({a.get("email", "") for a in broken}))
+                if broken:
+                    out.append(check(key, "Google", label, "error", f"{names} needs to be connected again" + (f": {str(broken[0].get('error'))[:120]}" if broken[0].get("error") else "."), page))
+                elif empty:
+                    out.append(check(key, "Google", label, "warn", f"{empty[0].get('email', '')} is connected but no contacts were read. Check that the People API is enabled in Google Cloud, then sync again.", page))
+                elif key == "contacts":
+                    out.append(check(key, "Google", label, "ok", f"{sum(int(a.get('contacts') or 0) for a in accounts)} contacts from {len(accounts)} account{'s' if len(accounts) != 1 else ''}."))
+                else:
+                    shown = sum(1 for a in accounts for c in a.get("calendars") or [] if c.get("enabled"))
+                    out.append(check(key, "Google", label, "ok", f"{len(accounts)} account{'s' if len(accounts) != 1 else ''}, {shown} calendar{'s' if shown != 1 else ''} shown."))
         return out
 
     # --- did it arrive ---------------------------------------------------------------------------------------------------

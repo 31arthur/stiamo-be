@@ -84,6 +84,24 @@ async def test_messages_that_did_not_arrive_are_a_warning_with_the_log_to_look_a
     assert item["state"] == "warn" and item["fix"] == "log" and "didn't arrive" in item["detail"]
 
 
+async def test_google_calendar_and_contacts_say_what_is_missing_or_broken(rig):
+    assert "calendar" not in by(await health(rig))  # not asked: nothing is claimed
+    rig.data.google = {"calendar": {"configured": False, "accounts": []}, "contacts": None}
+    items = by(await health(rig))
+    assert items["calendar"]["state"] == "off" and "client id" in items["calendar"]["detail"]
+    assert items["contacts"]["state"] == "warn" and "didn't answer" in items["contacts"]["detail"]
+    rig.data.google = {"calendar": {"configured": True, "accounts": []}, "contacts": {"configured": True, "accounts": [{"email": "a@sb.org", "status": "reconnect", "error": "Google no longer accepts this sign-in."}]}}
+    items = by(await health(rig))
+    assert items["calendar"]["state"] == "off" and items["calendar"]["fix"] == "/calendar"
+    assert items["contacts"]["state"] == "error" and "a@sb.org" in items["contacts"]["detail"] and items["contacts"]["fix"] == "/contacts"
+    rig.data.google = {"calendar": {"configured": True, "accounts": [{"email": "a@sb.org", "status": "ok", "calendars": [{"enabled": True}, {"enabled": False}]}]}, "contacts": {"configured": True, "accounts": [{"email": "a@sb.org", "status": "ok", "contacts": 0}]}}
+    items = by(await health(rig))
+    assert items["calendar"]["state"] == "ok" and "1 account, 1 calendar shown" in items["calendar"]["detail"]
+    assert items["contacts"]["state"] == "warn" and "People API" in items["contacts"]["detail"]
+    rig.data.google["contacts"]["accounts"][0]["contacts"] = 212
+    assert by(await health(rig))["contacts"]["detail"] == "212 contacts from 1 account."
+
+
 async def test_health_belongs_to_one_person(rig):
     other = (await rig.client.get(H, headers=headers("b@example.com", "u2"))).json()
     assert by(other)["model"]["state"] == "error"

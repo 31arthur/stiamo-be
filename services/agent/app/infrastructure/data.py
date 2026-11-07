@@ -183,6 +183,16 @@ class HttpDataGateway(DataGateway):
             return []
         return r.json().get("items", []) if r.status_code == 200 else []
 
+    async def google_links(self) -> dict[str, dict[str, Any] | None]:
+        out: dict[str, dict[str, Any] | None] = {}
+        for key, path in (("calendar", "/v1/calendar/status"), ("contacts", "/v1/calendar/contacts/status")):
+            try:
+                r = await self._http.get(f"{self._calendar}{path}", headers=self._headers)
+                out[key] = r.json() if r.status_code == 200 else None
+            except (httpx.HTTPError, ValueError):
+                out[key] = None
+        return out
+
     async def save_record(self, table: str, record: dict[str, Any]) -> None:
         paths = {"tasks": "/v1/tasks", "follow-ups": "/v1/follow-ups", "cases": "/v1/cases", "hearings": "/v1/hearings", "plans": "/v1/plans"}
         if table not in paths:

@@ -95,6 +95,11 @@ class DataGateway(ABC):
         """The events in the owner's Google calendars between two days (YYYY-MM-DD), on their own clock. Empty when none are connected."""
         return []
 
+    async def google_links(self) -> dict[str, dict[str, Any] | None]:
+        """What is connected to Google, as the calendar service reports it: {"calendar": status, "contacts": status}. A value is None when the
+        service didn't answer; an empty dict when it isn't asked at all."""
+        return {}
+
     @abstractmethod
     async def save_record(self, table: str, record: dict[str, Any]) -> None:
         """Writes one task or follow-up back (create or replace), as the owner."""
