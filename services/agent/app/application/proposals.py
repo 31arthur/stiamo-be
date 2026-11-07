@@ -40,6 +40,10 @@ class ProposalService:
     def view(p: Proposal) -> dict[str, Any]:
         return {"id": p.id, "action": p.action, "title": p.title, "lines": p.lines, "status": p.status}
 
+    async def waiting(self, who: Who) -> list[dict[str, Any]]:
+        """What agents proposed that is still waiting for the person (not older than a day: after that it is stale and can't be approved), newest first."""
+        return [{**self.view(p), "agentId": p.agent_id, "createdAt": p.created_at.astimezone(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")} for p in await self._repo.pending(who.user_id, self._now() - STALE)]
+
     async def _mine(self, who: Who, proposal_id: str) -> Proposal:
         p = await self._repo.get(who.user_id, proposal_id)
         if p is None:

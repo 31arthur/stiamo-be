@@ -142,3 +142,22 @@ async def test_a_yes_on_the_phone_saves_what_was_just_proposed_without_asking_th
     rig.script += [ChatResult("Nothing waiting, so this reached me.")]
     await send(rig, c, "yes", chat=555, update=6)
     assert rig.telegram.sent[-1][1] == "Nothing waiting, so this reached me."  # with nothing proposed, a yes is just a message
+
+
+async def test_everything_still_waiting_can_be_listed_newest_first_and_not_after_it_is_dealt_with(rig):
+    from datetime import UTC, datetime, timedelta
+
+    from app.application.ports import Proposal
+    from app.infrastructure.db.repositories import SqlProposalRepository
+
+    now = datetime.now(UTC)
+    async with rig.app.state.session_factory() as s:
+        repo = SqlProposalRepository(s)
+        await repo.add(Proposal("p1", "u1", "daily-planner", "task.create", "New task: Call Hemla", ["Due Fri"], [], "pending", None, now - timedelta(hours=1)))
+        await repo.add(Proposal("p2", "u1", "daily-planner", "task.create", "Old one", [], [], "pending", None, now - timedelta(hours=30)))
+        await repo.add(Proposal("p3", "u1", "daily-planner", "task.create", "Done one", [], [], "dropped", None, now))
+        await repo.add(Proposal("p4", "u2", "daily-planner", "task.create", "Someone else's", [], [], "pending", None, now))
+        await s.commit()
+    out = (await rig.client.get("/v1/agent/proposals", headers=headers())).json()["items"]
+    assert [p["id"] for p in out] == ["p1"] and out[0]["title"] == "New task: Call Hemla" and out[0]["agentId"] == "daily-planner" and out[0]["createdAt"].endswith("Z")
+    assert (await rig.client.get("/v1/agent/proposals")).status_code == 401

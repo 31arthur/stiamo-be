@@ -202,6 +202,10 @@ class SqlProposalRepository(ProposalRepository):
         rows = (await self._s.execute(select(ProposalModel).where(ProposalModel.user_id == user_id, ProposalModel.channel_id == channel_id, ProposalModel.status == "pending", ProposalModel.created_at >= since).order_by(ProposalModel.created_at))).scalars()
         return [_proposal(r) for r in rows]
 
+    async def pending(self, user_id: str, since: datetime, limit: int = 50) -> list[Proposal]:
+        rows = (await self._s.execute(select(ProposalModel).where(ProposalModel.user_id == user_id, ProposalModel.status == "pending", ProposalModel.created_at >= since).order_by(ProposalModel.created_at.desc()).limit(limit))).scalars()
+        return [_proposal(r) for r in rows]
+
     async def save(self, p: Proposal) -> None:
         row = await self._s.get(ProposalModel, p.id)
         if row is not None:
