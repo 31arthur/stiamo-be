@@ -146,3 +146,10 @@ async def test_a_task_can_name_who_to_reach_for_it(client, alice):
     assert (await client.get(f"/v1/tasks/{made['id']}", headers=alice)).json()["contact"] == "Ada Lovelace · +91 98765 43210"
     cleared = (await client.put(f"/v1/tasks/{made['id']}", json={**TASK, "contact": None}, headers=alice)).json()
     assert cleared.get("contact") is None
+
+
+async def test_tasks_and_follow_ups_can_point_at_a_contact_by_id(client, alice):
+    task = (await client.post("/v1/tasks", json={**TASK, "contact": "Ada · +91 98765 43210", "contactId": "acc1:abc123"}, headers=alice)).json()
+    assert task["contactId"] == "acc1:abc123" and (await client.get(f"/v1/tasks/{task['id']}", headers=alice)).json()["contactId"] == "acc1:abc123"
+    fu = (await client.post("/v1/follow-ups", json={"title": "Call Ada", "workspace": "sb", "contact": "Ada", "contactId": "acc1:abc123"}, headers=alice)).json()
+    assert (await client.get(f"/v1/follow-ups/{fu['id']}", headers=alice)).json()["contactId"] == "acc1:abc123"
