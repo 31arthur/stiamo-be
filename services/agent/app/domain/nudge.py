@@ -48,6 +48,8 @@ def next_due(run: dict[str, Any], state: dict[str, Any]) -> int | None:
     if step >= len(LADDER):
         return None
     base = int(state["last"]) if step > 0 and state.get("last") is not None else run["end"]
+    if state.get("until"):  # snoozed: the next one comes at that minute, whatever the ladder said (and the ladder carries on from there)
+        return int(state["until"])
     return base + LADDER[step]
 
 

@@ -285,6 +285,10 @@ class TelegramApi(ABC):
         """Replaces the buttons under a message, or takes them away (None)."""
 
     @abstractmethod
+    async def download_file(self, token: str, file_id: str) -> bytes:
+        """What a person sent (a voice note, say), as bytes."""
+
+    @abstractmethod
     async def send_voice(self, token: str, chat_id: int | str, audio: bytes, caption: str = "") -> None:
         """A spoken message (MP3 or OGG/Opus), which Telegram shows as a voice message that plays in the chat."""
 
@@ -303,6 +307,10 @@ class VoiceApi(ABC):
     @abstractmethod
     async def check(self, key: str) -> None:
         """Raises ValidationFailed when the service doesn't accept the key."""
+
+    @abstractmethod
+    async def transcribe(self, key: str, audio: bytes, mime: str) -> str:
+        """What was said in the audio, as text."""
 
     @abstractmethod
     async def speak(self, key: str, text: str, model: str) -> bytes:

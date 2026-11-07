@@ -25,6 +25,18 @@ class DeepgramVoice(VoiceApi):
         if r.status_code >= 400:
             raise ValidationFailed(f"Deepgram answered {r.status_code}.")
 
+    async def transcribe(self, key: str, audio: bytes, mime: str) -> str:
+        try:
+            r = await self._http.post(f"{DEEPGRAM}/listen", params={"model": "nova-2", "smart_format": "true", "detect_language": "true"}, headers={"Authorization": f"Token {key}", "Content-Type": mime or "audio/ogg"}, content=audio)
+        except httpx.HTTPError as exc:
+            raise ValidationFailed("Couldn't reach Deepgram. Try again in a moment.") from exc
+        if r.status_code >= 400:
+            raise ValidationFailed(f"Deepgram couldn't read the voice note ({r.status_code}).")
+        try:
+            return str(r.json()["results"]["channels"][0]["alternatives"][0]["transcript"]).strip()
+        except (KeyError, IndexError, ValueError, TypeError):
+            return ""
+
     async def speak(self, key: str, text: str, model: str) -> bytes:
         try:
             r = await self._http.post(f"{DEEPGRAM}/speak", params={"model": model or DEFAULT_VOICE, "encoding": "mp3"}, headers={"Authorization": f"Token {key}"}, json={"text": text[:MAX_CHARS]})
