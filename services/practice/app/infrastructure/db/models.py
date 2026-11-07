@@ -126,6 +126,7 @@ class TaskModel(Owned, OutcomeCols, Base):
     related_kind: Mapped[str | None] = mapped_column(String(12))
     related_id: Mapped[str | None] = mapped_column(String(64))
     contact: Mapped[str | None] = mapped_column(String(300))
+    contact_id: Mapped[str | None] = mapped_column(String(80))
     __table_args__ = (
         Index("ix_tasks_due", "user_id", "due_date"),
         Index("ix_tasks_slot", "user_id", "slot_date"),
@@ -142,6 +143,7 @@ class FollowUpModel(Owned, OutcomeCols, Base):
     channel: Mapped[str] = mapped_column(String(10))
     workspace: Mapped[str] = mapped_column(String(10))
     contact: Mapped[str | None] = mapped_column(String(300))
+    contact_id: Mapped[str | None] = mapped_column(String(80))
     due_date: Mapped[str | None] = mapped_column(String(10))
     due_time: Mapped[int | None] = mapped_column(Integer)
     duration: Mapped[int] = mapped_column(Integer)
