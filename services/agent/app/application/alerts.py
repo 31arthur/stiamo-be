@@ -54,7 +54,7 @@ WORKSPACE_LABELS = {"personal": "Personal", "sb": "S&B", "fsa": "FSA", "media": 
 class Phone(Protocol):
     """What the alerts need of the phone chats (the channel service)."""
 
-    async def push(self, who: Who, html: str, buttons: list[list[dict[str, str]]] | None, workspace: str | None = None) -> list[dict[str, Any]]: ...
+    async def push(self, who: Who, html: str, buttons: list[list[dict[str, str]]] | None, workspace: str | None = None, summary: str = "") -> list[dict[str, Any]]: ...
 
     async def say(self, channel_id: str, chat: int | str, html: str, buttons: list[list[dict[str, str]]] | None = None) -> int | None: ...
 
@@ -85,9 +85,11 @@ class AlertService:
         clock_now: Callable[[], datetime] = lambda: datetime.now(UTC),
         caller: CallApi | None = None,
         calls: dict[tuple[str, str], datetime] | None = None,
+        deliveries: Any = None,
     ) -> None:
         self._alerts, self._settings, self._llm, self._data, self._tokens, self._phone, self._app_url, self._now = alerts, settings, llm_factory, data_factory, tokens, phone, app_url, clock_now
         self._caller = caller
+        self._deliveries = deliveries
         #: When a call about a workspace's priority mail was last placed, shared by every request of this process.
         self._calls = calls if calls is not None else {}
 
@@ -135,7 +137,7 @@ class AlertService:
         await self._alerts.save(alert)
         view = _view(alert)
         url = mail_url(self._app_url, workspace, account_id, folder, uid) if not sample else (self._app_url.rstrip("/") + f"/{workspace}/mail" if self._app_url else "")
-        alert.chats = await self._phone.push(who, alert_text({**view, "priority": alert.priority, "sender_name": sender_name, "sender_address": sender_address}, theme, label), alert_buttons(view, url), workspace)
+        alert.chats = await self._phone.push(who, alert_text({**view, "priority": alert.priority, "sender_name": sender_name, "sender_address": sender_address}, theme, label), alert_buttons(view, url), workspace, subject)
         await self._alerts.save(alert)
         if call and alert.priority == "high" and not sample:
             await self._ring(who, s, workspace, label, sender_name or sender_address, subject)
@@ -152,11 +154,20 @@ class AlertService:
             return False
         try:
             await self._caller.call(cfg["callUser"], call_text(label, sender, subject), cfg["callVoice"], 2)
-        except Exception:  # noqa: BLE001  the alert is already on the phone
+        except Exception as exc:  # noqa: BLE001  the alert is already on the phone
             log.warning("could not ring about priority mail for %s", who.user_id)
+            await self._record(who, False, cfg["callUser"], str(getattr(exc, "message", None) or exc), subject, workspace)
             return False
+        await self._record(who, True, cfg["callUser"], "", subject, workspace)
         self._calls[(who.user_id, workspace)] = now
         return True
+
+    async def _record(self, who: Who, ok: bool, target: str, error: str, summary: str, workspace: str) -> None:
+        if self._deliveries is not None:
+            try:
+                await self._deliveries.add(who.user_id, "call", "call", target, ok, error, summary, workspace)
+            except Exception:  # noqa: BLE001
+                log.info("could not keep a delivery record")
 
     async def sample(self, who: Who, token: str) -> Alert | None:
         """A made-up urgent email, to see what an alert looks like and to try the buttons. Nothing is sent to anyone from it."""

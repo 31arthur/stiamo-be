@@ -195,6 +195,8 @@ class FakeTelegram(TelegramApi):
         self.answered: list[str] = []
         self.stripped: list[tuple] = []
         self.next_id = 100
+        #: Chats whose messages Telegram refuses.
+        self.fail_chats: set = set()
 
     async def get_me(self, token):
         if token == "bad":
@@ -212,6 +214,10 @@ class FakeTelegram(TelegramApi):
         self.deleted += 1
 
     async def send_message(self, token, chat_id, text, html=False, buttons=None):
+        if chat_id in self.fail_chats:
+            from stiamo_common.errors import ValidationFailed
+
+            raise ValidationFailed("Telegram refused: Forbidden: bot was blocked by the user")
         self.sent.append((chat_id, text))
         self.keyboards.append(buttons)
         self.next_id += 1

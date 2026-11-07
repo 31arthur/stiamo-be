@@ -66,7 +66,8 @@ def build_services(app: FastAPI, session: AsyncSession) -> tuple[AgentService, C
     s = app.state
     agent = AgentService(SqlSettingsRepository(session, s.box), s.registry, s.runs, SqlWorkflowRepository(session), s.llm_factory, s.decision_factory, s.data_factory, s.settings.max_steps, SqlProposalRepository(session))
     channels = ChannelService(SqlChannelRepository(session, s.box), agent, s.telegram, s.twilio, s.tokens, public_url=s.settings.public_url, pairing_minutes=s.settings.pairing_minutes, memory=s.chat_memory, proposals=build_proposals(app, session), conversations=ConversationService(SqlConversationRepository(session), agent, SqlProposalRepository(session)))
-    channels.alerts = AlertService(SqlAlertRepository(session), SqlSettingsRepository(session, s.box), s.llm_factory, s.data_factory, s.tokens, channels, app_url=s.settings.app_url, clock_now=lambda: s.clock(), caller=s.caller, calls=s.alert_calls)
+    channels.deliveries = s.deliveries
+    channels.alerts = AlertService(SqlAlertRepository(session), SqlSettingsRepository(session, s.box), s.llm_factory, s.data_factory, s.tokens, channels, app_url=s.settings.app_url, clock_now=lambda: s.clock(), caller=s.caller, calls=s.alert_calls, deliveries=s.deliveries)
     return agent, channels
 
 
@@ -81,7 +82,7 @@ def build_proposals(app: FastAPI, session: AsyncSession) -> ProposalService:
 
 def build_day_plans(app: FastAPI, session: AsyncSession) -> DayPlanService:
     agent, channels = build_services(app, session)
-    return DayPlanService(SqlDayPlanRepository(session), SqlSettingsRepository(session, app.state.box), agent, app.state.data_factory, channels.announce)
+    return DayPlanService(SqlDayPlanRepository(session), SqlSettingsRepository(session, app.state.box), agent, app.state.data_factory, lambda who, text: channels.announce(who, text, kind="plan"))
 
 
 def evening_run(app: FastAPI, who: Who):
@@ -114,7 +115,7 @@ def sync_evening(app: FastAPI, who: Who, planner: dict) -> None:
 def build_reminders(app: FastAPI, session: AsyncSession) -> ReminderService:
     s = app.state
     _, channels = build_services(app, session)
-    return ReminderService(SqlSettingsRepository(session, s.box), s.data_factory, s.tokens, s.voice, s.caller, channels.announce, channels.announce_voice, lambda: s.clock())
+    return ReminderService(SqlSettingsRepository(session, s.box), s.data_factory, s.tokens, s.voice, s.caller, lambda who, text: channels.announce(who, text, kind="reminder"), channels.announce_voice, lambda: s.clock(), s.deliveries)
 
 
 def reminder_check(app: FastAPI, who: Who):

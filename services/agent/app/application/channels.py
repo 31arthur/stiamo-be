@@ -62,6 +62,8 @@ class ChannelService:
         self._memory = memory if memory is not None else {}
         self._proposals = proposals
         self._conversations = conversations
+        #: What was sent and whether it arrived (see ports.DeliveryLog); None where nothing keeps one.
+        self.deliveries: Any = None
         #: Urgent-email alerts: the buttons under them, and the words typed for "write my own" (see alerts.py). Set once both exist.
         self.alerts = alerts
 
@@ -188,7 +190,18 @@ class ChannelService:
             for n in c.public.get("allowed", []):
                 await self._tw.send_whatsapp(c.public["accountSid"], c.secrets["authToken"], c.public["from"], n, text)
 
-    async def announce(self, who: Who, text: str | Callable[[Style, int], str]) -> int:
+    async def _logged(self, who: Who, kind: str, channel: str, target: str, ok: bool, error: str = "", summary: str = "", workspace: str | None = None) -> None:
+        if self.deliveries is not None:
+            try:
+                await self.deliveries.add(who.user_id, kind, channel, target, ok, error, summary, workspace)
+            except Exception:  # noqa: BLE001  keeping a record must never be why a message fails
+                log.info("could not keep a delivery record")
+
+    @staticmethod
+    def _who(c: Channel, p: dict[str, Any]) -> str:
+        return f"{'@' + c.public['username'] if c.public.get('username') else 'Telegram'} · {p.get('name') or p.get('id')}"
+
+    async def announce(self, who: Who, text: str | Callable[[Style, int], str], kind: str = "message", summary: str = "", buttons: list[list[dict[str, str]]] | None = None) -> int:
         """Sends a message to every chat and number the person has connected. Returns how many it reached; one that fails doesn't stop the rest.
         `text` may be a function that writes the message for a chat (given its style and its length limit), so each gets it laid out its own way."""
         sent = 0
@@ -198,15 +211,26 @@ class ChannelService:
             try:
                 if c.kind == "telegram":
                     for p in c.public.get("paired", []):
-                        if callable(text):
-                            await self._tg.send_message(c.secrets["botToken"], p["id"], text("telegram", TELEGRAM_MAX), html=True)
-                        else:
-                            await self._tg.send_message(c.secrets["botToken"], p["id"], clip(text, TELEGRAM_MAX))
+                        try:
+                            if callable(text):
+                                await self._tg.send_message(c.secrets["botToken"], p["id"], text("telegram", TELEGRAM_MAX), html=True, buttons=buttons)
+                            else:
+                                await self._tg.send_message(c.secrets["botToken"], p["id"], clip(text, TELEGRAM_MAX), buttons=buttons)
+                        except Exception as exc:  # noqa: BLE001  one chat that fails doesn't stop the rest
+                            await self._logged(who, kind, "telegram", self._who(c, p), False, str(getattr(exc, "message", None) or exc), summary)
+                            log.warning("could not announce to chat %s of channel %s", p.get("id"), c.id)
+                            continue
+                        await self._logged(who, kind, "telegram", self._who(c, p), True, summary=summary)
                         sent += 1
                 else:
                     for n in c.public.get("allowed", []):
                         body = text("whatsapp", WHATSAPP_MAX) if callable(text) else clip(text, WHATSAPP_MAX)
-                        await self._tw.send_whatsapp(c.public["accountSid"], c.secrets["authToken"], c.public["from"], n, body)
+                        try:
+                            await self._tw.send_whatsapp(c.public["accountSid"], c.secrets["authToken"], c.public["from"], n, body)
+                        except Exception as exc:  # noqa: BLE001
+                            await self._logged(who, kind, "whatsapp", n, False, str(getattr(exc, "message", None) or exc), summary)
+                            continue
+                        await self._logged(who, kind, "whatsapp", n, True, summary=summary)
                         sent += 1
             except Exception:  # noqa: BLE001
                 log.warning("could not announce on channel %s", c.id)
@@ -221,14 +245,17 @@ class ChannelService:
             for p in c.public.get("paired", []):
                 try:
                     await self._tg.send_voice(c.secrets["botToken"], p["id"], audio, caption)
-                    sent += 1
-                except Exception:  # noqa: BLE001
+                except Exception as exc:  # noqa: BLE001
+                    await self._logged(who, "voice", "telegram", self._who(c, p), False, str(getattr(exc, "message", None) or exc), caption)
                     log.warning("could not send a voice message on channel %s", c.id)
+                    continue
+                await self._logged(who, "voice", "telegram", self._who(c, p), True, summary=caption)
+                sent += 1
         return sent
 
     # --- alerts: messages with buttons ----------------------------------------------------------------------------------
 
-    async def push(self, who: Who, html: str, buttons: list[list[dict[str, str]]] | None = None, workspace: str | None = None) -> list[dict[str, Any]]:
+    async def push(self, who: Who, html: str, buttons: list[list[dict[str, str]]] | None = None, workspace: str | None = None, summary: str = "") -> list[dict[str, Any]]:
         """Sends a message with buttons to the Telegram chats an email alert is for: those of the workspace's own email bot, or if it has none the
         general bots. Never another workspace's. Returns where each went, so the buttons can be taken away later."""
         bots = [c for c in await self._repo.for_user(who.user_id) if c.kind == "telegram"]
@@ -238,9 +265,11 @@ class ChannelService:
             for p in c.public.get("paired", []):
                 try:
                     mid = await self._tg.send_message(c.secrets["botToken"], p["id"], clip(html, TELEGRAM_MAX), html=True, buttons=buttons)
-                except Exception:  # noqa: BLE001  one chat that fails doesn't stop the rest
+                except Exception as exc:  # noqa: BLE001  one chat that fails doesn't stop the rest
+                    await self._logged(who, "alert", "telegram", self._who(c, p), False, str(getattr(exc, "message", None) or exc), summary, workspace)
                     log.warning("could not push to chat %s of channel %s", p["id"], c.id)
                     continue
+                await self._logged(who, "alert", "telegram", self._who(c, p), True, summary=summary, workspace=workspace)
                 if mid:
                     refs.append({"channel": c.id, "chat": p["id"], "message": mid})
         return refs

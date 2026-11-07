@@ -57,7 +57,9 @@ class ReminderService:
         announce: Callable[[Who, Callable[[Style, int], str]], Awaitable[int]],
         announce_voice: Callable[[Who, bytes, str], Awaitable[int]],
         clock_now: Callable[[], datetime] = lambda: datetime.now(UTC),
+        deliveries: Any = None,
     ) -> None:
+        self._deliveries = deliveries
         self._settings, self._data, self._tokens, self._voice, self._caller, self._announce, self._announce_voice, self._now = settings, data_factory, tokens, voice, caller, announce, announce_voice, clock_now
 
     async def _load(self, who: Who) -> UserSettings:
@@ -104,8 +106,17 @@ class ReminderService:
             await self._caller.call(cfg["callUser"], text, cfg["callVoice"], 2)
         except ValidationFailed as exc:
             log.warning("could not ring %s: %s", s.user_id, exc)
+            await self._record(s.user_id, False, cfg["callUser"], exc.message, text)
             return False
+        await self._record(s.user_id, True, cfg["callUser"], "", text)
         return True
+
+    async def _record(self, user_id: str, ok: bool, target: str, error: str, summary: str) -> None:
+        if self._deliveries is not None:
+            try:
+                await self._deliveries.add(user_id, "call", "call", target, ok, error, summary[:200])
+            except Exception:  # noqa: BLE001  keeping a record must never be why a call fails
+                log.info("could not keep a delivery record")
 
     async def check(self, who: Who) -> dict[str, Any] | None:
         """Reminds now if a reminder is due: returns what was said ({calls, step}), or None. Called every minute, and by hand."""
