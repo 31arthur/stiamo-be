@@ -82,6 +82,8 @@ class ProposalService:
             raise ValidationFailed(str(exc)) from exc
         p.status, p.decided_at = "applied", self._now()
         await self._repo.save(p)
+        if any(op.get("table") in ("tasks", "follow-ups", "hearings") for op in p.ops):
+            await data.calendar_sync()  # what was just saved reaches Google now, not at the next background sync (a failure is not this one's)
         return self.view(p)
 
     async def drop(self, who: Who, proposal_id: str) -> dict[str, Any]:

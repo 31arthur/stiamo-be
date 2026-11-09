@@ -363,8 +363,8 @@ class AgentService:
         decisions = self._decisions(s.keys["openrouter"]) if decision.get("enabled") and "openrouter" in s.keys else None
         scope = plan_for if plan_for in WORKSPACES else workspace if workspace in WORKSPACES else None
         data: DataGateway = Memo(self._data(token))
-        if scope and scope == plan_for:
-            data = PlannerData(data, scope)  # a workspace's day plan chooses from its own work, around everything else on the day
+        if scope and (scope == plan_for or "agenda" in agent.packs):
+            data = PlannerData(data, scope)  # an agent that plans a workspace's day chooses from its own work, around everything else on the day
         elif scope:
             data = ScopedData(data, scope)  # a workspace's assistant sees that workspace's data only
         ctx = PackContext(data, today, decisions, decision.get("modelId") or DECISION_MODELS[0]["id"], lambda: self._waiting(who, scope), self._proposer(who, agent.id, channel_id), channel != "the evening plan", scope)

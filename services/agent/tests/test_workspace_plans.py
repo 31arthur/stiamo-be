@@ -161,3 +161,28 @@ async def test_the_workspaces_to_plan_are_checked_and_kept(rig):
     keep = await rig.client.put(f"{PLANS}/settings", json={"enabled": True, "time": "20:00", "timezone": "Asia/Kolkata"}, headers=headers())
     assert keep.json()["settings"]["workspaces"] == ["sb"]  # left out: what was chosen stays
     await rig.client.put(f"{PLANS}/settings", json={"enabled": False, "time": "20:00", "timezone": "Asia/Kolkata"}, headers=headers())
+
+
+async def test_what_is_approved_in_a_chat_reaches_google_at_once(rig):
+    from .test_proposals import APPLY, ask
+
+    card = (await ask(rig, [("add_task", {"title": "Draft the rejoinder", "date": TOMORROW, "start": "11:00", "minutes": 90})]))["found"][0]
+    rig.data.syncs = 0
+    assert (await rig.client.post(APPLY.format(card["id"]), headers=headers())).json()["status"] == "applied"
+    assert rig.data.syncs == 1
+    await rig.client.post(APPLY.format(card["id"]), headers=headers())  # a second tap saves nothing and doesn't sync again
+    assert rig.data.syncs == 1
+
+
+async def test_the_planner_in_a_workspace_chat_also_sees_the_rest_of_the_day_as_taken(rig):
+    await planner_ready(rig)
+    own(rig)
+    # S&B's chat asks the planner to put its task on top of FSA's 14:00 meeting: refused, because that meeting is on the person's day too
+    plan(rig, [{"kind": "task", "id": "t1", "start": 840, "duration": 60}], answer="It clashes.")
+    chat = (await rig.client.post("/v1/agent/conversations", json={"agentId": "assistant", "workspace": "sb"}, headers=headers())).json()
+    rig.script.clear()
+    plan(rig, [{"kind": "task", "id": "t1", "start": 840, "duration": 60}], answer="It clashes.")
+    out = (await rig.client.post(f"/v1/agent/conversations/{chat['id']}/messages", json={"message": "Plan tomorrow for S&B"}, headers=headers())).json()
+    turn = out["turn"]
+    assert turn["agentId"] == "daily-planner" and turn["found"] == []  # no schedule card: the clash was caught, so nothing was proposed
+    assert [s["found"] for s in turn["steps"] if s["call"]["name"] == "propose_schedule"] == [0]

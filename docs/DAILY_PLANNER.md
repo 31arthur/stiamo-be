@@ -10,6 +10,20 @@ Each evening the planner plans **tomorrow for each workspace on its own**: Perso
 
 Setup and health shows each of these: the bots, the Google accounts, and whether each workspace has a calendar its schedule goes to.
 
+## Talk to it
+
+Each workspace's bot is that workspace's assistant, so you can also plan with it any time. Examples, to the S&B bot:
+
+- "Plan tomorrow": it reads S&B's open work and the whole day, and proposes times. Reply **YES** to book them (they go to Google too) or **NO**.
+- "Put the rejoinder on my schedule tomorrow at 11 for 90 minutes", "Call Hemla tomorrow at 4": it shows a task or call with that time. **YES** saves it, and it appears in the app and in Google Calendar.
+- "What's on today?", "What is overdue?", "Add a task to file the reply by Friday."
+
+It only sees and saves that workspace's things, but it plans around the other workspaces' commitments so nothing lands on top of them. A voice note works too if the Deepgram key is set.
+
+### Attach the bots you already made
+
+Telegram bot tokens are secrets, so they are entered in the app, not here: Assistant → Workspace assistants → pick the workspace → paste that bot's token from @BotFather → Connect. Then open the bot in Telegram and press Start (or send the pairing code shown), and it answers. Do it once per workspace, each with its own bot. Setup and health shows whether each one is linked, and Test sends a message to check.
+
 ## What happens in the evening
 
 | Step | What |
