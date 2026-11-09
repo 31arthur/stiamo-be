@@ -95,6 +95,11 @@ class DataGateway(ABC):
         """The events in the owner's Google calendars between two days (YYYY-MM-DD), on their own clock. Empty when none are connected."""
         return []
 
+    async def calendar_sync(self) -> dict[str, Any] | None:
+        """Has Google's calendars read and Stiamo's meetings, tasks and calls sent to them now. What it did ({pulled, sent, errors}), or None when
+        the calendar service couldn't be reached (nothing is lost: the background sync does it within minutes)."""
+        return None
+
     async def google_links(self) -> dict[str, dict[str, Any] | None]:
         """What is connected to Google, as the calendar service reports it: {"calendar": status, "contacts": status}. A value is None when the
         service didn't answer; an empty dict when it isn't asked at all."""
@@ -492,6 +497,8 @@ class DayPlan:
     decided_at: datetime | None = None
     #: The briefing as a card (sections of real items), when the planner laid it out that way.
     card: dict[str, Any] | None = None
+    #: The workspace this plan is for; empty is a plan for everything at once.
+    workspace: str = ""
 
 
 @dataclass
@@ -582,10 +589,10 @@ class DeliveryLog(ABC):
 
 class DayPlanRepository(ABC):
     @abstractmethod
-    async def for_day(self, user_id: str, day: str) -> DayPlan | None: ...
+    async def for_day(self, user_id: str, day: str, workspace: str = "") -> DayPlan | None: ...
 
     @abstractmethod
-    async def recent(self, user_id: str, limit: int = 10) -> list[DayPlan]: ...
+    async def recent(self, user_id: str, limit: int = 10, workspace: str | None = None) -> list[DayPlan]: ...
 
     @abstractmethod
     async def get(self, user_id: str, plan_id: str) -> DayPlan | None: ...

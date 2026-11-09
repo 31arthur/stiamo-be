@@ -39,7 +39,7 @@ def test_the_next_nine_pm_in_india_is_found_whatever_the_server_clock_says():
 
 async def test_the_evening_plan_is_off_until_it_is_set_and_checks_what_it_is_given(rig):
     first = (await rig.client.get(PLANS, headers=headers())).json()
-    assert first["settings"] == {"enabled": False, "time": "21:00", "timezone": "Asia/Kolkata", "channels": True} and first["plans"] == []
+    assert first["settings"] == {"enabled": False, "time": "21:00", "timezone": "Asia/Kolkata", "channels": True, "workspaces": ["personal", "sb", "fsa"]} and first["plans"] == []
     for bad in ({"time": "9pm"}, {"time": "25:00"}, {"timezone": "Mars/Base"}):
         r = await rig.client.put(f"{PLANS}/settings", json={"enabled": True, "time": "21:00", "timezone": "Asia/Kolkata", **bad}, headers=headers())
         assert r.status_code == 422
@@ -113,13 +113,13 @@ async def test_the_evening_run_plans_tomorrow_and_tells_the_phone(rig):
     await send(rig, c, f"/start {c['pairingCode']}", chat=555, update=1)
     plan_script(rig)
     rig.app.state.daily.delay_for = lambda at, zone: 0.02
-    await rig.client.put(f"{PLANS}/settings", json={"enabled": True, "time": "21:00", "timezone": "Asia/Kolkata", "channels": True}, headers=headers())
+    await rig.client.put(f"{PLANS}/settings", json={"enabled": True, "time": "21:00", "timezone": "Asia/Kolkata", "channels": True, "workspaces": []}, headers=headers())
     assert await until(lambda: any("Proposed schedule" in t for _, t in rig.telegram.sent), tries=200)
     rig.app.state.daily.delay_for = lambda at, zone: 3600  # no further runs; let the one that is under way finish before the loop is stopped
     await asyncio.sleep(0.3)
     rig.app.state.daily.stop("u1")
     text = strip_markup(next(t for _, t in rig.telegram.sent if "Proposed schedule" in t))
-    assert "Plan for" in text and "09:30 Call the advocate" in text and "Approve it in Stiamo" in text
+    assert "Plan for" in text and "09:30 Call the advocate" in text and "Tap Approve below" in text
     plans = (await rig.client.get(PLANS, headers=headers())).json()["plans"]
     assert plans and plans[0]["status"] == "proposed"
     runs = (await rig.client.get("/v1/agent/agents/daily-planner/runs", headers=headers())).json()["items"]

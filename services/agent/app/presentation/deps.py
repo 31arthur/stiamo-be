@@ -9,13 +9,13 @@ from typing import Annotated
 from fastapi import Depends, FastAPI, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
-from stiamo_common.errors import Conflict, Unauthorized
+from stiamo_common.errors import Unauthorized
 from stiamo_common.security import Principal, make_principal_dependency
 
 from app.application.alerts import AlertService
 from app.application.channels import ChannelService
 from app.application.conversations import ConversationService
-from app.application.dayplans import DayPlanService, planner_settings
+from app.application.dayplans import DayPlanService, plan_buttons, planner_settings
 from app.application.health import HealthService
 from app.application.insights import InsightService
 from app.application.mailwatch import MailWatchService
@@ -70,6 +70,7 @@ def build_services(app: FastAPI, session: AsyncSession) -> tuple[AgentService, C
     channels = ChannelService(SqlChannelRepository(session, s.box), agent, s.telegram, s.twilio, s.tokens, public_url=s.settings.public_url, pairing_minutes=s.settings.pairing_minutes, memory=s.chat_memory, proposals=build_proposals(app, session), conversations=ConversationService(SqlConversationRepository(session), agent, SqlProposalRepository(session)))
     channels.deliveries = s.deliveries
     channels.reminder_actions = ReminderActions(SqlSettingsRepository(session, s.box), s.data_factory, lambda: s.clock())
+    channels.plan_actions = DayPlanService(SqlDayPlanRepository(session), SqlSettingsRepository(session, s.box), agent, s.data_factory)
     channels.voice_notes = VoiceNotes(SqlSettingsRepository(session, s.box), s.voice)
     channels.alerts = AlertService(SqlAlertRepository(session), SqlSettingsRepository(session, s.box), s.llm_factory, s.data_factory, s.tokens, channels, app_url=s.settings.app_url, clock_now=lambda: s.clock(), caller=s.caller, calls=s.alert_calls, deliveries=s.deliveries)
     return agent, channels
@@ -86,7 +87,7 @@ def build_proposals(app: FastAPI, session: AsyncSession) -> ProposalService:
 
 def build_day_plans(app: FastAPI, session: AsyncSession) -> DayPlanService:
     agent, channels = build_services(app, session)
-    return DayPlanService(SqlDayPlanRepository(session), SqlSettingsRepository(session, app.state.box), agent, app.state.data_factory, lambda who, text: channels.announce(who, text, kind="plan"))
+    return DayPlanService(SqlDayPlanRepository(session), SqlSettingsRepository(session, app.state.box), agent, app.state.data_factory, lambda who, text, workspace, plan_id: channels.announce_plan(who, text, workspace, plan_buttons(plan_id)))
 
 
 def evening_run(app: FastAPI, who: Who):
@@ -95,10 +96,7 @@ def evening_run(app: FastAPI, who: Who):
     async def run_once() -> None:
         async with app.state.session_factory() as session:
             try:
-                try:
-                    await build_day_plans(app, session).generate(who, app.state.tokens.mint(who.user_id, who.email), trigger="evening", force=False, announce=True)
-                except Conflict:
-                    pass  # tomorrow was planned and approved already; leave it
+                await build_day_plans(app, session).evening(who, app.state.tokens.mint(who.user_id, who.email))
                 await session.commit()
             except Exception:
                 await session.rollback()

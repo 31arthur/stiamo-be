@@ -295,3 +295,30 @@ async def test_only_one_calendar_per_workspace_receives_and_a_read_only_one_cann
     flags = {c["name"]: c["export"] for c in (await rig.status())["accounts"][0]["calendars"]}
     assert flags == {"One": False, "Two": True, "Read only": False}
     assert (await rig.client.put(f"/v1/calendar/sources/{cals['Read only']}", json={"export": True}, headers=headers())).status_code == 422
+
+
+# --- connecting is enough for the schedule to appear in Google ----------------------------------------------------------
+
+
+def sending(st):
+    return sorted((a["workspace"], a["email"], c["name"]) for a in st["accounts"] for c in a["calendars"] if c["export"])
+
+
+async def test_a_newly_connected_account_gets_the_workspaces_schedule_in_its_own_calendar(rig):
+    await rig.connect("a@x.org", "sb", PRIMARY)
+    assert sending(await rig.status()) == [("sb", "a@x.org", "Work")]  # the main one, not the read-only team calendar
+    await rig.connect("b@x.org", "sb", [{"id": "b@x.org", "summary": "Second", "primary": True, "accessRole": "owner"}])
+    assert sending(await rig.status()) == [("sb", "a@x.org", "Work")]  # one place per workspace: the second account doesn't take it
+    await rig.connect("a@x.org", "fsa", PRIMARY)  # the same Google account in another workspace sends that workspace's schedule too
+    assert sending(await rig.status()) == [("fsa", "a@x.org", "Work"), ("sb", "a@x.org", "Work")]
+
+
+async def test_a_read_only_main_calendar_is_left_alone_and_a_choice_is_not_undone_by_reconnecting(rig):
+    await rig.connect("r@x.org", "personal", [{"id": "r@x.org", "summary": "Mine", "primary": True, "accessRole": "reader"}])
+    assert sending(await rig.status()) == []
+    await rig.connect("a@x.org", "sb", PRIMARY)
+    (acc,) = [a for a in (await rig.status())["accounts"] if a["workspace"] == "sb"]
+    work = next(c for c in acc["calendars"] if c["name"] == "Work")
+    assert (await rig.client.put(f"/v1/calendar/sources/{work['id']}", json={"export": False}, headers=headers())).status_code == 204
+    await rig.connect("a@x.org", "sb", PRIMARY)  # signing in again to refresh it
+    assert sending(await rig.status()) == []

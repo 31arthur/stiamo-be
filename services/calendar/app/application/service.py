@@ -109,8 +109,22 @@ class CalendarService:
         account.refresh_token, account.status, account.error = refresh, "ok", ""
         await self._repo.save_account(account)
         self._access.put(account.id, tokens.access)
-        await self._find_calendars(account, tokens.access)
+        sources = await self._find_calendars(account, tokens.access)
+        if existing is None:
+            await self._send_schedule_to_main(account, sources)
         return workspace, email
+
+    async def _send_schedule_to_main(self, a: Account, sources: list[Source]) -> None:
+        """Connecting an account is all it takes for a workspace's meetings, hearings, tasks and calls to appear in Google: they go to the
+        account's own calendar, unless the workspace already has somewhere chosen. It can be moved or switched off in the calendar list."""
+        accounts = {x.id: x for x in await self._repo.accounts(a.user_id)}
+        for s in await self._repo.sources(a.user_id):
+            if s.export and s.account_id in accounts and accounts[s.account_id].workspace == a.workspace:
+                return
+        main = next((s for s in sources if s.writable and s.google_id.lower() == a.email.lower()), None)
+        if main is not None:
+            main.export = True
+            await self._repo.save_source(main)
 
     async def _access_for(self, a: Account) -> str:
         cached = self._access.get(a.id)

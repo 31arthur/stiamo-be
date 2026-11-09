@@ -156,19 +156,22 @@ class SqlChannelRepository(ChannelRepository):
 
 
 def _plan(r: DayPlanModel) -> DayPlan:
-    return DayPlan(r.id, r.user_id, r.day, r.status, r.briefing, list(r.blocks or []), r.run_id, r.trigger, r.created_at, r.decided_at, r.card)
+    return DayPlan(r.id, r.user_id, r.day, r.status, r.briefing, list(r.blocks or []), r.run_id, r.trigger, r.created_at, r.decided_at, r.card, r.workspace or "")
 
 
 class SqlDayPlanRepository(DayPlanRepository):
     def __init__(self, session: AsyncSession) -> None:
         self._s = session
 
-    async def for_day(self, user_id: str, day: str) -> DayPlan | None:
-        row = (await self._s.execute(select(DayPlanModel).where(DayPlanModel.user_id == user_id, DayPlanModel.day == day))).scalar_one_or_none()
+    async def for_day(self, user_id: str, day: str, workspace: str = "") -> DayPlan | None:
+        row = (await self._s.execute(select(DayPlanModel).where(DayPlanModel.user_id == user_id, DayPlanModel.day == day, DayPlanModel.workspace == workspace))).scalar_one_or_none()
         return _plan(row) if row else None
 
-    async def recent(self, user_id: str, limit: int = 10) -> list[DayPlan]:
-        rows = (await self._s.execute(select(DayPlanModel).where(DayPlanModel.user_id == user_id).order_by(DayPlanModel.day.desc()).limit(limit))).scalars()
+    async def recent(self, user_id: str, limit: int = 10, workspace: str | None = None) -> list[DayPlan]:
+        q = select(DayPlanModel).where(DayPlanModel.user_id == user_id)
+        if workspace is not None:
+            q = q.where(DayPlanModel.workspace == workspace)
+        rows = (await self._s.execute(q.order_by(DayPlanModel.day.desc(), DayPlanModel.created_at.desc()).limit(limit))).scalars()
         return [_plan(r) for r in rows]
 
     async def get(self, user_id: str, plan_id: str) -> DayPlan | None:
@@ -176,7 +179,7 @@ class SqlDayPlanRepository(DayPlanRepository):
         return _plan(row) if row and row.user_id == user_id else None
 
     async def save(self, p: DayPlan) -> None:
-        row = await self._s.get(DayPlanModel, p.id) or DayPlanModel(id=p.id, user_id=p.user_id, day=p.day, created_at=p.created_at)
+        row = await self._s.get(DayPlanModel, p.id) or DayPlanModel(id=p.id, user_id=p.user_id, day=p.day, workspace=p.workspace, created_at=p.created_at)
         row.status, row.briefing, row.blocks, row.run_id, row.trigger, row.decided_at, row.card = p.status, p.briefing, list(p.blocks), p.run_id, p.trigger, p.decided_at, p.card
         self._s.add(row)
         await self._s.flush()
