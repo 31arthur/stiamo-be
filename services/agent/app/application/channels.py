@@ -344,7 +344,7 @@ class ChannelService:
         ws = c.public.get("workspace")
         if ws:
             name = WORKSPACE_NAMES.get(ws, ws)
-            return f"I'm the {name} assistant. Ask me what's pending or what's on today, to plan tomorrow, to put things on your schedule ("call Hemla tomorrow at 11"), or to add a task or follow-up. I show you what I'd save and you reply YES. I plan around everything else on your day, but I only save {name} things."
+            return f"I'm the {name} assistant. Ask me what's pending or what's on today, to plan tomorrow, to put things on your schedule (like “call Hemla tomorrow at 11”), or to add a task or follow-up. I show you what I'd save and you reply YES. I plan around everything else on your day. I only see {name}."
         return "Ask me about a case or a document."
 
     async def _answer(self, c: Channel, sender: str, text: str, channel_name: str, limit: int, style: Style) -> str:
