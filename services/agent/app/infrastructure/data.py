@@ -183,6 +183,13 @@ class HttpDataGateway(DataGateway):
             return []
         return r.json().get("items", []) if r.status_code == 200 else []
 
+    async def calendar_sync(self) -> dict[str, Any] | None:
+        try:
+            r = await self._http.post(f"{self._calendar}/v1/calendar/sync", headers=self._headers, json={})
+            return r.json() if r.status_code == 200 else None
+        except (httpx.HTTPError, ValueError):
+            return None
+
     async def google_links(self) -> dict[str, dict[str, Any] | None]:
         out: dict[str, dict[str, Any] | None] = {}
         for key, path in (("calendar", "/v1/calendar/status"), ("contacts", "/v1/calendar/contacts/status")):

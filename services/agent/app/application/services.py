@@ -26,7 +26,7 @@ from app.application.ports import (
 )
 from app.application.registry import AgentRegistry
 from app.application.runner import AgentRun, Tool, run_agent
-from app.application.scope import ScopedData
+from app.application.scope import PlannerData, ScopedData
 from app.application.toolpacks import PackContext
 from app.application.usage_totals import Bucket
 from app.domain.agents import WORKSPACES, AgentDefinition, UnknownAgent, clean_workspaces
@@ -355,15 +355,17 @@ class AgentService:
 
     # --- asking ----------------------------------------------------------------------------------------------
 
-    async def _prepare(self, who: Who, token: str, agent: AgentDefinition, channel: str, prompt: PromptConfig | None = None, channel_id: str | None = None, workspace: str | None = None) -> Prepared:
+    async def _prepare(self, who: Who, token: str, agent: AgentDefinition, channel: str, prompt: PromptConfig | None = None, channel_id: str | None = None, workspace: str | None = None, plan_for: str | None = None) -> Prepared:
         """Builds the agent for this person: their tools (from the agent's packs, bound to their data) and the prompt's variables."""
         s = await self._load(who)
         today = local_today(s).isoformat()
         decision = s.decision or {}
         decisions = self._decisions(s.keys["openrouter"]) if decision.get("enabled") and "openrouter" in s.keys else None
-        scope = workspace if workspace in WORKSPACES else None
+        scope = plan_for if plan_for in WORKSPACES else workspace if workspace in WORKSPACES else None
         data: DataGateway = Memo(self._data(token))
-        if scope:
+        if scope and scope == plan_for:
+            data = PlannerData(data, scope)  # a workspace's day plan chooses from its own work, around everything else on the day
+        elif scope:
             data = ScopedData(data, scope)  # a workspace's assistant sees that workspace's data only
         ctx = PackContext(data, today, decisions, decision.get("modelId") or DECISION_MODELS[0]["id"], lambda: self._waiting(who, scope), self._proposer(who, agent.id, channel_id), channel != "the evening plan", scope)
         tools: list[Tool] = []
@@ -417,7 +419,7 @@ class AgentService:
 
     async def chat(
         self, who: Who, token: str, agent_id: str, message: str, history: list[dict[str, Any]] | None = None, channel: str = "the web app",
-        *, trigger: str = "chat", channel_id: str | None = None, preface: str = "", workspace: str | None = None,
+        *, trigger: str = "chat", channel_id: str | None = None, preface: str = "", workspace: str | None = None, plan_for: str | None = None,
     ) -> AgentRun:
         """Asks an agent. Every question that reaches a model is kept in the run log, whether it worked or not."""
         agent = self._registry.get(agent_id)
@@ -425,7 +427,7 @@ class AgentService:
         if not message:
             raise ValidationFailed("Ask something first.")
         try:
-            p = await self._prepare(who, token, agent, channel, channel_id=channel_id, workspace=workspace)
+            p = await self._prepare(who, token, agent, channel, channel_id=channel_id, workspace=workspace, plan_for=plan_for)
         except AiError as exc:
             raise ValidationFailed(str(exc)) from exc
         sel, _ = self._selection(p.settings, agent.id)

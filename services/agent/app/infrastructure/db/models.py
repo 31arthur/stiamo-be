@@ -250,10 +250,12 @@ class DayPlanModel(Base):
     run_id: Mapped[str | None] = mapped_column(String(36))
     trigger: Mapped[str] = mapped_column(String(12), default="evening")
     card: Mapped[dict[str, Any] | None] = mapped_column(Json)
+    #: Which workspace's day this is; empty for one plan across all of them.
+    workspace: Mapped[str] = mapped_column(String(16), default="", server_default="")
     created_at: Mapped[datetime] = mapped_column(UTCDateTime)
     decided_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
 
-    __table_args__ = (UniqueConstraint("user_id", "day", name="uq_day_plans_user_day"),)
+    __table_args__ = (UniqueConstraint("user_id", "day", "workspace", name="uq_day_plans_user_day_ws"),)
 
 
 class ProposalModel(Base):

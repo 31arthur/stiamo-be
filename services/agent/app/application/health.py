@@ -169,6 +169,23 @@ class HealthService:
                 else:
                     shown = sum(1 for a in accounts for c in a.get("calendars") or [] if c.get("enabled"))
                     out.append(check(key, "Google", label, "ok", f"{len(accounts)} account{'s' if len(accounts) != 1 else ''}, {shown} calendar{'s' if shown != 1 else ''} shown."))
+                    out += HealthService._sending(status, accounts)
+        return out
+
+    @staticmethod
+    def _sending(status: dict[str, Any], accounts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Whether each workspace with a Google account has somewhere its schedule goes, so a plan you approve also lands in Google."""
+        if status.get("sends") is False:
+            return [check("calendar-send", "Google", "Schedule to Google", "warn", "The calendar service can't act for you yet, so nothing is sent to Google. Plans you approve stay in Stiamo.", "/calendar")]
+        out: list[dict[str, Any]] = []
+        for ws in sorted({a.get("workspace") for a in accounts if a.get("status") == "ok" and a.get("workspace")}):
+            mine = [a for a in accounts if a.get("workspace") == ws]
+            sends = any(c.get("export") for a in mine for c in a.get("calendars") or [])
+            name = NAMES.get(ws, ws)
+            if sends:
+                out.append(check(f"calendar-send-{ws}", "Google", f"{name} schedule to Google", "ok", "Its meetings, tasks, calls and approved plans are added to Google."))
+            else:
+                out.append(check(f"calendar-send-{ws}", "Google", f"{name} schedule to Google", "warn", f"{name} has a Google account but nowhere to send its schedule. In Calendars, press “Send my schedule here” on one of its calendars.", "/calendar"))
         return out
 
     # --- did it arrive ---------------------------------------------------------------------------------------------------

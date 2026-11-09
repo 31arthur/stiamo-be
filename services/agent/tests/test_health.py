@@ -94,9 +94,16 @@ async def test_google_calendar_and_contacts_say_what_is_missing_or_broken(rig):
     items = by(await health(rig))
     assert items["calendar"]["state"] == "off" and items["calendar"]["fix"] == "/calendar"
     assert items["contacts"]["state"] == "error" and "a@sb.org" in items["contacts"]["detail"] and items["contacts"]["fix"] == "/contacts"
-    rig.data.google = {"calendar": {"configured": True, "accounts": [{"email": "a@sb.org", "status": "ok", "calendars": [{"enabled": True}, {"enabled": False}]}]}, "contacts": {"configured": True, "accounts": [{"email": "a@sb.org", "status": "ok", "contacts": 0}]}}
+    rig.data.google = {"calendar": {"configured": True, "accounts": [{"email": "a@sb.org", "workspace": "sb", "status": "ok", "calendars": [{"enabled": True}, {"enabled": False}]}]}, "contacts": {"configured": True, "accounts": [{"email": "a@sb.org", "status": "ok", "contacts": 0}]}}
     items = by(await health(rig))
     assert items["calendar"]["state"] == "ok" and "1 account, 1 calendar shown" in items["calendar"]["detail"]
+    assert items["calendar-send-sb"]["state"] == "warn" and "Send my schedule here" in items["calendar-send-sb"]["detail"] and items["calendar-send-sb"]["fix"] == "/calendar"
+    rig.data.google["calendar"]["accounts"][0]["workspace"] = "sb"
+    rig.data.google["calendar"]["accounts"][0]["calendars"][0]["export"] = True
+    assert by(await health(rig))["calendar-send-sb"]["state"] == "ok"
+    rig.data.google["calendar"]["sends"] = False
+    assert by(await health(rig))["calendar-send"]["state"] == "warn"
+    rig.data.google["calendar"]["sends"] = True
     assert items["contacts"]["state"] == "warn" and "People API" in items["contacts"]["detail"]
     rig.data.google["contacts"]["accounts"][0]["contacts"] = 212
     assert by(await health(rig))["contacts"]["detail"] == "212 contacts from 1 account."

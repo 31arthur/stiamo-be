@@ -8,7 +8,7 @@ The app is organised around one question: **what needs me right now?**
 | --- | --- |
 | **Assistant** (bold, top of the sidebar; opens in its own tab) | Ask, plan, add. One assistant for everything, and one per workspace on its own Telegram bot. |
 | **Needs me** (where you land in a workspace) | Everything waiting on you in one list, most pressing first: urgent mail, overdue work, what agents proposed, the evening plan waiting for a yes, today's tasks and calls, meetings and hearings to write up. Act on each beside it: call, done, move to tomorrow, approve, open the mail. Click a mail's title to review it (the email, an event you can edit before adding it to the calendar, every decision), and Needs me moves on to the next. The footer links to the full Tasks, Follow-ups, Meetings and flagged-mail lists. The badge on the sidebar is the count. |
-| **Today** | The day on a timeline. |
+| **Today** | The day on a timeline. Each evening every workspace plans its own tomorrow and sends it to its own bot to approve: see [DAILY_PLANNER.md](DAILY_PLANNER.md). |
 | **Insights** | Mail, news and work read together, with a written digest. |
 | **Calendar, Mail, Contacts** | Communicate. Contacts come from Google, per workspace; a task or follow-up picked from them points at the contact, and the contact shows when you last spoke. |
 | **Setup and health** (Tools) | Every connection (AI, Telegram, calls, mailboxes, mail watches, Google Calendar and Contacts) with ok / warn / error, what to do about it, a Test for each, and a log of what reached your phone. The badge is the number of problems. |
@@ -26,4 +26,4 @@ Open **Setup and health** when something doesn't arrive. Red is what will not wo
 
 ## Deploying this version
 
-`./deploy.sh` runs migrations `agent 0016` (delivery log) and `practice 0006` (contact links). No new environment variables.
+`./deploy.sh` runs migrations `agent 0016` (delivery log), `agent 0017` (a day plan belongs to a workspace) and `practice 0006` (contact links). No new environment variables.

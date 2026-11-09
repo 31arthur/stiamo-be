@@ -66,6 +66,8 @@ class ChannelService:
         self.deliveries: Any = None
         #: What the buttons under a reminder do (see reminders.py), and the voice notes that become text (see voicenotes.py). Set once both exist.
         self.reminder_actions: Any = None
+        #: What the Approve and Not this buttons under a day plan do: a DayPlanService.
+        self.plan_actions: Any = None
         self.voice_notes: Any = None
         #: Urgent-email alerts: the buttons under them, and the words typed for "write my own" (see alerts.py). Set once both exist.
         self.alerts = alerts
@@ -258,7 +260,7 @@ class ChannelService:
 
     # --- alerts: messages with buttons ----------------------------------------------------------------------------------
 
-    async def push(self, who: Who, html: str, buttons: list[list[dict[str, str]]] | None = None, workspace: str | None = None, summary: str = "") -> list[dict[str, Any]]:
+    async def push(self, who: Who, html: str, buttons: list[list[dict[str, str]]] | None = None, workspace: str | None = None, summary: str = "", kind: str = "alert") -> list[dict[str, Any]]:
         """Sends a message with buttons to the Telegram chats an email alert is for: those of the workspace's own email bot, or if it has none the
         general bots. Never another workspace's. Returns where each went, so the buttons can be taken away later."""
         bots = [c for c in await self._repo.for_user(who.user_id) if c.kind == "telegram"]
@@ -269,13 +271,22 @@ class ChannelService:
                 try:
                     mid = await self._tg.send_message(c.secrets["botToken"], p["id"], clip(html, TELEGRAM_MAX), html=True, buttons=buttons)
                 except Exception as exc:  # noqa: BLE001  one chat that fails doesn't stop the rest
-                    await self._logged(who, "alert", "telegram", self._who(c, p), False, str(getattr(exc, "message", None) or exc), summary, workspace)
+                    await self._logged(who, kind, "telegram", self._who(c, p), False, str(getattr(exc, "message", None) or exc), summary, workspace)
                     log.warning("could not push to chat %s of channel %s", p["id"], c.id)
                     continue
-                await self._logged(who, "alert", "telegram", self._who(c, p), True, summary=summary, workspace=workspace)
+                await self._logged(who, kind, "telegram", self._who(c, p), True, summary=summary, workspace=workspace)
                 if mid:
                     refs.append({"channel": c.id, "chat": p["id"], "message": mid})
         return refs
+
+    async def announce_plan(self, who: Who, text: Callable[[Style, int], str], workspace: str, buttons: list[list[dict[str, str]]]) -> int:
+        """A day plan to the phone it is for: the workspace's own bot when it has a chat linked, otherwise every chat the person has connected
+        (so a workspace without a bot still gets its plan). Returns how many chats it reached."""
+        own = [c for c in await self._repo.for_user(who.user_id) if c.kind == "telegram" and workspace and c.public.get("workspace") == workspace and c.public.get("paired")]
+        if not own:
+            return await self.announce(who, text, kind="plan", buttons=buttons, summary=f"{workspace} plan" if workspace else "plan")
+        sent = await self.push(who, text("telegram", TELEGRAM_MAX), buttons, workspace, f"{workspace} plan", kind="plan")
+        return len(sent)
 
     async def phone_for(self, who: Who, workspace: str) -> str:
         """Where an email alert about a workspace would arrive: its own email bot ("workspace"), the general bot ("general"), or nowhere ("none"):
@@ -430,6 +441,9 @@ class ChannelService:
         if data.startswith("rm:") and self.reminder_actions is not None:
             await self._reminder_press(c, who, chat, message, press, data)
             return
+        if data.startswith("pl:") and self.plan_actions is not None:
+            await self._plan_press(c, who, chat, message, press, data)
+            return
         if self.alerts is None:
             return
         await self.alerts.on_callback(who, self._tokens.mint(who.user_id, who.email), c.id, chat, int(message.get("message_id") or 0), str(press.get("id", "")), str(press.get("data") or ""))
@@ -447,6 +461,28 @@ class ChannelService:
             return ""
         await self._tg.send_message(token, chat, f"🎙️ {words}")
         return words
+
+    async def _plan_press(self, c: Channel, who: Who, chat: int | str, message: dict[str, Any], press: dict[str, Any], data: str) -> None:
+        """Approve or drop a day plan from the phone. Approving books the times and puts them in Google's calendar. A plan already dealt with says so."""
+        token = c.secrets["botToken"]
+        await self._tg.answer_callback(token, str(press.get("id", "")))
+        _, action, ident = (data.split(":", 2) + ["", ""])[:3]
+        mid = int(message.get("message_id") or 0)
+        try:
+            if action == "a":
+                out = await self.plan_actions.apply(who, self._tokens.mint(who.user_id, who.email), ident)
+                sent = (out.get("calendar") or {}).get("sent") or {}
+                said = f"✅ On your planner: {out['booked']} item{'' if out['booked'] == 1 else 's'}." + (" Added to your Google calendar." if sent.get("added") or sent.get("changed") else "")
+            else:
+                await self.plan_actions.dismiss(who, ident)
+                said = "👍 Dropped. Nothing was changed."
+        except Exception as exc:  # noqa: BLE001  the button must always answer
+            said = "⚠️ " + (getattr(exc, "message", None) or "That did not work. Try it in Stiamo.")
+        try:  # decided one way or the other, the buttons have done their job
+            await self._tg.edit_buttons(token, chat, mid, None)
+        except Exception:  # noqa: BLE001
+            log.info("could not take the buttons off a plan")
+        await self._tg.send_message(token, chat, said)
 
     async def _reminder_press(self, c: Channel, who: Who, chat: int | str, message: dict[str, Any], press: dict[str, Any], data: str) -> None:
         """A button under a reminder: done, remind again later, or tomorrow. A button pressed twice, or after the call moved, only says so."""

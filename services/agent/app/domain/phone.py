@@ -209,7 +209,10 @@ def render(answer: str, found: list[dict[str, Any]], limit: int, agent: str | No
         blocks.append(("\n\n".join(cards) + f"\n\n👉 Reply {w.bold('YES')} to save, or {w.bold('NO')} to drop.", False))
     for s in [f for f in found if f.get("kind") == "schedule"][:1]:
         lines = [f"🗓️ {w.bold('Proposed schedule')}"] + [f"• {w.bold(w.raw(str(b['from'])))} {w.raw(str(b['title']))}" for b in s.get("blocks", [])]
-        lines.append(f"👉 Reply {w.bold('YES')} to put these on your planner, or {w.bold('NO')} to drop." if s.get("proposalId") else "👉 Approve it in Stiamo (Attention) and it goes on your planner.")
+        if s.get("buttons"):
+            lines.append(f"👉 Tap {w.bold('Approve')} below to put these on your planner and in your Google calendar.")
+        else:
+            lines.append(f"👉 Reply {w.bold('YES')} to put these on your planner, or {w.bold('NO')} to drop." if s.get("proposalId") else "👉 Approve it in Stiamo (Needs me) and it goes on your planner.")
         blocks.append(("\n".join(lines), False))
     tail = [w.italic(w.raw(f"— {agent}"))] if agent else []
     return _fit(blocks, tail, limit, w)
