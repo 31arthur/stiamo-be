@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from stiamo_common.errors import NotFound, ValidationFailed
 
+from app.application.availdata import AvailabilityData
 from app.application.ports import (
     DataGateway,
     DecisionClient,
@@ -362,7 +363,7 @@ class AgentService:
         decision = s.decision or {}
         decisions = self._decisions(s.keys["openrouter"]) if decision.get("enabled") and "openrouter" in s.keys else None
         scope = plan_for if plan_for in WORKSPACES else workspace if workspace in WORKSPACES else None
-        data: DataGateway = Memo(self._data(token))
+        data: DataGateway = AvailabilityData(Memo(self._data(token)), s.availability)  # events marked with what the person said about their time in them
         if scope and (scope == plan_for or "agenda" in agent.packs):
             data = PlannerData(data, scope)  # an agent that plans a workspace's day chooses from its own work, around everything else on the day
         elif scope:

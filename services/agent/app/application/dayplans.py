@@ -11,10 +11,20 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from stiamo_common.errors import Conflict, NotFound, ValidationFailed
 
+from app.application.availdata import AvailabilityData
 from app.application.ports import DataGateway, DayPlan, DayPlanRepository, SettingsRepository, UserSettings
 from app.application.services import AgentService, Who
 from app.domain.agents import WORKSPACES
-from app.domain.dayplan import busy_blocks, check_blocks, clock, hearings_on, is_open, meetings_on
+from app.domain.dayplan import (
+    busy_blocks,
+    call_only_blocks,
+    check_blocks,
+    clock,
+    day_label,
+    hearings_on,
+    is_open,
+    meetings_on,
+)
 from app.domain.llm import AiError
 from app.domain.mailwatch import NAMES
 from app.domain.phone import Style, render
@@ -41,6 +51,37 @@ def planner_settings(raw: dict[str, Any] | None) -> dict[str, Any]:
 def plan_buttons(plan_id: str) -> list[list[dict[str, str]]]:
     """Under a day plan on the phone: approve it (books the times, and Google's calendar gets them too) or drop it. 64 bytes is Telegram's limit."""
     return [[{"text": "✅ Approve", "callback_data": f"pl:a:{plan_id}"}, {"text": "✖️ Not this", "callback_data": f"pl:x:{plan_id}"}]]
+
+
+def approval_text(out: dict[str, Any]) -> str:
+    """What happened when a plan was approved, in full: what is on the planner, what reached Google, what was left out and what to do next."""
+    p = out["plan"]
+    ws = NAMES.get(p.get("workspace") or "", "")
+    n = out["booked"]
+    lines = [f"✅ Plan approved{' · ' + ws if ws else ''} · {day_label(p['day'])}", ""]
+    if n:
+        lines.append(f"🗓️ {n} item{'s are' if n != 1 else ' is'} now on your planner:")
+        lines += [f"• {b['from']}–{b['to']}  {'📞' if b['kind'] == 'followUp' else '📝'} {b['title']}" for b in sorted(p["blocks"], key=lambda b: b["start"])]
+    else:
+        lines.append("🗓️ Nothing was booked: everything in it was finished or removed since the plan was made.")
+    if out.get("skipped") and n:
+        k = out["skipped"]
+        lines += ["", f"ℹ️ {k} item{'s were' if k != 1 else ' was'} left out: finished or removed since the plan was made."]
+    cal = out.get("calendar")
+    if n:
+        sent = (cal or {}).get("sent") or {}
+        errors = (cal or {}).get("errors") or []
+        lines.append("")
+        if cal is None:
+            lines.append("⚠️ Google Calendar didn't answer just now. Your times are saved here and will reach Google by themselves within a few minutes.")
+        elif sent.get("added") or sent.get("changed"):
+            lines.append(f"📆 Google Calendar updated: {sent.get('added', 0)} added, {sent.get('changed', 0)} changed.")
+        elif not errors:
+            lines.append("📆 Google Calendar was already up to date, or this workspace has no calendar set to receive its schedule (Calendar → “Send my schedule here”).")
+        if errors:
+            lines.append(f"⚠️ Google said: {str(errors[0])[:140]}")
+    lines += ["", "👉 Nothing more to do. Mark things done as you go, here or in Stiamo, and say “plan tomorrow” whenever you want a fresh plan."]
+    return "\n".join(lines)
 
 
 def zone_of(name: str) -> ZoneInfo:
@@ -85,8 +126,9 @@ class DayPlanService:
         data_factory: Callable[[str], DataGateway],
         announce: Callable[[Who, Callable[[Style, int], str], str, str], Awaitable[object]] | None = None,
         clock_now: Callable[[], datetime] = lambda: datetime.now(UTC),
+        ask: Callable[[Who, str, str, str], Awaitable[int]] | None = None,
     ) -> None:
-        self._plans, self._settings, self._agent, self._data, self._announce, self._now = plans, settings, agent, data_factory, announce, clock_now
+        self._plans, self._settings, self._agent, self._data, self._announce, self._now, self._ask = plans, settings, agent, data_factory, announce, clock_now, ask
 
     # --- what is set ----------------------------------------------------------------------------------------
 
@@ -153,6 +195,11 @@ class DayPlanService:
             try:
                 if ws and not await self._has_work(who, token, ws):
                     continue
+                if ws and self._ask is not None:
+                    try:  # events that might leave time for calls are asked about first, as short questions on the workspace's bot
+                        await self._ask(who, token, tomorrow_in(self._now(), (await self.settings(who))["timezone"]), ws)
+                    except Exception:  # noqa: BLE001  not asking is no reason not to plan
+                        log.exception("could not ask about the day for %s", ws)
                 made.append(await self.generate(who, token, trigger="evening", force=False, announce=True, workspace=ws))
             except Conflict:
                 continue
@@ -196,7 +243,7 @@ class DayPlanService:
         p = await self._mine(who, plan_id)
         if p.status != "proposed":
             raise Conflict("That plan has already been dealt with.")
-        data = self._data(token)
+        data = AvailabilityData(self._data(token), (await self._settings.get(who.user_id) or UserSettings(who.user_id)).availability)  # (what was said about time inside events counts here too)
         try:
             tasks, follow_ups = await data.records("tasks"), await data.records("follow-ups")
             hearings, meetings = await data.hearings(), await data.records("meetings")
@@ -204,7 +251,7 @@ class DayPlanService:
         except AiError as exc:
             raise ValidationFailed(str(exc)) from exc
         skip = {f"{b['kind']}:{b['id']}" for b in p.blocks}
-        problems = check_blocks(p.blocks, busy_blocks(p.day, hearings, meetings, tasks, follow_ups, skip=skip, calendar=calendar))
+        problems = check_blocks(p.blocks, busy_blocks(p.day, hearings, meetings, tasks, follow_ups, skip=skip, calendar=calendar), call_only_blocks(p.day, meetings, calendar))
         if problems:
             raise Conflict("The day has changed since this was planned: " + " ".join(problems[:3]) + " Ask for a new plan.")
         by = {"task": {t["id"]: t for t in tasks if is_open(t)}, "followUp": {f["id"]: f for f in follow_ups if is_open(f)}}

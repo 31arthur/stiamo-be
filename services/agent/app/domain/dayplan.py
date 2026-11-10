@@ -20,6 +20,12 @@ DEFAULT_MEETING = 30
 MIN_WINDOW = 15
 
 
+def day_label(day: str) -> str:
+    """A day for a message: Wed 11 Nov."""
+    d = date.fromisoformat(day)
+    return f"{d.strftime('%a')} {d.day} {d.strftime('%b')}"
+
+
 def clock(minutes: int | None) -> str:
     return "—" if minutes is None else f"{minutes // 60:02d}:{minutes % 60:02d}"
 
@@ -70,6 +76,15 @@ def overdue_follow_ups(day: str, follow_ups: list[dict[str, Any]]) -> list[dict[
     return [f for f in follow_ups if is_open(f) and (f.get("due") or {}).get("date") and f["due"]["date"] < day]
 
 
+#: What the person said about their time inside an event: "calls" (calls and follow-ups are fine, nothing heavy), "free" (anything), "busy" (nothing).
+FREE_MODES = ("calls", "free")
+
+
+def _taken(record: dict[str, Any]) -> bool:
+    """An event or meeting the person said they can still use the time of."""
+    return record.get("mode") in FREE_MODES
+
+
 def busy_blocks(day: str, hearings: list[dict[str, Any]], meetings: list[dict[str, Any]], tasks: list[dict[str, Any]], follow_ups: list[dict[str, Any]], *, skip: set[str] | None = None, calendar: list[dict[str, Any]] | None = None) -> list[tuple[int, int, str]]:
     """Every stretch of the day already taken: hearings, meetings, events in the person's Google calendars, and tasks or follow-ups with a time
     (except those named in `skip`). An event that runs over midnight counts on the day it starts. All-day events don't take time."""
@@ -79,7 +94,7 @@ def busy_blocks(day: str, hearings: list[dict[str, Any]], meetings: list[dict[st
         if (b := hearing_block(h)) and f"hearing:{h.get('id')}" not in skip:
             out.append((*b, f"hearing: {h.get('purpose') or 'hearing'}"))
     for m in meetings_on(day, meetings):
-        if (b := meeting_block(m)) and f"meeting:{m.get('id')}" not in skip:
+        if (b := meeting_block(m)) and f"meeting:{m.get('id')}" not in skip and not _taken(m):
             out.append((*b, f"meeting: {m.get('title') or 'meeting'}"))
     for t in tasks:
         slot = t.get("slot") or {}
@@ -90,9 +105,29 @@ def busy_blocks(day: str, hearings: list[dict[str, Any]], meetings: list[dict[st
         if is_open(f) and due.get("date") == day and due.get("time") is not None and f"followUp:{f.get('id')}" not in skip:
             out.append((int(due["time"]), int(due["time"]) + int(f.get("duration") or 15), f"follow-up: {f.get('title')}"))
     for e in calendar_on(day, calendar or []):
+        if _taken(e):
+            continue  # said to be free for calls or anything: see call_only_blocks
         start = int(e["startMinute"])
         out.append((start, max(start + 5, int(e.get("endMinute") or start + DEFAULT_MEETING)), f"calendar: {e.get('title') or 'event'}"))
     return sorted(out)
+
+
+def call_only_blocks(day: str, meetings: list[dict[str, Any]], calendar: list[dict[str, Any]] | None = None) -> list[tuple[int, int, str]]:
+    """Stretches inside an event where the person said they can take calls and follow-ups, but not do heavy work (a hospital visit, a journey)."""
+    out: list[tuple[int, int, str]] = []
+    for m in meetings_on(day, meetings):
+        if (b := meeting_block(m)) and m.get("mode") == "calls":
+            out.append((*b, f"{m.get('title') or 'meeting'}"))
+    for e in calendar_on(day, calendar or []):
+        if e.get("mode") == "calls":
+            start = int(e["startMinute"])
+            out.append((start, max(start + 5, int(e.get("endMinute") or start + DEFAULT_MEETING)), f"{e.get('title') or 'event'}"))
+    return sorted(out)
+
+
+def normalize_title(title: str) -> str:
+    """An event's title as a key to remember an answer by: "Visit Hospital!" and "visit hospital" are the same."""
+    return " ".join("".join(ch.lower() if ch.isalnum() else " " for ch in title or "").split())[:80]
 
 
 def calendar_on(day: str, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -117,8 +152,8 @@ def free_windows(busy: list[tuple[int, int, str]], start: int = DAY_START, end: 
     return [(a, b) for a, b in windows if b - a >= MIN_WINDOW]
 
 
-def check_blocks(blocks: list[dict[str, Any]], busy: list[tuple[int, int, str]]) -> list[str]:
-    """Why a proposed schedule doesn't fit, in words the model can act on. Empty: it fits."""
+def check_blocks(blocks: list[dict[str, Any]], busy: list[tuple[int, int, str]], calls_only: list[tuple[int, int, str]] | None = None) -> list[str]:
+    """Why a proposed schedule doesn't fit, in words the model can act on. Empty: it fits. `calls_only`: stretches where calls are fine but tasks are not."""
     problems: list[str] = []
     placed: list[tuple[int, int, str]] = []
     for b in blocks:
@@ -133,6 +168,11 @@ def check_blocks(blocks: list[dict[str, Any]], busy: list[tuple[int, int, str]])
             if start < o_end and o_start < start + length:
                 problems.append(f"“{name}” ({clock(start)}–{clock(start + length)}) overlaps {o_name} ({clock(o_start)}–{clock(o_end)}).")
                 break
+        if b.get("kind") == "task":
+            for o_start, o_end, o_name in calls_only or []:
+                if start < o_end and o_start < start + length:
+                    problems.append(f"“{name}” ({clock(start)}–{clock(start + length)}) is a task, and during {o_name} ({clock(o_start)}–{clock(o_end)}) only calls and follow-ups fit. Put it elsewhere, or put calls there.")
+                    break
         placed.append((start, start + length, name))
     return problems
 
