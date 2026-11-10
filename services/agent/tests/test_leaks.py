@@ -258,3 +258,67 @@ async def test_a_mail_or_plan_bot_needs_a_workspace(rig):
     r = await rig.client.post(f"{CH}/telegram", json={"botToken": "123:abc", "role": "planner"}, headers=headers())
     assert r.status_code == 422 and "belongs to one workspace" in r.json()["error"]["message"]
     assert telegram and r
+
+
+async def say(rig, bot, text, chat, update):
+    """A message to one particular bot (each has its own webhook secret)."""
+    secret = next(sec for url, sec in reversed(rig.telegram.webhooks) if bot["id"] in url)
+    return await send(rig, bot, text, chat=chat, update=update, secret=secret)
+
+
+async def planner_bot(rig, token, chat, ws):
+    return await connect_bot(rig, token, chat, agent="daily-planner", workspace=ws, role="planner")
+
+
+async def propose(rig, bot, chat, update, task, start):
+    """Asks a planner bot to plan, with the model proposing one task at a time; returns what the model was told and what the bot said."""
+    start_at = len(rig.llm_log)
+    rig.script += [ChatResult("", [ToolCall("a", "day_agenda", {"date": TOMORROW}), ToolCall("b", "propose_schedule", {"date": TOMORROW, "blocks": [{"kind": "task", "id": task, "start": start, "duration": 30}]})]), ChatResult("Planned.")]
+    sent = len(rig.telegram.sent)
+    await say(rig, bot, "Plan tomorrow", chat, update)
+    return "\n".join(e["everything"] for e in rig.llm_log[start_at:]), "\n".join(t for _, t in rig.telegram.sent[sent:])
+
+
+async def test_planner_bots_for_two_workspaces_plan_around_each_others_calendar_but_show_only_their_own_tasks(rig):
+    await team_ready(rig)
+    seed(rig)  # S&B: hearing 10:00-11:00, meeting 13:00; FSA: call 12:10, meeting 13:40; Google events at 15:00 (S&B), 15:40 (FSA), 16:20 (personal)
+    sb = await planner_bot(rig, "111:sbp", 601, "sb")
+    fsa = await planner_bot(rig, "222:fsap", 602, "fsa")
+
+    # each sees only its own tasks, and the rest of the day as bare busy time
+    sb_saw, sb_said = await propose(rig, sb, 601, 2, "t-sb", 1020)
+    fsa_saw, fsa_said = await propose(rig, fsa, 602, 2, "t-fsa", 1080)
+    assert "SBX-task" in sb_saw and "FSX-" not in sb_saw and "PEX-" not in sb_saw
+    assert "FSX-task" in fsa_saw and "SBX-" not in fsa_saw and "PEX-" not in fsa_saw
+    assert_clean(sb_said, "sb", "what the S&B planner bot said")
+    assert_clean(fsa_said, "fsa", "what the FSA planner bot said")
+    assert "Busy (another workspace)" in sb_saw and "Busy (another workspace)" in fsa_saw  # each takes the other's calendar into account
+
+    # ...so each one's schedule is checked against the other's time: FSA's 13:40 meeting blocks S&B, S&B's 10:00 hearing blocks FSA
+    _, said = await propose(rig, sb, 601, 3, "t-sb", 820)  # 13:40 is FSA's meeting
+    assert "SBX-task" not in said  # no schedule card was made: the clash was refused
+    _, said = await propose(rig, fsa, 602, 3, "t-fsa", 610)  # 10:10 is S&B's hearing
+    assert "FSX-task" not in said
+
+    # a Google event from another workspace's calendar blocks it too (S&B's 15:00 event, FSA's planner)
+    _, said = await propose(rig, fsa, 602, 4, "t-fsa", 900)
+    assert "FSX-task" not in said
+
+
+async def test_what_one_workspace_books_becomes_busy_time_for_the_next(rig):
+    await team_ready(rig)
+    seed(rig)
+    sb = await planner_bot(rig, "111:sbp", 601, "sb")
+    fsa = await planner_bot(rig, "222:fsap", 602, "fsa")
+    await propose(rig, sb, 601, 2, "t-sb", 1020)
+    await say(rig, sb, "yes", 601, 3)  # S&B's plan is approved: its task now has a time (17:00)
+    assert any(t == "tasks" and r["id"] == "t-sb" and r["slot"]["start"] == 1020 for t, r in rig.data.saved)
+    # the stored task is what the next workspace reads: apply the approved slot to the data, as the practice service would
+    for t in rig.data.tables["tasks"]:
+        if t["id"] == "t-sb":
+            t["slot"] = {"date": TOMORROW, "start": 1020, "duration": 30}
+    saw, said = await propose(rig, fsa, 602, 2, "t-fsa", 1030)  # overlaps S&B's newly booked 17:00-17:30
+    assert "FSX-task" not in said  # refused: it is busy
+    assert "SBX-" not in saw  # and FSA's planner was never told what the busy time is
+    _, said = await propose(rig, fsa, 602, 3, "t-fsa", 1080)  # 18:00 is free
+    assert "FSX-task" in said

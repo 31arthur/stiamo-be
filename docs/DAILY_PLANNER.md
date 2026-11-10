@@ -39,6 +39,8 @@ The rule is: **a bot has one scope, fixed when it is connected, and the server a
 | Changing a bot's scope | Its remembered chat and thread are dropped, so nothing said under the old scope carries over. |
 | Saving | A workspace's assistant can't save a record that belongs to another workspace. |
 
+So with a planner bot for S&B and one for FSA, each plans around the other's calendar (hearings, meetings, calls, timed tasks and every Google calendar, including what the other has already approved) yet shows and proposes only its own tasks. All-day events don't take time, so they aren't counted.
+
 `tests/test_leaks.py` guards this: every workspace's data carries a unique canary, each bot is asked to plan the day, and everything sent to the model and everything said on the phone is searched for the other workspaces' canaries. The general bot is the control and must find all three.
 
 ## What happens in the evening
