@@ -58,6 +58,16 @@ with three buttons: **📞 Calls are fine**, **💻 Free for anything**, **🙅 
 
 When the last question for a day is answered, the plan for that day is made again with your answer (if it isn't approved yet) and sent to you, with a full message saying what was understood. The answer is remembered by event title, so a recurring "Visit hospital" is asked once; change or forget it under Developer → Daily planner → Remembered answers. Hearings, courts, all-day events and short ones are never asked about, at most three questions are sent per workspace per day, and the same answer carries over to your other workspaces' plans as bare busy time (never what the event is).
 
+## Calling from Telegram
+
+Wherever a message is about a call, the person's number is in it and there is a **📞 Call …** button under it. Tap it and the phone's dialer opens with the number filled in, on an iPhone or on Android.
+
+- **Call reminders:** each call has ✅ and 📞 beside it.
+- **The evening plan:** the calls in it get a 📞 button each (up to four), and the number is printed beside the call.
+- **After you approve a plan:** the confirmation lists each call with its number and keeps the 📞 buttons under it.
+
+How it works: Telegram doesn't allow a `tel:` link on a button, so the button opens `https://<your app>/call.html`, a small page that hands the number to the dialer. The number is in the address' `#fragment`, which is never sent to any server. If the dialer doesn't open on its own, the page has a big **Call now** button. The number is also plain text in the message, which Telegram itself lets you tap. A call needs a number in its contact (pick it from Contacts, or type "Name · +91 …"), and `AGENT_APP_URL` must be the https address of the app.
+
 ## When you press a button
 
 Every button answers at once: a short notice on screen, and a "⏳ …" message in the chat saying what is being done. That message then becomes the result: for an approved plan, the list of what is on your planner, what reached Google Calendar, what was left out and what to do next. If something fails you get the reason and "nothing was changed", and a button from an older message says so instead of doing nothing.

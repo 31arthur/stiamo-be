@@ -17,6 +17,7 @@ from app.application.proposals import ProposalService, verdict_of
 from app.application.runner import AgentRun
 from app.application.services import AgentService, Who
 from app.domain.agents import WORKSPACES
+from app.domain.dial import call_rows
 from app.domain.llm import AiError
 from app.domain.orchestrator import ORCHESTRATOR_ID
 from app.domain.phone import Style, Writer, render
@@ -93,6 +94,8 @@ class ChannelService:
         self.plan_actions: Any = None
         #: What the buttons under a question about time inside an event do: an AvailabilityService.
         self.availability_actions: Any = None
+        #: The app's https address, for the "Call …" buttons (Telegram only opens https links; the page there hands the number to the dialer).
+        self.app_url: str = ""
         self.voice_notes: Any = None
         #: Urgent-email alerts: the buttons under them, and the words typed for "write my own" (see alerts.py). Set once both exist.
         self.alerts = alerts
@@ -514,7 +517,10 @@ class ChannelService:
         except Exception as exc:  # noqa: BLE001  a button must always answer
             log.exception("a button press failed on channel %s", c.id)
             result = "⚠️ " + str(getattr(exc, "message", None) or "That didn't work.") + " Nothing was changed. Try again, or do it in Stiamo."
-        await self._settle(token, chat, holder, result)
+        buttons = None
+        if isinstance(result, tuple):
+            result, buttons = result
+        await self._settle(token, chat, holder, result, buttons)
 
     async def _toast(self, token: str, callback_id: str, text: str) -> None:
         try:
@@ -529,16 +535,16 @@ class ChannelService:
             log.info("could not say a button was received")
             return None
 
-    async def _settle(self, token: str, chat: int | str, holder: int | None, text: str) -> None:
+    async def _settle(self, token: str, chat: int | str, holder: int | None, text: str, buttons: list[list[dict[str, str]]] | None = None) -> None:
         """The result goes into the message that said it was being done; if that can't be changed it is sent on its own."""
         if holder is not None:
             try:
-                await self._tg.edit_message(token, chat, holder, text)
+                await self._tg.edit_message(token, chat, holder, text, buttons=buttons)
                 return
             except Exception:  # noqa: BLE001
                 log.info("could not change the holding message")
         try:
-            await self._tg.send_message(token, chat, text)
+            await self._tg.send_message(token, chat, text, buttons=buttons)
         except Exception:  # noqa: BLE001
             log.warning("could not report what a button did")
 
@@ -548,8 +554,8 @@ class ChannelService:
         except Exception:  # noqa: BLE001
             log.info("could not take the buttons off a message")
 
-    async def _run_press(self, c: Channel, who: Who, chat: int | str, message: dict[str, Any], data: str) -> str:
-        """Does what the button says and returns what to tell the person."""
+    async def _run_press(self, c: Channel, who: Who, chat: int | str, message: dict[str, Any], data: str) -> str | tuple[str, list[list[dict[str, str]]]]:
+        """Does what the button says and returns what to tell the person (and buttons to leave under it, if any)."""
         token = c.secrets["botToken"]
         access = self._tokens.mint(who.user_id, who.email)
         _, _, rest = (data.split(":", 2) + ["", ""])[:3]
@@ -559,7 +565,9 @@ class ChannelService:
         if kind == "pl" and self.plan_actions is not None:
             await self._strip(token, chat, message)
             if action == "a":
-                return approval_text(await self.plan_actions.apply(who, access, rest))
+                done = await self.plan_actions.apply(who, access, rest)
+                calls = call_rows(self.app_url, [b for b in done["plan"]["blocks"] if b["kind"] == "followUp"])
+                return (approval_text(done), calls) if calls else approval_text(done)  # the calls it booked stay one tap away
             await self.plan_actions.dismiss(who, rest)
             return "👍 Dropped. Nothing was changed on your planner or in Google Calendar.\n\nSay “plan tomorrow” if you want a new one."
         if kind == "av" and self.availability_actions is not None:
