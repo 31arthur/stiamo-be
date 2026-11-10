@@ -9,7 +9,9 @@ from typing import Any
 
 from stiamo_common.errors import Forbidden, NotFound, ValidationFailed
 
+from app.application.availability import confirmation as availability_confirmation
 from app.application.conversations import ConversationService
+from app.application.dayplans import approval_text
 from app.application.ports import AccessTokens, Channel, ChannelRepository, TelegramApi, TwilioApi
 from app.application.proposals import ProposalService, verdict_of
 from app.application.runner import AgentRun
@@ -36,6 +38,18 @@ ROLES = {"assistant": "everything", "mail": "mail alerts", "planner": "the daily
 def role_of(c: Channel) -> str:
     return c.public.get("role") or "assistant"
 
+
+#: What a button says the moment it is pressed (the first two parts of its data).
+PRESS_ACKS = {
+    "pl:a": "Putting it on your planner…",
+    "pl:x": "Dropping the plan…",
+    "rm:d": "Marking it done…",
+    "rm:s": "Setting the next reminder…",
+    "rm:t": "Moving it to tomorrow…",
+    "av:c": "Noting you can take calls…",
+    "av:f": "Noting you're free…",
+    "av:b": "Noting you're busy…",
+}
 
 NOT_LINKED = "This chat isn't linked to a Stiamo account. Open AI agents → Channels in Stiamo to connect it."
 
@@ -77,6 +91,8 @@ class ChannelService:
         self.reminder_actions: Any = None
         #: What the Approve and Not this buttons under a day plan do: a DayPlanService.
         self.plan_actions: Any = None
+        #: What the buttons under a question about time inside an event do: an AvailabilityService.
+        self.availability_actions: Any = None
         self.voice_notes: Any = None
         #: Urgent-email alerts: the buttons under them, and the words typed for "write my own" (see alerts.py). Set once both exist.
         self.alerts = alerts
@@ -479,23 +495,80 @@ class ChannelService:
             log.exception("telegram update failed for channel %s", c.id)
 
     async def _handle_press(self, c: Channel, press: dict[str, Any]) -> None:
-        """A button under an alert was pressed, by someone in a chat paired with this bot."""
+        """A button under a message was pressed, by someone in a chat paired with this bot. It is never silent: the press is answered at once
+        (a toast), a message says it is being done, and that message becomes the result, or the reason it failed."""
+        token = c.secrets["botToken"]
+        callback_id = str(press.get("id", ""))
         message = press.get("message") or {}
         chat = (message.get("chat") or {}).get("id")
+        data = str(press.get("data") or "")
         if chat is None or not any(p["id"] == chat for p in c.public.get("paired", [])):
-            await self._tg.answer_callback(c.secrets["botToken"], str(press.get("id", "")), "This chat isn't linked to Stiamo.")
+            await self._toast(token, callback_id, "This chat isn't linked to Stiamo.")
             return
         who = Who(c.user_id, c.public.get("ownerEmail", ""))
-        data = str(press.get("data") or "")
-        if data.startswith("rm:") and self.reminder_actions is not None:
-            await self._reminder_press(c, who, chat, message, press, data)
-            return
-        if data.startswith("pl:") and self.plan_actions is not None:
-            await self._plan_press(c, who, chat, message, press, data)
-            return
-        if self.alerts is None:
-            return
-        await self.alerts.on_callback(who, self._tokens.mint(who.user_id, who.email), c.id, chat, int(message.get("message_id") or 0), str(press.get("id", "")), str(press.get("data") or ""))
+        said = PRESS_ACKS.get(":".join(data.split(":")[:2]), "On it…")
+        await self._toast(token, callback_id, f"⏳ {said}")
+        holder = await self._holding(token, chat, f"⏳ {said}")
+        try:
+            result = await self._run_press(c, who, chat, message, data)
+        except Exception as exc:  # noqa: BLE001  a button must always answer
+            log.exception("a button press failed on channel %s", c.id)
+            result = "⚠️ " + str(getattr(exc, "message", None) or "That didn't work.") + " Nothing was changed. Try again, or do it in Stiamo."
+        await self._settle(token, chat, holder, result)
+
+    async def _toast(self, token: str, callback_id: str, text: str) -> None:
+        try:
+            await self._tg.answer_callback(token, callback_id, text)
+        except Exception:  # noqa: BLE001  Telegram refuses an answer that is too old: the message below still says what happened
+            log.info("could not answer a button press")
+
+    async def _holding(self, token: str, chat: int | str, text: str) -> int | None:
+        try:
+            return await self._tg.send_message(token, chat, text)
+        except Exception:  # noqa: BLE001
+            log.info("could not say a button was received")
+            return None
+
+    async def _settle(self, token: str, chat: int | str, holder: int | None, text: str) -> None:
+        """The result goes into the message that said it was being done; if that can't be changed it is sent on its own."""
+        if holder is not None:
+            try:
+                await self._tg.edit_message(token, chat, holder, text)
+                return
+            except Exception:  # noqa: BLE001
+                log.info("could not change the holding message")
+        try:
+            await self._tg.send_message(token, chat, text)
+        except Exception:  # noqa: BLE001
+            log.warning("could not report what a button did")
+
+    async def _strip(self, token: str, chat: int | str, message: dict[str, Any]) -> None:
+        try:
+            await self._tg.edit_buttons(token, chat, int(message.get("message_id") or 0), None)
+        except Exception:  # noqa: BLE001
+            log.info("could not take the buttons off a message")
+
+    async def _run_press(self, c: Channel, who: Who, chat: int | str, message: dict[str, Any], data: str) -> str:
+        """Does what the button says and returns what to tell the person."""
+        token = c.secrets["botToken"]
+        access = self._tokens.mint(who.user_id, who.email)
+        _, _, rest = (data.split(":", 2) + ["", ""])[:3]
+        kind, action = data.split(":")[0], (data.split(":") + [""])[1]
+        if kind == "rm" and self.reminder_actions is not None:
+            return await self._reminder_press(c, chat, message, data, who, access)
+        if kind == "pl" and self.plan_actions is not None:
+            await self._strip(token, chat, message)
+            if action == "a":
+                return approval_text(await self.plan_actions.apply(who, access, rest))
+            await self.plan_actions.dismiss(who, rest)
+            return "👍 Dropped. Nothing was changed on your planner or in Google Calendar.\n\nSay “plan tomorrow” if you want a new one."
+        if kind == "av" and self.availability_actions is not None:
+            await self._strip(token, chat, message)
+            return availability_confirmation(await self.availability_actions.answer(who, access, action, rest))
+        if kind == "al" and self.alerts is not None:
+            await self.alerts.on_callback(who, access, c.id, chat, int(message.get("message_id") or 0), "", data)
+            return "✅ Done. The details are above."
+        return "That button is from an older message and doesn't work any more. Open the latest one, or say what you need."
 
     async def _heard(self, c: Channel, chat: int | str, voice: dict[str, Any]) -> str:
         """A voice note as the words said, shown back so a mishearing is seen. Empty (and the reason said) when it can't be read."""
@@ -511,45 +584,18 @@ class ChannelService:
         await self._tg.send_message(token, chat, f"🎙️ {words}")
         return words
 
-    async def _plan_press(self, c: Channel, who: Who, chat: int | str, message: dict[str, Any], press: dict[str, Any], data: str) -> None:
-        """Approve or drop a day plan from the phone. Approving books the times and puts them in Google's calendar. A plan already dealt with says so."""
-        token = c.secrets["botToken"]
-        await self._tg.answer_callback(token, str(press.get("id", "")))
-        _, action, ident = (data.split(":", 2) + ["", ""])[:3]
-        mid = int(message.get("message_id") or 0)
-        try:
-            if action == "a":
-                out = await self.plan_actions.apply(who, self._tokens.mint(who.user_id, who.email), ident)
-                sent = (out.get("calendar") or {}).get("sent") or {}
-                said = f"✅ On your planner: {out['booked']} item{'' if out['booked'] == 1 else 's'}." + (" Added to your Google calendar." if sent.get("added") or sent.get("changed") else "")
-            else:
-                await self.plan_actions.dismiss(who, ident)
-                said = "👍 Dropped. Nothing was changed."
-        except Exception as exc:  # noqa: BLE001  the button must always answer
-            said = "⚠️ " + (getattr(exc, "message", None) or "That did not work. Try it in Stiamo.")
-        try:  # decided one way or the other, the buttons have done their job
-            await self._tg.edit_buttons(token, chat, mid, None)
-        except Exception:  # noqa: BLE001
-            log.info("could not take the buttons off a plan")
-        await self._tg.send_message(token, chat, said)
-
-    async def _reminder_press(self, c: Channel, who: Who, chat: int | str, message: dict[str, Any], press: dict[str, Any], data: str) -> None:
+    async def _reminder_press(self, c: Channel, chat: int | str, message: dict[str, Any], data: str, who: Who, access: str) -> str:
         """A button under a reminder: done, remind again later, or tomorrow. A button pressed twice, or after the call moved, only says so."""
         token = c.secrets["botToken"]
-        await self._tg.answer_callback(token, str(press.get("id", "")))
         _, action, ident = (data.split(":", 2) + ["", ""])[:3]
-        try:
-            said = await self.reminder_actions.press(who, self._tokens.mint(who.user_id, who.email), action, ident)
-        except Exception as exc:  # noqa: BLE001  the button must always answer
-            said = "⚠️ " + (getattr(exc, "message", None) or "That did not work. Try it in Stiamo.")
-        mid = int(message.get("message_id") or 0)
+        said = await self.reminder_actions.press(who, access, action, ident)
         rows = ((message.get("reply_markup") or {}).get("inline_keyboard")) or []
         left = [r for r in rows if not any(b.get("callback_data") == data for b in r)] if action == "d" else []
         try:  # a call done leaves the other buttons; anything else settles the reminder, so its buttons go
-            await self._tg.edit_buttons(token, chat, mid, left if any(b.get("callback_data", "").startswith("rm:d:") for r in left for b in r) else None)
+            await self._tg.edit_buttons(token, chat, int(message.get("message_id") or 0), left if any(b.get("callback_data", "").startswith("rm:d:") for r in left for b in r) else None)
         except Exception:  # noqa: BLE001
             log.info("could not update the buttons under a reminder")
-        await self._tg.send_message(token, chat, said)
+        return said
 
     def check_whatsapp(self, c: Channel | None) -> Channel:
         if c is None or c.kind != "whatsapp":

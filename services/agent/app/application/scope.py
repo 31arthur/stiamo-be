@@ -121,20 +121,23 @@ class PlannerData(ScopedData):
     item reaches this workspace's assistant or its model, so nothing about it can be shown on its bot or leak into its plans."""
 
     BUSY = "Busy (another workspace)"
+    BUSY_CALLS = "Busy (another workspace, calls are fine)"
 
     async def calendar_events(self, start: str, end: str):
         return await super().calendar_events(start, end) + await self._busy_elsewhere(start, end)
 
     async def _busy_elsewhere(self, start: str, end: str) -> list[dict[str, Any]]:
-        spans: set[tuple[str, int, int]] = set()
+        spans: set[tuple[str, int, int, str]] = set()
 
-        def take(day: str | None, at: Any, length: int) -> None:
-            if day and start <= day <= end and isinstance(at, (int, float)) and not isinstance(at, bool):
-                spans.add((day, int(at), int(at) + length))
+        def take(day: str | None, at: Any, length: int, mode: str | None = None) -> None:
+            # What the person said about their time inside it carries over: free for anything means it takes no time from anyone's plan.
+            if mode == "free" or not day or not (start <= day <= end) or not isinstance(at, (int, float)) or isinstance(at, bool):
+                return
+            spans.add((day, int(at), int(at) + length, "calls" if mode == "calls" else ""))
 
         for e in await self._inner.calendar_events(start, end):
             if e.get("workspace") != self.workspace and not e.get("allDay") and e.get("startMinute") is not None:
-                take(e.get("date"), e["startMinute"], max(5, int(e.get("endMinute") or e["startMinute"] + DEFAULT_MEETING) - int(e["startMinute"])))
+                take(e.get("date"), e["startMinute"], max(5, int(e.get("endMinute") or e["startMinute"] + DEFAULT_MEETING) - int(e["startMinute"])), e.get("mode"))
 
         def elsewhere(r: dict[str, Any]) -> bool:
             return r.get("workspace") != self.workspace and (r.get("outcome") or {}).get("status", "open") == "open"
@@ -146,7 +149,7 @@ class PlannerData(ScopedData):
         for m in await self._inner.records("meetings"):
             if elsewhere(m):
                 slot = m.get("slot") or {}
-                take(slot.get("date"), slot.get("start"), int(slot.get("duration") or DEFAULT_MEETING))
+                take(slot.get("date"), slot.get("start"), int(slot.get("duration") or DEFAULT_MEETING), m.get("mode"))
         for t in await self._inner.records("tasks"):
             if elsewhere(t):
                 slot = t.get("slot") or {}
@@ -155,4 +158,7 @@ class PlannerData(ScopedData):
             if elsewhere(f):
                 due = f.get("due") or {}
                 take(due.get("date"), due.get("time"), int(f.get("duration") or 15))
-        return [{"id": f"busy:{i}", "date": day, "startMinute": a, "endMinute": b, "allDay": False, "title": self.BUSY, "calendar": "Busy"} for i, (day, a, b) in enumerate(sorted(spans))]
+        return [
+            {"id": f"busy:{i}", "date": day, "startMinute": a, "endMinute": b, "allDay": False, "title": self.BUSY_CALLS if mode else self.BUSY, "calendar": "Busy", **({"mode": mode} if mode else {})}
+            for i, (day, a, b, mode) in enumerate(sorted(spans))
+        ]

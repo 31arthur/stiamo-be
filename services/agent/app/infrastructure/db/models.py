@@ -32,6 +32,7 @@ class SettingsModel(Base):
     themes: Mapped[list[dict[str, Any]] | None] = mapped_column(Json)
     #: The priority mail watch: which workspaces have it switched off.
     mailwatch: Mapped[dict[str, Any] | None] = mapped_column(Json)
+    availability: Mapped[dict[str, Any] | None] = mapped_column(Json)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime)
 
 

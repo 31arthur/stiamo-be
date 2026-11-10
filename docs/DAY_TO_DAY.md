@@ -26,4 +26,4 @@ Open **Setup and health** when something doesn't arrive. Red is what will not wo
 
 ## Deploying this version
 
-`./deploy.sh` runs migrations `agent 0016` (delivery log), `agent 0017` (a day plan belongs to a workspace) and `practice 0006` (contact links). No new environment variables.
+`./deploy.sh` runs migrations `agent 0016` (delivery log), `agent 0017` (a day plan belongs to a workspace), `agent 0018` (answers about time inside events) and `practice 0006` (contact links). No new environment variables.

@@ -133,6 +133,8 @@ class UserSettings:
     themes: list[dict[str, Any]] = field(default_factory=list)
     #: The priority mail watch: {off: [workspaces whose watch is switched off]}. See application/mailwatch.py.
     mailwatch: dict[str, Any] = field(default_factory=dict)
+    #: What was said about time inside events: {events: {key: [mode, day]}, rules: {title: mode}, asked: {short: question}}. See application/availability.py.
+    availability: dict[str, Any] = field(default_factory=dict)
 
 
 class SettingsRepository(ABC):
@@ -297,6 +299,10 @@ class TelegramApi(ABC):
     @abstractmethod
     async def edit_buttons(self, token: str, chat_id: int | str, message_id: int, buttons: list[list[dict[str, str]]] | None) -> None:
         """Replaces the buttons under a message, or takes them away (None)."""
+
+    @abstractmethod
+    async def edit_message(self, token: str, chat_id: int | str, message_id: int, text: str, html: bool = False) -> None:
+        """Changes the words of a message already sent (and takes its buttons away). Raises when Telegram refuses."""
 
     @abstractmethod
     async def download_file(self, token: str, file_id: str) -> bytes:

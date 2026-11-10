@@ -209,6 +209,13 @@ class FakeTelegram(TelegramApi):
         self.keyboards: list = []
         self.answered: list[str] = []
         self.stripped: list[tuple] = []
+        #: Messages changed after they were sent: (chat, message id, new text). `edit_fails` makes Telegram refuse.
+        self.edits: list[tuple] = []
+        self.sent_ids: dict[int, tuple] = {}
+        self.edit_fails = False
+        #: What each button press was answered with (the toast), and `answer_fails` makes Telegram refuse the answer (too old).
+        self.toasts: list[str] = []
+        self.answer_fails = False
         self.next_id = 100
         #: Chats whose messages Telegram refuses.
         self.fail_chats: set = set()
@@ -235,16 +242,33 @@ class FakeTelegram(TelegramApi):
             from stiamo_common.errors import ValidationFailed
 
             raise ValidationFailed("Telegram refused: Forbidden: bot was blocked by the user")
-        self.sent.append((chat_id, text))
+        entry = (chat_id, text)
+        self.sent.append(entry)
         self.keyboards.append(buttons)
         self.next_id += 1
+        self.sent_ids[self.next_id] = entry
         return self.next_id
 
     async def answer_callback(self, token, callback_id, text=""):
+        if self.answer_fails:
+            from stiamo_common.errors import ValidationFailed
+
+            raise ValidationFailed("Telegram: query is too old")
         self.answered.append(callback_id)
+        self.toasts.append(text)
 
     async def edit_buttons(self, token, chat_id, message_id, buttons):
         self.stripped.append((chat_id, message_id, buttons))
+
+    async def edit_message(self, token, chat_id, message_id, text, html=False):
+        if getattr(self, "edit_fails", False):
+            from stiamo_common.errors import ValidationFailed
+
+            raise ValidationFailed("Telegram refused the edit.")
+        self.edits.append((chat_id, message_id, text))
+        entry = self.sent_ids.get(message_id)
+        if entry is not None and any(e is entry for e in self.sent):  # the message now reads as the new words
+            self.sent[next(i for i, e in enumerate(self.sent) if e is entry)] = (chat_id, text)
 
     async def send_typing(self, token, chat_id):
         pass

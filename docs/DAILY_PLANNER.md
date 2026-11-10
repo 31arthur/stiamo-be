@@ -43,6 +43,25 @@ So with a planner bot for S&B and one for FSA, each plans around the other's cal
 
 `tests/test_leaks.py` guards this: every workspace's data carries a unique canary, each bot is asked to plan the day, and everything sent to the model and everything said on the phone is searched for the other workspaces' canaries. The general bot is the control and must find all three.
 
+## Events you can work through
+
+A hospital visit from 9 to 12 is an event the planner won't schedule over, but you may be able to take calls during it. So the planner asks. In the evening, for each long event (an hour or more) tomorrow that it has no answer for, the workspace's plan bot sends one short message:
+
+> 🏥 **Visit hospital**, tomorrow 09:00–12:00
+> Free for calls then? 📞
+
+with three buttons: **📞 Calls are fine**, **💻 Free for anything**, **🙅 Busy, leave it**. Then:
+
+- **Calls are fine:** calls and follow-ups are planned inside the window (the ones promised for that day first), but no heavy tasks. Call reminders also come through during it.
+- **Free for anything:** the time counts as free for everything.
+- **Busy:** as before.
+
+When the last question for a day is answered, the plan for that day is made again with your answer (if it isn't approved yet) and sent to you, with a full message saying what was understood. The answer is remembered by event title, so a recurring "Visit hospital" is asked once; change or forget it under Developer → Daily planner → Remembered answers. Hearings, courts, all-day events and short ones are never asked about, at most three questions are sent per workspace per day, and the same answer carries over to your other workspaces' plans as bare busy time (never what the event is).
+
+## When you press a button
+
+Every button answers at once: a short notice on screen, and a "⏳ …" message in the chat saying what is being done. That message then becomes the result: for an approved plan, the list of what is on your planner, what reached Google Calendar, what was left out and what to do next. If something fails you get the reason and "nothing was changed", and a button from an older message says so instead of doing nothing.
+
 ## What happens in the evening
 
 | Step | What |
@@ -55,4 +74,4 @@ Plans are never booked by themselves. If something changed since the plan was ma
 
 ## Deploying this version
 
-`./deploy.sh` runs migration `agent 0017` (a plan belongs to a workspace). Nothing else is new to set up: the Google credentials you already added are used.
+`./deploy.sh` runs migrations `agent 0017` (a plan belongs to a workspace) and `agent 0018` (answers about time inside events). Nothing else is new to set up: the Google credentials you already added are used.

@@ -15,6 +15,7 @@ from typing import Any
 
 from stiamo_common.errors import ValidationFailed
 
+from app.application.availdata import AvailabilityData
 from app.application.dayplans import planner_settings, zone_of
 from app.application.ports import CallApi, DataGateway, SettingsRepository, UserSettings, VoiceApi
 from app.application.services import Who
@@ -127,7 +128,7 @@ class ReminderService:
             return None
         local = self._now().astimezone(zone_of(planner_settings(s.planner)["timezone"]))
         day, minute = local.date().isoformat(), local.hour * 60 + local.minute
-        data = self._data(self._tokens.mint(who.user_id, who.email))
+        data = AvailabilityData(self._data(self._tokens.mint(who.user_id, who.email)), s.availability)  # a call can come inside an event they said they can take calls in
         follow_ups = await data.records("follow-ups")
         state = s.reminders.get("state") or {}
         runs = dict(state.get("runs") or {}) if state.get("day") == day else {}

@@ -13,6 +13,7 @@ from app.domain.dayplan import (
     all_day_on,
     busy_blocks,
     calendar_on,
+    call_only_blocks,
     check_blocks,
     clock,
     follow_ups_on,
@@ -132,13 +133,15 @@ class AgendaPack(ToolPack):
                 "overdueFollowUps": [follow_up_card(f) for f in overdue_follow_ups(day, follow_ups)][:15],
                 "freeWindows": [f"{clock(s)}–{clock(e)}" for s, e in free],
                 "freeMinutes": sum(e - s for s, e in free),
+                # Inside these the person can take calls and follow-ups (but not do heavy work): put calls there.
+                "callWindows": [{"from": clock(s), "to": clock(e), "during": n, "minutes": e - s} for s, e, n in call_only_blocks(day, meetings, calendar)],
             }
             return ToolOutput(out)
 
         async def free_time(a: dict[str, Any]) -> ToolOutput:
             day = _day(a, tomorrow(today))
             free = free_windows(busy_blocks(day, hearings, meetings, tasks, follow_ups, calendar=calendar))
-            return ToolOutput({"date": day, "workingDay": f"{clock(DAY_START)}–{clock(DAY_END)}", "freeWindows": [{"from": clock(s), "to": clock(e), "minutes": e - s} for s, e in free]})
+            return ToolOutput({"date": day, "workingDay": f"{clock(DAY_START)}–{clock(DAY_END)}", "freeWindows": [{"from": clock(s), "to": clock(e), "minutes": e - s} for s, e in free], "callOnlyWindows": [{"from": clock(s), "to": clock(e), "during": n} for s, e, n in call_only_blocks(day, meetings, calendar)]})
 
         async def upcoming(a: dict[str, Any]) -> ToolOutput:
             span = min(MAX_AHEAD, limit(a.get("days"), 7, MAX_AHEAD))
@@ -182,7 +185,7 @@ class AgendaPack(ToolPack):
                 length = int(length) if isinstance(length, (int, float)) and not isinstance(length, bool) else default
                 blocks.append({"kind": kind, "id": ident, "title": record.get("title", ""), "start": int(start), "duration": length})
             skip = {f"{b['kind']}:{b['id']}" for b in blocks}
-            problems += check_blocks(blocks, busy_blocks(day, hearings, meetings, tasks, follow_ups, skip=skip, calendar=calendar))
+            problems += check_blocks(blocks, busy_blocks(day, hearings, meetings, tasks, follow_ups, skip=skip, calendar=calendar), call_only_blocks(day, meetings, calendar))
             if problems:
                 return ToolOutput({"ok": False, "problems": problems, "hint": "Fix these and call propose_schedule again."})
             if not blocks:
