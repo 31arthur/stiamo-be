@@ -161,7 +161,8 @@ class ConversationService:
         now = datetime.now(UTC)
         c = await self._repo.by_channel(who.user_id, channel_key)
         fresh = message.strip().lower() in NEW_THREAD
-        if c is not None and (fresh or now - c.updated_at > CHANNEL_IDLE):
+        if c is not None and (fresh or now - c.updated_at > CHANNEL_IDLE or (c.workspace or "all") != workspace):
+            # (a thread begun under another scope is never carried on: what it holds was said to a bot that could see more, or less)
             c.channel_key = None  # the old thread stays in the list, but is no longer the one this chat is in
             await self._repo.save(c)
             c = None

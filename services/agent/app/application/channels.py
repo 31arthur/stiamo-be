@@ -28,6 +28,15 @@ REMEMBER = 12
 #: How a workspace is named to the person who talks to its assistant.
 WORKSPACE_NAMES = {"personal": "Personal", "sb": "S&B", "fsa": "FSA", "media": "Media"}
 
+#: What a bot is for. An "assistant" bot answers and gets everything for its workspace; a "mail" bot gets the mail alerts and a "planner" bot the
+#: day plans, so a workspace can keep separate bots for each. Chatting works on all of them, always within the bot's own workspace.
+ROLES = {"assistant": "everything", "mail": "mail alerts", "planner": "the daily plan"}
+
+
+def role_of(c: Channel) -> str:
+    return c.public.get("role") or "assistant"
+
+
 NOT_LINKED = "This chat isn't linked to a Stiamo account. Open AI agents → Channels in Stiamo to connect it."
 
 
@@ -81,6 +90,8 @@ class ChannelService:
 
     def view(self, c: Channel) -> dict[str, Any]:
         out: dict[str, Any] = {"id": c.id, "kind": c.kind, **{k: v for k, v in c.public.items() if k != "ownerEmail"}, "agent": c.public.get("agent") or ORCHESTRATOR_ID, "createdAt": c.created_at.isoformat() if c.created_at else None}
+        out["role"] = role_of(c)
+        out["scope"] = c.public.get("workspace") or "all"  # what this bot can see and carries: one workspace, or everything
         out["webhookUrl"] = f"{self._public}/v1/agent/webhooks/{c.kind}/{c.id}" if self._public else None
         pairing = c.state.get("pairing")
         if c.kind == "telegram" and pairing and datetime.fromisoformat(pairing["expires"]) > datetime.now(UTC):
@@ -102,23 +113,35 @@ class ChannelService:
 
     # --- Telegram --------------------------------------------------------------------------------------
 
-    async def connect_telegram(self, who: Who, bot_token: str, agent: str | None = None, workspace: str | None = None) -> dict[str, Any]:
-        """Connects a bot. With a `workspace` it is that workspace's email bot: alerts about its mailboxes go to it, and nothing else does."""
-        bot_token = bot_token.strip()
+    async def _check_scope(self, who: Who, workspace: str | None, role: str, *, other_than: str | None = None) -> None:
+        """A bot belongs to one workspace (and then has a purpose in it) or to all of them. A workspace keeps one bot for each purpose."""
         if workspace is not None and workspace not in WORKSPACES:
             raise ValidationFailed("That isn't one of your workspaces.")
+        if role not in ROLES:
+            raise ValidationFailed("A bot is for everything, mail alerts or the daily plan.")
+        if role != "assistant" and not workspace:
+            raise ValidationFailed("A mail or plan bot belongs to one workspace. Choose which.")
+        if workspace:
+            for existing in await self._repo.for_user(who.user_id):
+                if existing.id != other_than and existing.kind == "telegram" and existing.public.get("workspace") == workspace and role_of(existing) == role:
+                    raise ValidationFailed(f"{WORKSPACE_NAMES.get(workspace, workspace)} already has a bot for {ROLES[role]}. Remove it, or give this one another purpose.")
+
+    async def connect_telegram(self, who: Who, bot_token: str, agent: str | None = None, workspace: str | None = None, role: str = "assistant") -> dict[str, Any]:
+        """Connects a bot. With a `workspace` it belongs to that workspace alone: it sees, says and carries only that workspace's things. Without
+        one it is the general bot, which sees every workspace."""
+        bot_token = bot_token.strip()
+        workspace = workspace or None
+        await self._check_scope(who, workspace, role)
         if not bot_token:
             raise ValidationFailed("Paste the bot token from @BotFather first.")
         me = await self._tg.get_me(bot_token)
         for existing in await self._repo.for_user(who.user_id):
             if existing.kind == "telegram" and existing.public.get("botId") == me.get("id"):
                 raise ValidationFailed("That bot is already connected.")
-            if workspace and existing.kind == "telegram" and existing.public.get("workspace") == workspace:
-                raise ValidationFailed("This workspace already has an email bot. Remove it first to connect another.")
         cid, secret = str(uuid.uuid4()), secrets.token_urlsafe(32)
         await self._tg.set_webhook(bot_token, self._webhook("telegram", cid), secret)
         agent_id = self._agent_id(agent)
-        c = Channel(cid, who.user_id, "telegram", {"botToken": bot_token, "webhookSecret": secret}, {"agent": agent_id, "ownerEmail": who.email, "botId": me.get("id"), "username": me.get("username", ""), "name": me.get("first_name", ""), "paired": [], **({"workspace": workspace} if workspace else {})}, {}, datetime.now(UTC))
+        c = Channel(cid, who.user_id, "telegram", {"botToken": bot_token, "webhookSecret": secret}, {"agent": agent_id, "ownerEmail": who.email, "botId": me.get("id"), "username": me.get("username", ""), "name": me.get("first_name", ""), "paired": [], **({"workspace": workspace, "role": role} if workspace else {})}, {}, datetime.now(UTC))
         await self._repo.save(c)
         return self.view(await self._new_pairing(c))
 
@@ -167,6 +190,21 @@ class ChannelService:
         c = await self._mine(who, channel_id)
         c.public = {**c.public, "agent": self._agent_id(agent)}
         await self._repo.save(c)
+        return self.view(c)
+
+    async def set_scope(self, who: Who, channel_id: str, workspace: str | None, role: str = "assistant") -> dict[str, Any]:
+        """Limits an existing bot to one workspace (and a purpose in it), or makes it the general bot again. What the chat remembered is forgotten:
+        it was said under the old scope, so none of it may carry over."""
+        c = await self._mine(who, channel_id)
+        if c.kind != "telegram":
+            raise ValidationFailed("Only Telegram bots can be limited to a workspace.")
+        workspace = workspace or None
+        await self._check_scope(who, workspace, role, other_than=c.id)
+        public = {k: v for k, v in c.public.items() if k not in ("workspace", "role")}
+        c.public = {**public, **({"workspace": workspace, "role": role} if workspace else {})}
+        await self._repo.save(c)
+        for key in [k for k in self._memory if k[0] == c.id]:
+            del self._memory[key]
         return self.view(c)
 
     async def set_allowed(self, who: Who, channel_id: str, allowed: list[str]) -> dict[str, Any]:
@@ -260,13 +298,23 @@ class ChannelService:
 
     # --- alerts: messages with buttons ----------------------------------------------------------------------------------
 
-    async def push(self, who: Who, html: str, buttons: list[list[dict[str, str]]] | None = None, workspace: str | None = None, summary: str = "", kind: str = "alert") -> list[dict[str, Any]]:
-        """Sends a message with buttons to the Telegram chats an email alert is for: those of the workspace's own email bot, or if it has none the
-        general bots. Never another workspace's. Returns where each went, so the buttons can be taken away later."""
-        bots = [c for c in await self._repo.for_user(who.user_id) if c.kind == "telegram"]
+    async def _audience(self, who: Who, workspace: str | None, role: str) -> tuple[list[Channel], bool]:
+        """The linked Telegram bots something about a workspace goes to, and whether they are that workspace's own. Its bot for that purpose, else
+        its everything-bot; with neither, the general bots (which see every workspace anyway); never another workspace's bot."""
+        bots = [c for c in await self._repo.for_user(who.user_id) if c.kind == "telegram" and c.public.get("paired")]
         own = [c for c in bots if workspace and c.public.get("workspace") == workspace]
+        chosen = [c for c in own if role_of(c) == role] or [c for c in own if role_of(c) == "assistant"]
+        if chosen:
+            return chosen, True
+        general = [c for c in bots if not c.public.get("workspace")]
+        return (general, False) if general else (own, bool(own))
+
+    async def push(self, who: Who, html: str, buttons: list[list[dict[str, str]]] | None = None, workspace: str | None = None, summary: str = "", kind: str = "alert", role: str = "mail") -> list[dict[str, Any]]:
+        """Sends a message with buttons to the Telegram chats a workspace's alert or plan is for: its own bot for that purpose, or if it has none the
+        general bots. Never another workspace's. Returns where each went, so the buttons can be taken away later."""
+        audience, _ = await self._audience(who, workspace, role)
         refs: list[dict[str, Any]] = []
-        for c in own or [c for c in bots if not c.public.get("workspace")]:
+        for c in audience:
             for p in c.public.get("paired", []):
                 try:
                     mid = await self._tg.send_message(c.secrets["botToken"], p["id"], clip(html, TELEGRAM_MAX), html=True, buttons=buttons)
@@ -282,19 +330,19 @@ class ChannelService:
     async def announce_plan(self, who: Who, text: Callable[[Style, int], str], workspace: str, buttons: list[list[dict[str, str]]]) -> int:
         """A day plan to the phone it is for: the workspace's own bot when it has a chat linked, otherwise every chat the person has connected
         (so a workspace without a bot still gets its plan). Returns how many chats it reached."""
-        own = [c for c in await self._repo.for_user(who.user_id) if c.kind == "telegram" and workspace and c.public.get("workspace") == workspace and c.public.get("paired")]
+        _, own = await self._audience(who, workspace, "planner")
         if not own:
             return await self.announce(who, text, kind="plan", buttons=buttons, summary=f"{workspace} plan" if workspace else "plan")
-        sent = await self.push(who, text("telegram", TELEGRAM_MAX), buttons, workspace, f"{workspace} plan", kind="plan")
+        sent = await self.push(who, text("telegram", TELEGRAM_MAX), buttons, workspace, f"{workspace} plan", kind="plan", role="planner")
         return len(sent)
 
     async def phone_for(self, who: Who, workspace: str) -> str:
         """Where an email alert about a workspace would arrive: its own email bot ("workspace"), the general bot ("general"), or nowhere ("none"):
         a bot only counts once a chat is paired with it."""
-        bots = [c for c in await self._repo.for_user(who.user_id) if c.kind == "telegram" and c.public.get("paired")]
-        if any(c.public.get("workspace") == workspace for c in bots):
+        audience, own = await self._audience(who, workspace, "mail")
+        if own:
             return "workspace"
-        return "general" if any(not c.public.get("workspace") for c in bots) else "none"
+        return "general" if audience else "none"
 
     async def say(self, channel_id: str, chat: int | str, html: str, buttons: list[list[dict[str, str]]] | None = None) -> int | None:
         c = await self._repo.get(channel_id)
@@ -370,7 +418,8 @@ class ChannelService:
             agent_id = self._agent.registry.default_id
         key = (c.id, f"{agent_id}:{sender}")  # changing the channel's agent starts a fresh conversation
         try:
-            run = await self._agent.chat(who, self._tokens.mint(who.user_id, who.email), agent_id, text, self._memory.get(key), channel_name, trigger=channel_name.lower(), channel_id=c.id)
+            # A bot pinned to one agent is held to the bot's workspace just the same: the scope belongs to the bot, whichever agent answers.
+            run = await self._agent.chat(who, self._tokens.mint(who.user_id, who.email), agent_id, text, self._memory.get(key), channel_name, trigger=channel_name.lower(), channel_id=c.id, workspace=c.public.get("workspace") or None)
         except (ValidationFailed, AiError) as exc:
             return words(str(getattr(exc, "message", None) or exc))
         self._memory[key] = [m.to_json() for m in run.messages][-REMEMBER:]

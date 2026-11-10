@@ -15,6 +15,14 @@ class TelegramBody(DomainModel):
     agent: str | None = None
     #: Make it a workspace's email bot (personal, sb, fsa or media): alerts about that workspace's mail go to it alone.
     workspace: str | None = None
+    #: What it is for within that workspace: everything (default), mail alerts, or the daily plan.
+    role: str = "assistant"
+
+
+class ScopeBody(DomainModel):
+    #: The workspace to limit the bot to; none makes it the general bot, which sees every workspace.
+    workspace: str | None = None
+    role: str = "assistant"
 
 
 class WhatsAppBody(DomainModel):
@@ -42,7 +50,7 @@ async def list_channels(channels: deps.Channels, me: deps.Me) -> dict[str, Any]:
 
 @router.post("/telegram", status_code=status.HTTP_201_CREATED, summary="Connect a Telegram bot (sets its webhook)")
 async def connect_telegram(body: TelegramBody, channels: deps.Channels, me: deps.Me) -> dict[str, Any]:
-    return await channels.connect_telegram(me, body.bot_token, body.agent, body.workspace)
+    return await channels.connect_telegram(me, body.bot_token, body.agent, body.workspace, body.role)
 
 
 @router.post("/whatsapp", status_code=status.HTTP_201_CREATED, summary="Connect WhatsApp through Twilio")
@@ -63,6 +71,11 @@ async def unpair(channel_id: str, chat_id: str, channels: deps.Channels, me: dep
 @router.put("/{channel_id}/agent", summary="Which agent answers on a channel")
 async def set_agent(channel_id: str, body: AgentBody, channels: deps.Channels, me: deps.Me) -> dict[str, Any]:
     return await channels.set_agent(me, channel_id, body.agent)
+
+
+@router.put("/{channel_id}/scope", summary="Limit a bot to one workspace (and a purpose in it), or make it the general bot")
+async def scope(channel_id: str, body: ScopeBody, channels: deps.Channels, me: deps.Me) -> dict[str, Any]:
+    return await channels.set_scope(me, channel_id, body.workspace, body.role)
 
 
 @router.put("/{channel_id}/allowed", summary="Who may use a WhatsApp channel")

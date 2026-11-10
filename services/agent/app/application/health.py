@@ -79,10 +79,12 @@ class HealthService:
             out.append(check("telegram", "Phone", "Telegram", "error", "No Telegram bot is connected, so alerts, reminders and plans can't reach you.", "phone"))
         for c in bots:
             ws = c.get("workspace")
-            label = f"Telegram · {NAMES.get(ws, ws)} assistant" if ws else "Telegram · general bot"
+            purpose = {"mail": " · mail alerts", "planner": " · daily plan"}.get(c.get("role") or "", "")
+            label = f"Telegram · {NAMES.get(ws, ws)}{purpose}" + ("" if purpose else " assistant") if ws else "Telegram · general bot"
+            sees = f"Sees only {NAMES.get(ws, ws)}." if ws else "Sees every workspace: tasks, plans and reminders of all of them. Limit it to one workspace if it is for one."
             paired = len(c.get("paired") or [])
             if paired:
-                out.append(check(f"tg-{c['id']}", "Phone", label, "ok", f"@{c.get('username', '')} · {paired} chat{'s' if paired != 1 else ''} linked.", None, {"kind": "channel", "id": c["id"]}))
+                out.append(check(f"tg-{c['id']}", "Phone", label, "ok", f"@{c.get('username', '')} · {paired} chat{'s' if paired != 1 else ''} linked. {sees}", None, {"kind": "channel", "id": c["id"]}))
             else:
                 out.append(check(f"tg-{c['id']}", "Phone", label, "warn", f"@{c.get('username', '')} is connected but no chat is linked. Press Start in the bot (or send it the code), and it will answer.", "phone"))
         have_ws = {c.get("workspace") for c in bots if c.get("paired")}

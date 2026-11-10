@@ -180,10 +180,10 @@ async def test_a_workspace_email_bot_gets_its_alerts_and_nothing_else_does(rig):
     assert all(chat != 888 for chat, _ in rig.telegram.sent[sent:]) and any(chat == 555 for chat, _ in rig.telegram.sent[sent:])
 
 
-async def test_one_email_bot_per_workspace_and_only_for_real_workspaces(rig):
+async def test_one_bot_per_purpose_in_a_workspace_and_only_for_real_workspaces(rig):
     await email_bot(rig)
     again = await rig.client.post(WS, json={"botToken": "789:ghi", "workspace": "sb"}, headers=headers())
-    assert again.status_code == 422 and "already has an email bot" in again.json()["error"]["message"]
+    assert again.status_code == 422 and "already has a bot for everything" in again.json()["error"]["message"]
     other = await rig.client.post(WS, json={"botToken": "789:ghi", "workspace": "fsa"}, headers=headers())
     assert other.status_code == 201 and other.json()["workspace"] == "fsa"
     bad = await rig.client.post(WS, json={"botToken": "999:xyz", "workspace": "nowhere"}, headers=headers())

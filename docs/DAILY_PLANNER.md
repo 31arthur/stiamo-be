@@ -22,7 +22,24 @@ It only sees and saves that workspace's things, but it plans around the other wo
 
 ### Attach the bots you already made
 
-Telegram bot tokens are secrets, so they are entered in the app, not here: Assistant → Workspace assistants → pick the workspace → paste that bot's token from @BotFather → Connect. Then open the bot in Telegram and press Start (or send the pairing code shown), and it answers. Do it once per workspace, each with its own bot. Setup and health shows whether each one is linked, and Test sends a message to check.
+Telegram bot tokens are secrets, so they are entered in the app, not here: Assistant → Workspace assistants → pick the workspace → paste that bot's token from @BotFather → choose what it is for → Connect. Then open the bot in Telegram and press Start (or send the pairing code shown). Do it once per bot. A workspace can have several: one for everything, one for mail alerts, one for the daily plan (each purpose once per workspace).
+
+**A bot you connected earlier without choosing a workspace** (for instance from the Daily planner's own Channels tab) is the *general* bot, and the general bot sees every workspace. Open it, and under "Limit to" choose the workspace and what it is for. It takes effect at once, and the chat starts afresh so nothing it said before carries over. Setup and health lists every bot with what it can see.
+
+## Keeping each workspace's data apart
+
+The rule is: **a bot has one scope, fixed when it is connected, and the server applies it to the data on every run**, whichever agent answers and whatever is typed. It is not a request to the model to behave.
+
+| Where | What is enforced |
+| --- | --- |
+| What a bot's model is sent | Only that workspace's tasks, calls, meetings, calendar events, mail and (for S&B) cases, hearings and documents. A record with no workspace label is visible to **no** workspace. |
+| The rest of the day | Another workspace's commitments reach the planner as bare **busy time** (when, never what): no title, place, person or workspace. That is how an FSA task is kept off an S&B hearing without S&B ever being told what the FSA item is. |
+| A bot pinned to one agent | Held to its workspace the same way. (This was the leak: such a bot used to answer unscoped.) |
+| What a bot is sent | Alerts and plans go to the workspace's own bot for that purpose, else its everything-bot, else the general bot; never another workspace's bot. |
+| Changing a bot's scope | Its remembered chat and thread are dropped, so nothing said under the old scope carries over. |
+| Saving | A workspace's assistant can't save a record that belongs to another workspace. |
+
+`tests/test_leaks.py` guards this: every workspace's data carries a unique canary, each bot is asked to plan the day, and everything sent to the model and everything said on the phone is searched for the other workspaces' canaries. The general bot is the control and must find all three.
 
 ## What happens in the evening
 
