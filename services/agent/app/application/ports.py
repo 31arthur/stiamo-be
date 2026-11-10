@@ -301,8 +301,8 @@ class TelegramApi(ABC):
         """Replaces the buttons under a message, or takes them away (None)."""
 
     @abstractmethod
-    async def edit_message(self, token: str, chat_id: int | str, message_id: int, text: str, html: bool = False) -> None:
-        """Changes the words of a message already sent (and takes its buttons away). Raises when Telegram refuses."""
+    async def edit_message(self, token: str, chat_id: int | str, message_id: int, text: str, html: bool = False, buttons: list[list[dict[str, str]]] | None = None) -> None:
+        """Changes the words of a message already sent, and its buttons (none, by default). Raises when Telegram refuses."""
 
     @abstractmethod
     async def download_file(self, token: str, file_id: str) -> bytes:

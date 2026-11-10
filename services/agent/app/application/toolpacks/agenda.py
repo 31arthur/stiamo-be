@@ -183,7 +183,7 @@ class AgendaPack(ToolPack):
                     continue
                 default = int(record.get("estimate") or record.get("duration") or 30)
                 length = int(length) if isinstance(length, (int, float)) and not isinstance(length, bool) else default
-                blocks.append({"kind": kind, "id": ident, "title": record.get("title", ""), "start": int(start), "duration": length})
+                blocks.append({"kind": kind, "id": ident, "title": record.get("title", ""), "start": int(start), "duration": length, **({"contact": record["contact"]} if kind == "followUp" and record.get("contact") else {})})
             skip = {f"{b['kind']}:{b['id']}" for b in blocks}
             problems += check_blocks(blocks, busy_blocks(day, hearings, meetings, tasks, follow_ups, skip=skip, calendar=calendar), call_only_blocks(day, meetings, calendar))
             if problems:

@@ -25,6 +25,7 @@ from app.domain.dayplan import (
     is_open,
     meetings_on,
 )
+from app.domain.dial import phone_text
 from app.domain.llm import AiError
 from app.domain.mailwatch import NAMES
 from app.domain.phone import Style, render
@@ -61,7 +62,7 @@ def approval_text(out: dict[str, Any]) -> str:
     lines = [f"✅ Plan approved{' · ' + ws if ws else ''} · {day_label(p['day'])}", ""]
     if n:
         lines.append(f"🗓️ {n} item{'s are' if n != 1 else ' is'} now on your planner:")
-        lines += [f"• {b['from']}–{b['to']}  {'📞' if b['kind'] == 'followUp' else '📝'} {b['title']}" for b in sorted(p["blocks"], key=lambda b: b["start"])]
+        lines += [f"• {b['from']}–{b['to']}  {'📞' if b['kind'] == 'followUp' else '📝'} {b['title']}" + (f" · {phone_text(b.get('contact'))}" if phone_text(b.get("contact")) else "") for b in sorted(p["blocks"], key=lambda b: b["start"])]
     else:
         lines.append("🗓️ Nothing was booked: everything in it was finished or removed since the plan was made.")
     if out.get("skipped") and n:
@@ -124,7 +125,7 @@ class DayPlanService:
         settings: SettingsRepository,
         agent: AgentService,
         data_factory: Callable[[str], DataGateway],
-        announce: Callable[[Who, Callable[[Style, int], str], str, str], Awaitable[object]] | None = None,
+        announce: Callable[[Who, Callable[[Style, int], str], str, str, list[dict[str, Any]]], Awaitable[object]] | None = None,
         clock_now: Callable[[], datetime] = lambda: datetime.now(UTC),
         ask: Callable[[Who, str, str, str], Awaitable[int]] | None = None,
     ) -> None:
@@ -173,13 +174,13 @@ class DayPlanService:
         scope = " for the " + NAMES.get(workspace, workspace) + " workspace only: plan its tasks and calls, around everything else already on the day" if workspace else ""
         run = await self._agent.chat(who, token, PLANNER, f"Plan {day}{scope}. Give me the briefing, and propose the schedule for the work that fits.", channel="the evening plan", trigger=trigger, plan_for=workspace or None)
         schedule = next((f for f in reversed(run.found) if f.get("kind") == "schedule" and f.get("date") == day), None)
-        blocks = [{k: b[k] for k in ("kind", "id", "title", "start", "duration")} for b in (schedule or {}).get("blocks", [])]
+        blocks = [{k: b[k] for k in ("kind", "id", "title", "start", "duration", "contact") if k in b} for b in (schedule or {}).get("blocks", [])]
         card = next((f for f in reversed(run.found) if f.get("kind") == "briefing" and f.get("date") == day), None)
         plan = DayPlan(existing.id if existing else str(uuid.uuid4()), who.user_id, day, "proposed", run.answer or "", blocks, None, trigger, existing.created_at if existing else self._now(), card=card, workspace=workspace)
         await self._plans.save(plan)
         if announce and self._announce and (await self.settings(who))["channels"]:
             try:
-                await self._announce(who, self._message(plan), workspace, plan.id)
+                await self._announce(who, self._message(plan), workspace, plan.id, [b for b in plan.blocks if b["kind"] == "followUp"])
             except Exception:  # noqa: BLE001  telling a phone must never undo a plan that was made
                 log.exception("could not send the plan for %s", day)
         return self._view(plan)
@@ -226,7 +227,7 @@ class DayPlanService:
         """The evening plan, written for whichever chat it is sent to."""
         found: list[dict[str, Any]] = [p.card] if p.card else [{"kind": "briefing", "date": p.day, "headline": "", "sections": [], "free": []}]
         if p.blocks:
-            found.append({"kind": "schedule", "buttons": True, "blocks": [{"from": clock(b["start"]), "title": b["title"]} for b in sorted(p.blocks, key=lambda b: b["start"])]})
+            found.append({"kind": "schedule", "buttons": True, "blocks": [{"from": clock(b["start"]), "title": b["title"], "phone": phone_text(b.get("contact"))} for b in sorted(p.blocks, key=lambda b: b["start"])]})
         title = f"{NAMES.get(p.workspace, p.workspace)} plan for" if p.workspace else "Plan for"
         return lambda style, limit: render(p.briefing, found, limit, "Daily planner", style, title=title)
 

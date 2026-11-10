@@ -20,6 +20,7 @@ from app.application.dayplans import planner_settings, zone_of
 from app.application.ports import CallApi, DataGateway, SettingsRepository, UserSettings, VoiceApi
 from app.application.services import Who
 from app.domain.dayplan import clock, hearings_on, is_open
+from app.domain.dial import call_button
 from app.domain.nudge import DEFAULT_CALL_VOICE, DEFAULT_VOICE, call_speech, due_run, free_now, speech
 from app.domain.nudge import runs as nudge_runs
 from app.domain.phone import Style, render
@@ -60,8 +61,9 @@ class ReminderService:
         announce_voice: Callable[[Who, bytes, str], Awaitable[int]],
         clock_now: Callable[[], datetime] = lambda: datetime.now(UTC),
         deliveries: Any = None,
+        app_url: str = "",
     ) -> None:
-        self._deliveries = deliveries
+        self._deliveries, self._app_url = deliveries, app_url
         self._settings, self._data, self._tokens, self._voice, self._caller, self._announce, self._announce_voice, self._now = settings, data_factory, tokens, voice, caller, announce, announce_voice, clock_now
 
     async def _load(self, who: Who) -> UserSettings:
@@ -143,7 +145,7 @@ class ReminderService:
         items = [self._item(c, cases) for c in run["pending"]]
         n = len(items)
         card = {"kind": "reminder", "date": day, "headline": f"{n} call{'s' if n != 1 else ''} still pending", "items": items, "footer": "Mark them done in Stiamo when you have."}
-        await self._announce(who, lambda style, limit: render("", [card], limit, "Stiamo", style), reminder_buttons(run["key"], run["pending"]))
+        await self._announce(who, lambda style, limit: render("", [card], limit, "Stiamo", style), reminder_buttons(run["key"], run["pending"], self._app_url))
         audio = await self._speak(s, speech(run["step"], run["pending"]))
         if audio:
             await self._announce_voice(who, audio, f"{n} call{'s' if n != 1 else ''} still pending")
@@ -189,9 +191,15 @@ class ReminderService:
         return {"sent": reached, "spoken": bool(audio), "rang": rang}
 
 
-def reminder_buttons(key: str, pending: list[dict[str, Any]]) -> list[list[dict[str, str]]]:
-    """Under a reminder: done for each call, and to be reminded again in half an hour or have them all moved to tomorrow. The ids fit Telegram's 64 bytes."""
-    rows = [[{"text": f"✅ {str(c.get('title') or 'Call')[:26]}", "callback_data": f"rm:d:{c['id']}"}] for c in pending[:4]]
+def reminder_buttons(key: str, pending: list[dict[str, Any]], app_url: str = "") -> list[list[dict[str, str]]]:
+    """Under a reminder: for each call, done and (when it has a number) a button that opens the phone's dialer; and to be reminded again in half
+    an hour or have them all moved to tomorrow. The ids fit Telegram's 64 bytes."""
+    rows = []
+    for c in pending[:4]:
+        row = [{"text": f"✅ {str(c.get('title') or 'Call')[:26]}", "callback_data": f"rm:d:{c['id']}"}]
+        if call := call_button(app_url, c.get("contact"), str(c.get("title") or "")):
+            row.append(call)
+        rows.append(row)
     rows.append([{"text": "⏰ In 30 min", "callback_data": f"rm:s:{key}"}, {"text": "📅 Tomorrow", "callback_data": f"rm:t:{key}"}])
     return rows
 

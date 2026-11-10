@@ -69,8 +69,8 @@ class HttpTelegramApi(TelegramApi):
     async def edit_buttons(self, token: str, chat_id: int | str, message_id: int, buttons: list[list[dict[str, str]]] | None) -> None:
         await self._call(token, "editMessageReplyMarkup", {"chat_id": chat_id, "message_id": message_id, "reply_markup": {"inline_keyboard": buttons or []}})
 
-    async def edit_message(self, token: str, chat_id: int | str, message_id: int, text: str, html: bool = False) -> None:
-        body: dict[str, Any] = {"chat_id": chat_id, "message_id": message_id, "text": clip(text, TELEGRAM_MAX), "disable_web_page_preview": True, "reply_markup": {"inline_keyboard": []}}
+    async def edit_message(self, token: str, chat_id: int | str, message_id: int, text: str, html: bool = False, buttons: list[list[dict[str, str]]] | None = None) -> None:
+        body: dict[str, Any] = {"chat_id": chat_id, "message_id": message_id, "text": clip(text, TELEGRAM_MAX), "disable_web_page_preview": True, "reply_markup": {"inline_keyboard": buttons or []}}
         try:
             await self._call(token, "editMessageText", {**body, "parse_mode": "HTML"} if html else body)
         except ValidationFailed as exc:

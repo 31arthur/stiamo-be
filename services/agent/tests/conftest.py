@@ -213,6 +213,7 @@ class FakeTelegram(TelegramApi):
         self.edits: list[tuple] = []
         self.sent_ids: dict[int, tuple] = {}
         self.edit_fails = False
+        self.edit_buttons_shown: list = []
         #: What each button press was answered with (the toast), and `answer_fails` makes Telegram refuse the answer (too old).
         self.toasts: list[str] = []
         self.answer_fails = False
@@ -260,12 +261,13 @@ class FakeTelegram(TelegramApi):
     async def edit_buttons(self, token, chat_id, message_id, buttons):
         self.stripped.append((chat_id, message_id, buttons))
 
-    async def edit_message(self, token, chat_id, message_id, text, html=False):
+    async def edit_message(self, token, chat_id, message_id, text, html=False, buttons=None):
         if getattr(self, "edit_fails", False):
             from stiamo_common.errors import ValidationFailed
 
             raise ValidationFailed("Telegram refused the edit.")
         self.edits.append((chat_id, message_id, text))
+        self.edit_buttons_shown.append(buttons)
         entry = self.sent_ids.get(message_id)
         if entry is not None and any(e is entry for e in self.sent):  # the message now reads as the new words
             self.sent[next(i for i, e in enumerate(self.sent) if e is entry)] = (chat_id, text)
