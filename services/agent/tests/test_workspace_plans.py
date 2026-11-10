@@ -48,10 +48,8 @@ async def test_a_workspace_plans_only_its_own_work_but_sees_the_rest_of_the_day_
     sb = PlannerData(rig.data, "sb")
     assert sorted(t["id"] for t in await sb.records("tasks")) == ["t1", "t3"] and [f["id"] for f in await sb.records("follow-ups")] == ["f1"]
     taken = [(e["startMinute"], e["endMinute"], e["title"]) for e in await sb.calendar_events(TOMORROW, TOMORROW)]
-    assert (840, 900, "Union leaders (FSA)") in taken  # FSA's meeting is S&B's busy time too
-    fsa = PlannerData(rig.data, "fsa")
-    taken = [e["title"] for e in await fsa.calendar_events(TOMORROW, TOMORROW)]
-    assert "Arguments (S&B)" in taken and "Union leaders (FSA)" not in taken  # the hearing is S&B's; the meeting is FSA's own
+    assert (840, 900, "Busy (another workspace)") in taken  # FSA's meeting blocks S&B's time, and says nothing more about itself
+    assert not any("Union leaders" in t for _, _, t in taken)
 
 
 async def test_each_workspace_keeps_its_own_plan_for_the_same_day(rig):
