@@ -662,12 +662,12 @@ async def test_a_message_the_master_assistant_hands_over_starts_the_orchestrator
     from .test_orchestrator import C, say, start, team_ready
 
     await team_ready(rig)
-    chaser = "/v1/agent/agents/follow-up-chaser"
+    chaser = "/v1/agent/agents/daily-planner"
     nodes = [n("c", "trigger.chat"), n("o", "trigger.orchestrator"), n("rc", "respond", text="from the chat trigger"), n("ro", "respond", text="from the orchestrator trigger: {{ $json.source }}")]
     assert (await put(rig, nodes, wire(("c", 0, "rc"), ("o", 0, "ro")), agent=chaser)).status_code == 200
     conv = await start(rig, "all")
     handed = await say(rig, conv["id"], "Who should I call tomorrow?")
-    assert handed["agentId"] == "follow-up-chaser" and handed["answer"].startswith("from the orchestrator trigger: orchestrator")
+    assert handed["agentId"] == "daily-planner" and handed["answer"].startswith("from the orchestrator trigger: orchestrator")
     direct = await rig.client.post(f"{chaser}/flow/run", json={"message": "hi"}, headers=headers())
     assert direct.json()["answer"] == "from the chat trigger"  # run by hand: not handed over by anyone
 

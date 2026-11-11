@@ -5,6 +5,7 @@ from app.domain.orchestrator import scope_line
 
 from .conftest import FakeData, headers
 from .test_channels import send, telegram
+from .test_agent_api import choose
 from .test_orchestrator import C, team_ready
 
 TODAY = "2026-11-06"
@@ -80,6 +81,8 @@ async def test_each_assistant_keeps_its_own_thread_and_only_routes_to_the_agents
     await team_ready(rig)
     # the planner is placed in S&B only: the FSA assistant can't hand a question to it
     await rig.client.put("/v1/agent/agents/daily-planner/workspaces", json={"workspaces": ["sb"]}, headers=headers())
+    await rig.client.put("/v1/agent/agents/librarian/workspaces", json={"workspaces": ["fsa"]}, headers=headers())  # FSA has its own agent to answer there
+    await choose(rig, agent="/v1/agent/agents/librarian")
     general = await telegram(rig, agent="assistant")
     await send(rig, general, f"/start {general['pairingCode']}", chat=555, update=1)
     fsa = await bot(rig, "fsa", "456:def", 888)

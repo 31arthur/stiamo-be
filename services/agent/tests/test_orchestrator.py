@@ -21,38 +21,36 @@ from .test_planning import fill
 C = "/v1/agent/conversations"
 TEAM = [
     {"id": "daily-planner", "name": "Daily planner", "description": "Plans tomorrow each evening: what is fixed, what to prepare, who to call and what to do when.", "suggestions": ["Plan tomorrow", "How full is my day tomorrow?"]},
-    {"id": "hearing-prep", "name": "Hearing prep", "description": "Gets you ready for a hearing: where the case stands, the last order, the documents to carry.", "suggestions": ["Prepare me for tomorrow's hearings"]},
-    {"id": "follow-up-chaser", "name": "Follow-up chaser", "description": "Decides who to call or message next, in what order and at what time.", "suggestions": ["Who should I call tomorrow?"]},
-    {"id": "deadline-scout", "name": "Deadlines & inbox scout", "description": "Watches what is due in the coming days and what the mail agents have flagged.", "suggestions": ["What is due this week?"]},
+    {"id": "cases", "name": "Case agent", "description": "Finds cases and the documents that go with them, and gets you ready for a hearing.", "suggestions": ["Prepare me for tomorrow's hearings"]},
 ]
 
 
 def test_a_message_goes_to_the_agent_whose_work_it_is():
     pick = lambda m, last=None: route_by_rules(m, TEAM, last)[0]  # noqa: E731
-    assert pick("Who should I call tomorrow?") == "follow-up-chaser"
-    assert pick("Prepare me for the Kurnool hearing") == "hearing-prep"
+    assert pick("Who should I call tomorrow?") == "daily-planner"
+    assert pick("Prepare me for the Kurnool hearing") == "cases"
     assert pick("Plan my day") == "daily-planner"
-    assert pick("What is due this week and what's in my inbox?") == "deadline-scout"
+    assert pick("What is due this week and what's in my inbox?") == "daily-planner"
     assert pick("zzz qqq") == "daily-planner"  # nothing to go on: the usual one
 
 
 def test_a_short_follow_up_stays_with_the_agent_that_just_answered():
     assert is_follow_up("yes") and is_follow_up("and the labour office?") and is_follow_up("move it to Monday please") and not is_follow_up("Prepare me for tomorrow's hearing at Kurnool")
-    assert route_by_rules("and the labour office?", TEAM, "follow-up-chaser")[0] == "follow-up-chaser"
-    assert route_by_rules("what about Hemla", TEAM, "hearing-prep")[0] == "hearing-prep"
+    assert route_by_rules("and the labour office?", TEAM, "daily-planner")[0] == "daily-planner"
+    assert route_by_rules("what about Hemla", TEAM, "cases")[0] == "cases"
 
 
 def test_the_decision_model_is_asked_to_choose_between_the_agents_with_the_last_one_in_mind():
-    q = jev_question(TEAM, "hearing-prep")["agent"]
-    assert q["type"] == "choice" and list(q["criteria"]) == [a["id"] for a in TEAM] and "prefer “hearing-prep”" in q["instructions"]
+    q = jev_question(TEAM, "cases")["agent"]
+    assert q["type"] == "choice" and list(q["criteria"]) == [a["id"] for a in TEAM] and "prefer “cases”" in q["instructions"]
 
 
 def test_every_agent_is_told_what_the_conversation_has_been_about():
-    turns = [{"question": f"Question {i}", "answer": f"Answer {i}", "agentName": "Follow-up chaser" if i % 2 else "Hearing prep", "gist": "Laid out 2026-11-07: A light day. Items: Call Hemla" if i == 7 else ""} for i in range(8)]
+    turns = [{"question": f"Question {i}", "answer": f"Answer {i}", "agentName": "Daily planner" if i % 2 else "Case agent", "gist": "Laid out 2026-11-07: A light day. Items: Call Hemla" if i == 7 else ""} for i in range(8)]
     context = {"focus": {"case": {"ref": "TUMWU-2026-001", "title": "Nikhil Construction"}, "date": "2026-11-07"}, "digest": [f"Question {i} → agent" for i in range(8)]}
     preface = build_preface(turns, context)
     assert "the case TUMWU-2026-001 (Nikhil Construction) and the day 2026-11-07" in preface
-    assert "Person: Question 7" in preface and "Hearing prep: Answer 6" in preface and "Question 1\n" not in preface.split("The latest exchanges")[1]  # only the last six in full
+    assert "Person: Question 7" in preface and "Case agent: Answer 6" in preface and "Question 1\n" not in preface.split("The latest exchanges")[1]  # only the last six in full
     assert "Earlier in the conversation" in preface and "[Laid out 2026-11-07" in preface
     assert build_preface([], {}) == ""
 
@@ -71,7 +69,7 @@ def test_the_focus_follows_the_case_named_and_the_day_laid_out():
 async def team_ready(rig):
     fill(rig)
     await connect(rig)
-    for a in ("daily-planner", "hearing-prep", "follow-up-chaser", "deadline-scout", "cases"):
+    for a in ("daily-planner", "cases"):
         await choose(rig, agent=f"/v1/agent/agents/{a}")
 
 
@@ -92,17 +90,17 @@ async def test_the_assistant_picks_the_agent_and_every_agent_knows_the_whole_con
     c = await start(rig, "all")
     rig.script += [ChatResult("Call Hemla at 09:30.")]
     first = await say(rig, c["id"], "Who should I call tomorrow?")
-    assert first["agentId"] == "follow-up-chaser" and first["agentName"] == "Follow-up chaser" and first["routedBy"] == "rules"
+    assert first["agentId"] == "daily-planner" and first["agentName"] == "Daily planner" and first["routedBy"] == "rules"
     rig.script += [ChatResult("The labour office is first.")]
     second = await say(rig, c["id"], "and the labour office?")
-    assert second["agentId"] == "follow-up-chaser" and second["routedBy"] == "continuity"
+    assert second["agentId"] == "daily-planner" and second["routedBy"] == "continuity"
     rig.script += [ChatResult("Bring the vakalat and the last order.")]
     third = await say(rig, c["id"], "Prepare me for the hearing in TUMWU-2026-001")
-    assert third["agentId"] == "hearing-prep"
+    assert third["agentId"] == "cases"
     told = rig.llm_log[-1]["last"]  # what the third agent was given: the earlier exchanges, which another agent answered
-    assert "Who should I call tomorrow?" in told and "Call Hemla at 09:30." in told and "Follow-up chaser:" in told and "TUMWU-2026-001" in told and told.rstrip().endswith("Prepare me for the hearing in TUMWU-2026-001")
+    assert "Who should I call tomorrow?" in told and "Call Hemla at 09:30." in told and "Daily planner:" in told and "TUMWU-2026-001" in told and told.rstrip().endswith("Prepare me for the hearing in TUMWU-2026-001")
     full = (await rig.client.get(f"{C}/{c['id']}", headers=headers())).json()
-    assert full["agentId"] == "assistant" and [t["agentId"] for t in full["turns"]] == ["follow-up-chaser", "follow-up-chaser", "hearing-prep"]
+    assert full["agentId"] == "assistant" and [t["agentId"] for t in full["turns"]] == ["daily-planner", "daily-planner", "cases"]
 
 
 async def test_the_decision_model_chooses_when_it_is_on_and_the_rules_cover_when_it_is_not(rig):
@@ -125,7 +123,7 @@ async def test_only_the_agents_of_the_workspace_are_chosen_from(rig):
     c = await start(rig, "personal")  # the hearing agent works in S&B only, and the case agent too
     rig.script += [ChatResult("ok")]
     turn = await say(rig, c["id"], "Prepare me for the hearing")
-    assert turn["agentId"] != "hearing-prep"
+    assert turn["agentId"] != "cases"
 
 
 async def test_the_assistant_on_a_phone_keeps_one_thread_that_the_web_app_shows_too(rig):
@@ -135,7 +133,7 @@ async def test_the_assistant_on_a_phone_keeps_one_thread_that_the_web_app_shows_
     rig.script += [ChatResult("Call Hemla first.")]
     await send(rig, c, "who should I call tomorrow at S&B?", chat=555, update=2)
     reply = rig.telegram.sent[-1][1]
-    assert reply.startswith("Call Hemla first.") and strip_markup(reply).rstrip().endswith("— Follow-up chaser · S&B") and "<i>— Follow-up chaser · S&amp;B</i>" in reply  # signed with the workspace it worked in
+    assert reply.startswith("Call Hemla first.") and strip_markup(reply).rstrip().endswith("— Daily planner · S&B") and "<i>— Daily planner · S&amp;B</i>" in reply  # signed with the workspace it worked in
     rig.script += [ChatResult("Then the labour office.")]
     await send(rig, c, "and after that?", chat=555, update=3)
     assert "who should I call tomorrow at S&B?" in rig.llm_log[-1]["last"]  # the second message knows the first (same workspace, no need to say it again)

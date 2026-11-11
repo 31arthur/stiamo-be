@@ -29,11 +29,8 @@ _STOP = frozenset("the a an and or of to for in on at is are was be it this that
 
 #: What each agent is known for, in the words people use. An agent not listed here is still matched on its own description and suggestions.
 KEYWORDS: dict[str, tuple[str, ...]] = {
-    "daily-planner": ("plan", "schedule", "tomorrow", "today", "day", "free", "busy", "agenda", "arrange", "reschedule", "task", "add a task", "move", "morning", "afternoon", "evening"),
-    "hearing-prep": ("prepare", "prep", "hearing", "last order", "carry", "bring", "documents", "bench", "court", "arguments", "brief"),
-    "follow-up-chaser": ("call", "ring", "phone", "follow-up", "followup", "follow up", "chase", "callback", "call back", "message them", "who should i call", "no answer", "promised"),
-    "deadline-scout": ("due", "deadline", "this week", "coming up", "attention", "inbox", "mail", "email", "upcoming", "missed", "overdue", "clash"),
-    "cases": ("case", "cases", "find", "search", "document", "documents", "drive", "letter", "reference", "petition", "party", "client"),
+    "daily-planner": ("plan", "schedule", "tomorrow", "today", "day", "free", "busy", "agenda", "arrange", "reschedule", "task", "add a task", "move", "morning", "afternoon", "evening", "call", "ring", "phone", "follow-up", "followup", "follow up", "chase", "callback", "call back", "who should i call", "no answer", "promised", "due", "deadline", "this week", "coming up", "attention", "upcoming", "missed", "overdue", "clash"),
+    "cases": ("case", "cases", "find", "search", "document", "documents", "drive", "letter", "reference", "petition", "party", "client", "prepare", "prep", "hearing", "last order", "carry", "bring", "bench", "court", "arguments", "brief"),
 }
 
 

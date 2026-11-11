@@ -5,6 +5,10 @@ from app.domain.agents import AgentDefinition, UnknownAgent
 from app.domain.prompt import BASE_VARIABLES
 
 
+#: Agents that were merged into another. A channel, a thread or a saved link that still names one is answered by the one that took over.
+MERGED: dict[str, str] = {"hearing-prep": "cases", "follow-up-chaser": "daily-planner", "deadline-scout": "daily-planner"}
+
+
 class AgentRegistry:
     def __init__(self, agents: list[AgentDefinition], packs: PackRegistry) -> None:
         if not agents:
@@ -21,7 +25,7 @@ class AgentRegistry:
 
     def get(self, agent_id: str) -> AgentDefinition:
         try:
-            return self._agents[agent_id]
+            return self._agents[MERGED.get(agent_id, agent_id)]
         except KeyError as exc:
             raise UnknownAgent("No such agent.") from exc
 
