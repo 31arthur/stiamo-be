@@ -162,6 +162,9 @@ class Prepared:
 
 
 class AgentService:
+    #: "graph" runs each agent as a workflow of nodes; "classic" is the original single loop. Set from the AGENT_ENGINE setting.
+    engine = "classic"
+
     def __init__(
         self,
         repo: SettingsRepository,
@@ -446,6 +449,10 @@ class AgentService:
         except (ValueError, AttributeError, TypeError) as exc:
             raise ValidationFailed("The earlier conversation couldn't be read. Start a new chat.") from exc
         # What the conversation has established so far (when another agent may have answered before), ahead of the message itself.
+        if self.engine == "graph":  # the agent as a workflow of nodes (see graphrun.py); the loop below is the classic fallback
+            from app.application.graphrun import GraphRunner
+
+            return await GraphRunner(self).run(who, token, agent, message, past, preface, channel, trigger=trigger, channel_id=channel_id, workspace=workspace, plan_for=plan_for, prepared=p)
         asked = f"{preface}\n\nThe person's latest message:\n{message}" if preface else message
         pkg = build_package(p.config, [t.spec for t in p.tools], p.context, asked)
         client = self._llm(sel["providerId"], p.settings.keys[sel["providerId"]])
@@ -508,7 +515,7 @@ class AgentService:
             raise NotFound("No such run.")
         return {
             **self._run_summary(r), "input": r.input, "output": r.output, "thinking": r.thinking, "userMessage": r.user_message,
-            "systemPrompt": r.system_prompt, "tools": r.tools, "steps": r.steps, "usage": r.usage, "channel": r.channel, "workspace": r.workspace,
+            "systemPrompt": r.system_prompt, "tools": r.tools, "steps": r.steps, "usage": r.usage, "channel": r.channel, "workspace": r.workspace, "trace": r.trace,
         }
 
     async def graph(self, who: Who, token: str, agent_id: str) -> dict[str, Any]:
