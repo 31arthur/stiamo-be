@@ -25,7 +25,7 @@ from stiamo_common.errors import ValidationFailed
 
 from app.application.runner import AgentRun, Step, run_agent
 from app.domain.dayplan import is_open
-from app.domain.flow import MAX_RUNS, TRIGGERS, Flow, FNode, default_flow, validate
+from app.domain.flow import MAX_RUNS, TRIGGERS, Flow, FNode, default_flow, entry_order, validate
 from app.domain.flow_expr import ExpressionError, resolve
 from app.domain.llm import AiError, Message
 from app.domain.prompt import build_package
@@ -152,6 +152,7 @@ class Run:
     def __init__(self, svc: Any, who: Any, token: str, agent: Any, prep: Any, past: list[Message], channel: str, trigger: str, channel_id: str | None, message: str, asked: str) -> None:
         self.svc, self.who, self.token, self.agent, self.prep, self.past, self.channel, self.trigger, self.channel_id = svc, who, token, agent, prep, past, channel, trigger, channel_id
         self.message, self.asked = message, asked
+        self.source = ""  # where the message came from beyond the channel: "orchestrator" when the master assistant handed it over
         self.vars: dict[str, Any] = {}
         self.results: dict[str, list[list[Item]]] = {}
         self.names: dict[str, str] = {}
@@ -187,7 +188,7 @@ async def _conditions(run: Run, n: FNode, item: Item, inputs: list[Item], key: s
 async def node_trigger(run: Run, n: FNode, inputs: list[Item]) -> list[list[Item]]:
     if n.type == "trigger.schedule":
         return [[{"json": {"message": run.message, "asked": run.asked, "workspace": run.workspace, "day": (datetime.now(UTC).date() + timedelta(days=1)).isoformat()}}]]
-    return [[{"json": {"message": run.message, "asked": run.asked, "workspace": run.workspace}}]]
+    return [[{"json": {"message": run.message, "asked": run.asked, "workspace": run.workspace, "source": run.source or run.trigger}}]]
 
 
 async def node_if(run: Run, n: FNode, inputs: list[Item]) -> list[list[Item]]:
@@ -469,7 +470,7 @@ async def node_respond(run: Run, n: FNode, inputs: list[Item]) -> list[list[Item
 
 
 NODES: dict[str, Any] = {
-    "trigger.chat": node_trigger, "trigger.schedule": node_trigger, "trigger.manual": node_trigger,
+    "trigger.chat": node_trigger, "trigger.telegram": node_trigger, "trigger.orchestrator": node_trigger, "trigger.schedule": node_trigger, "trigger.manual": node_trigger,
     "core.if": node_if, "core.switch": node_switch, "core.filter": node_filter, "core.set": node_set, "core.sort": node_sort, "core.limit": node_limit,
     "core.split_out": node_split, "core.aggregate": node_aggregate, "core.noop": node_noop, "core.stop": node_stop,
     "data.mail": node_mail, "data.mail_body": node_mail_body, "data.contacts": node_contacts,
@@ -485,12 +486,13 @@ class FlowRunner:
     def __init__(self, svc: Any) -> None:
         self._svc = svc
 
-    async def run(self, who: Any, token: str, agent: Any, message: str, past: list[Message], preface: str, channel: str, *, trigger: str, channel_id: str | None, prepared: Any, entry: str | None = None, resume: dict[str, Any] | None = None, choice: int = 0) -> AgentRun:
+    async def run(self, who: Any, token: str, agent: Any, message: str, past: list[Message], preface: str, channel: str, *, trigger: str, channel_id: str | None, prepared: Any, entry: str | None = None, resume: dict[str, Any] | None = None, choice: int = 0, source: str = "") -> AgentRun:
         svc = self._svc
         flow = flow_of(prepared.settings.flows, agent.id)
         asked = f"{preface}\n\nThe person's latest message:\n{message}" if preface else message
         run = Run(svc, who, token, agent, prepared, past, channel, trigger, channel_id, message, asked)
         run.names = {n.id: n.name for n in flow.nodes}
+        run.source = source
         from app.application.ports import RunRecord
         from app.application.services import MAX_INPUT_CHARS
 
@@ -499,7 +501,8 @@ class FlowRunner:
             run.vars = dict(resume.get("vars") or {})
             run.names = {**run.names, **(resume.get("names") or {})}
             run.results = {nid: [[{"json": j} for j in lane] for lane in lanes] for nid, lanes in (resume.get("results") or {}).items()}
-        start = flow.node(entry) if entry else next((n for n in flow.nodes if n.type in TRIGGERS and (trigger == "schedule") == (n.type == "trigger.schedule")), None) or next(n for n in flow.nodes if n.type in TRIGGERS)
+        order = entry_order(trigger, source)
+        start = flow.node(entry) if entry else min((n for n in flow.nodes if n.type in TRIGGERS), key=lambda n: order.index(n.type) if n.type in order else len(order))
         queue: deque[tuple[str, int, list[Item]]] = deque([(start.id, 0, [])])
         if resume:
             queue.clear()
