@@ -35,6 +35,16 @@ CLIP = 1200
 Item = dict[str, Any]
 
 
+def total_usage(runs: list[AgentRun]) -> dict[str, Any]:
+    """What the model calls of a run used, added up: tokens, and the cost when the provider reported one."""
+    out: dict[str, Any] = {"inputTokens": 0, "outputTokens": 0}
+    for r in runs:
+        for k, v in (r.usage or {}).items():
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                out[k] = out.get(k, 0) + v
+    return out
+
+
 def flow_of(stored: dict[str, Any], agent_id: str) -> Flow:
     """The agent's own workflow if it has one that can run, else the default. A stored one that no longer validates never breaks the agent."""
     raw = (stored or {}).get(agent_id)
@@ -462,15 +472,11 @@ class FlowRunner:
                 run.record.duration_ms = int((time.monotonic() - began) * 1000)
                 run.record.trace = run.trace
                 if failure is None:
-                    from app.application.graphrun import total_usage
-
                     run.record.steps = [s.to_log() for r in run.runs for s in r.steps]
                     run.record.output = run.final if run.final is not None else (run.runs[-1].answer if run.runs else "")
                     run.record.found_count = sum(len(r.found) for r in run.runs)
                     run.record.usage = total_usage(run.runs)
                 await svc._keep(run.record)
-        from app.application.graphrun import total_usage
-
         if not run.runs:
             return AgentRun(run.final or "", [], [], [], {"inputTokens": 0, "outputTokens": 0})
         steps: list[Step] = [s for r in run.runs for s in r.steps]

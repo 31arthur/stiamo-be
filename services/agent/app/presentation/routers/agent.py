@@ -109,31 +109,6 @@ async def get_agent(agent_id: str, agent: deps.Agent, me: deps.Me) -> dict[str, 
     return await agent.agent(me, agent_id)
 
 
-@router.get("/agents/{agent_id}/graph", summary="An agent as the nodes it is made of (trigger, scope, prompt, model, tools, answer), each tied to a setting that can be edited")
-async def agent_graph(agent_id: str, agent: deps.Agent, me: deps.Me, token: deps.Token) -> dict[str, Any]:
-    return await agent.graph(me, token, agent_id)
-
-
-class GraphBody(DomainModel):
-    nodes: list[dict[str, Any]] = Field(max_length=40)
-    edges: list[dict[str, Any]] = Field(max_length=160)
-
-
-@router.put("/agents/{agent_id}/graph", summary="Save an agent's workflow (only one that can run is kept)")
-async def set_agent_graph(agent_id: str, body: GraphBody, agent: deps.Agent, me: deps.Me, token: deps.Token) -> dict[str, Any]:
-    return await agent.set_graph(me, token, agent_id, body.model_dump())
-
-
-@router.post("/agents/{agent_id}/graph/check", summary="What is wrong with a workflow, without saving it")
-async def check_agent_graph(agent_id: str, body: GraphBody, agent: deps.Agent, me: deps.Me) -> dict[str, Any]:
-    return {"problems": await agent.check_graph(me, agent_id, body.model_dump())}
-
-
-@router.delete("/agents/{agent_id}/graph", summary="Back to the default workflow")
-async def reset_agent_graph(agent_id: str, agent: deps.Agent, me: deps.Me, token: deps.Token) -> dict[str, Any]:
-    return await agent.reset_graph(me, token, agent_id)
-
-
 class FlowBody(DomainModel):
     nodes: list[dict[str, Any]] = Field(max_length=70)
     connections: dict[str, Any] = Field(default_factory=dict)
