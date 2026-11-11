@@ -460,6 +460,193 @@ async def node_agent(run: Run, n: FNode, inputs: list[Item]) -> list[list[Item]]
     return [[{"json": {"text": out.answer, "cards": len(out.found), "tools": [s.call.name for s in out.steps], "model": f"{sel['providerId']}/{sel['modelId']}"}}]]
 
 
+# --- sorting mail: the older kind of agent's judging, as nodes ------------------------------------------------------------------------------
+
+MAX_SORT = 50
+
+
+def _mail_item(i: int, j: dict[str, Any]) -> Any:
+    """An item of the workflow as something to judge: its title and text (a mail's sender, subject and start), and who it is from."""
+    from app.domain.workflows import MAX_ITEM_CHARS
+    from app.domain.workflows import Item as Judged
+
+    address = str(j.get("fromAddress") or "").strip().lower()
+    name = str(j.get("from") or "").strip()
+    who = f"{name} <{address}>" if name and address and name != address else (address or name)
+    title = str(j.get("subject") or j.get("title") or j.get("name") or "(no subject)")[:120]
+    text = str(j.get("text") or "") or f"From: {who}\nSubject: {title}\n\n{j.get('snippet') or ''}"
+    return Judged(f"i{i}", title, text[:MAX_ITEM_CHARS], j.get("date"), {"from": address})
+
+
+def _sorter(run: Run) -> Any:
+    if run.svc.sorter is None:
+        raise ValidationFailed("Sorting isn't available here.")
+    return run.svc.sorter()
+
+
+def _model_of(p: dict[str, Any]) -> dict[str, Any] | None:
+    m = p.get("model")
+    return m if isinstance(m, dict) and m.get("modelId") else None
+
+
+async def node_classify(run: Run, n: FNode, inputs: list[Item]) -> list[list[Item]]:
+    """Gives each item one of the labels (or "not sure"): the same judging, thresholds and models as an agent of the older kind. One output for each
+    label, and the last for what it isn't sure about or couldn't read."""
+    p = resolve({k: v for k, v in n.parameters.items() if k not in ("labels", "prompt")}, run.scope(inputs))
+    labels = [{"name": str(x.get("name") or "").strip(), "description": str(x.get("description") or "").strip(), **({"threshold": float(x["threshold"])} if x.get("threshold") not in (None, "") else {})} for x in (n.parameters.get("labels") or []) if isinstance(x, dict)]
+    lanes: list[list[Item]] = [[] for _ in range(len(labels) + 1)]
+    chosen = inputs[:MAX_SORT]
+    if not chosen:
+        return lanes
+    outcomes = await _sorter(run).sort_items(
+        run.who, run.prep.settings, run.agent.id, [_mail_item(i, it["json"]) for i, it in enumerate(chosen)],
+        prompt=str(n.parameters.get("prompt") or ""), labels=labels, decider="jev" if p.get("decider") == "jev" else "model", decision_model=str(p.get("decisionModel") or "") or None,
+        batch_size=max(1, min(int(p.get("batchSize") or 1), 50)), default_threshold=float(p.get("threshold") if p.get("threshold") not in (None, "") else 0.7), selection=_model_of(p),
+    )
+    if outcomes and all(o.status == "failed" for o in outcomes):
+        raise ValidationFailed(f"Nothing could be judged: {outcomes[0].error}")
+    names = [x["name"] for x in labels]
+    by = {o.item.id: o for o in outcomes}
+    for i, it in enumerate(chosen):
+        o = by.get(f"i{i}")
+        base = dict(it["json"])
+        if o is None or o.status == "failed" or o.label is None or o.status == "needs_review":
+            lanes[-1].append({"json": {**base, "label": o.label if o else None, "confidence": round(o.confidence, 3) if o else 0.0, "reason": (o.error or o.reason) if o else "No answer.", "sure": False}})
+        else:
+            lanes[names.index(o.label)].append({"json": {**base, "label": o.label, "confidence": round(o.confidence, 3), "reason": o.reason, "sure": True}})
+    return lanes
+
+
+async def node_safe_senders(run: Run, n: FNode, inputs: list[Item]) -> list[list[Item]]:
+    """Keeps mail from people you trust out of the judging: the first output carries on, the second is what was kept and why. Your correspondents
+    are the addresses found in the mailbox's Sent folder."""
+    from app.domain.workflows import Rules, protected_by
+
+    p = n.parameters
+    rules = Rules(
+        protected_domains=[str(x).strip().lower().lstrip("@").removeprefix("*.") for x in (p.get("domains") or []) if str(x).strip()],
+        protected_phrases=[str(x).strip().lower() for x in (p.get("phrases") or []) if str(x).strip()],
+        protected_addresses=[str(x).strip().lower() for x in (p.get("addresses") or []) if "@" in str(x)],
+        protect_correspondents=p.get("correspondents", True) is not False,
+    )
+    known: dict[str, set[str]] = {}
+    go, kept = [], []
+    for k, it in enumerate(inputs):
+        j = it["json"]
+        account = str(j.get("account") or "")
+        if rules.protect_correspondents and account and account not in known:
+            try:
+                known[account] = {a.lower() for a in await run.prep.data.mail_correspondents(account)}
+            except AiError:
+                known[account] = set()
+        why = protected_by(_mail_item(k, j), rules, known.get(account, set()))
+        (kept if why else go).append({"json": {**j, **({"kept": why} if why else {})}})
+    return [go, kept]
+
+
+async def node_read(run: Run, n: FNode, inputs: list[Item]) -> list[list[Item]]:
+    """Opens each email in full and says what it is about, how urgent it is, what to do, and for the event route the date it names."""
+    p = n.parameters
+    route = str(p.get("route") or "attention")
+    route = route if route in ("attention", "event", "alert") else "attention"
+    out: list[Item] = []
+    for it in inputs[:10]:
+        j = it["json"]
+        email = _mail_item(0, j).text
+        folder = str(p.get("folder") or j.get("folder") or "INBOX")
+        full: dict[str, Any] = {}
+        if j.get("account") and j.get("uid") is not None:
+            try:  # the list only has the start of an email: a date or a deadline may be further down
+                full = await run.prep.data.mail_message(str(j["account"]), folder, int(j["uid"]))
+                sender = full.get("sender") or {}
+                email = f"From: {sender.get('name', '')} <{sender.get('address', '')}>\nSubject: {full.get('subject', '')}\n\n{str(full.get('text') or '')[:4000]}"
+            except (AiError, ValueError, TypeError):
+                pass
+        try:
+            parsed, _, _ = await _sorter(run).read_one(run.who, run.prep.settings, run.agent.id, prompt=str(p.get("prompt") or ""), route=route, email=email, selection=_model_of(p))
+        except AiError as exc:
+            raise ValidationFailed(str(getattr(exc, "message", None) or exc)) from exc
+        sender = full.get("sender") or {}
+        read = parsed or {"summary": str(j.get("subject") or "")[:200], "priority": "normal", "action": None, "due": None, "event": None, "note": "It couldn't be summarised."}
+        out.append({"json": {**j, **read, "folder": folder, "senderName": sender.get("name") or j.get("from") or "", "senderAddress": sender.get("address") or j.get("fromAddress") or "", "messageId": full.get("messageId") or "", "subject": full.get("subject") or j.get("subject")}})
+    return [out]
+
+
+async def node_trash(run: Run, n: FNode, inputs: list[Item]) -> list[list[Item]]:
+    """Moves emails to Trash, never deleting them. It asks first (one proposal for all of them, to approve in Needs me or with YES) unless the
+    node is set to move at once, and even then a workflow run by hand only proposes."""
+    p = n.parameters
+    rows = [it["json"] for it in inputs if it["json"].get("account") and it["json"].get("uid") is not None]
+    if not rows:
+        return [[{"json": {"moved": 0, "proposal": None}}]]
+    folder = str(p.get("folder") or "INBOX")
+    now = bool(p.get("auto")) and run.trigger != "manual"
+    by_account: dict[str, list[dict[str, Any]]] = {}
+    for r in rows:
+        by_account.setdefault(str(r["account"]), []).append(r)
+    if now:
+        moved = 0
+        for account, mine in by_account.items():
+            try:
+                moved += await run.prep.data.mail_trash(account, folder, [int(r["uid"]) for r in mine])
+            except AiError as exc:
+                raise ValidationFailed(str(getattr(exc, "message", None) or exc)) from exc
+        return [[{"json": {"moved": moved or len(rows), "proposal": None}}]]
+    propose = run.svc._proposer(run.who, run.agent.id, run.channel_id)
+    if propose is None:
+        raise ValidationFailed("Proposals aren't kept here, so this can't ask first.")
+    titles = [f"{str(r.get('subject') or '(no subject)')[:70]} · {r.get('from') or ''}" for r in rows]
+    pid = await propose("mail.trash", f"Move {len(rows)} email{'s' if len(rows) != 1 else ''} to Trash", titles[:12] + ([f"…and {len(rows) - 12} more"] if len(rows) > 12 else []), [{"trash": {"account": a, "folder": folder, "uids": [int(r["uid"]) for r in mine]}} for a, mine in by_account.items()])
+    if p.get("tell", True) and run.svc.notify is not None:
+        await run.svc.notify(run.who, run.workspace, f"🗑️ {len(rows)} email{'s' if len(rows) != 1 else ''} to move to Trash. Approve it in Needs me, or say YES.")
+    return [[{"json": {"moved": 0, "proposal": pid, "count": len(rows)}}]]
+
+
+async def node_alert(run: Run, n: FNode, inputs: list[Item]) -> list[list[Item]]:
+    """Pings the phone about each email (up to five), with what it says and a few replies to choose from. An email is only ever raised once."""
+    if run.svc.raise_alert is None:
+        raise ValidationFailed("Alerts aren't available here.")
+    out: list[Item] = []
+    for it in inputs[:5]:
+        j = it["json"]
+        if not j.get("account") or j.get("uid") is None:
+            continue
+        try:
+            raised = await run.svc.raise_alert(
+                run.who, run.token, workflow_id=run.agent.id, account_id=str(j["account"]), folder=str(j.get("folder") or "INBOX"), uid=int(j["uid"]), item_id=str(j.get("id") or f"{j['account']}:{j['uid']}"),
+                subject=str(j.get("subject") or ""), sender_name=str(j.get("senderName") or ""), sender_address=str(j.get("senderAddress") or j.get("fromAddress") or ""), message_id=str(j.get("messageId") or ""),
+                analysis={"summary": j.get("summary"), "priority": j.get("priority") or "high", "action": j.get("action"), "due": j.get("due"), "replies": j.get("replies")}, call=bool(n.parameters.get("call")),
+            )
+        except (AiError, ValueError, TypeError) as exc:
+            raise ValidationFailed(str(getattr(exc, "message", None) or exc)) from exc
+        out.append({"json": {**j, "alerted": raised is not None}})
+    return [out]
+
+
+async def node_event(run: Run, n: FNode, inputs: list[Item]) -> list[list[Item]]:
+    """Puts the event an email names in front of you to approve. Only an event that has a title and a date is proposed; nothing reaches the calendar
+    until you approve it."""
+    from app.domain.workflows import clean_event, event_to_meeting
+
+    propose = run.svc._proposer(run.who, run.agent.id, run.channel_id)
+    if propose is None:
+        raise ValidationFailed("Proposals aren't kept here, so an event can't be proposed.")
+    out: list[Item] = []
+    for it in inputs[:10]:
+        j = it["json"]
+        event = clean_event(j.get("event"))
+        if event is None:
+            continue
+        sender = f"{j.get('senderName') or ''} <{j.get('senderAddress') or ''}>".strip()
+        record = event_to_meeting(event, record_id=str(uuid.uuid4()), workspace=str(n.parameters.get("workspace") or run.workspace or "personal"), summary=str(j.get("summary") or ""), subject=str(j.get("subject") or ""), sender=sender)
+        pid = await propose("event.create", f"Add to the calendar: {event['title']}", [f"{event['date']} {event.get('start') or ''}".strip(), f"From the email “{j.get('subject') or ''}”"], [{"meeting": record}])
+        out.append({"json": {**j, "proposal": pid}})
+    if out and n.parameters.get("tell", True) and run.svc.notify is not None:
+        await run.svc.notify(run.who, run.workspace, f"📅 {len(out)} event{'s' if len(out) != 1 else ''} found in your mail. Approve in Needs me to add {'them' if len(out) != 1 else 'it'} to the calendar.")
+    return [out]
+
+
+
 async def node_merge(run: Run, n: FNode, inputs: list[Item]) -> list[list[Item]]:
     return [inputs]  # (the executor has already waited for both inputs and put their items together)
 
@@ -475,7 +662,7 @@ NODES: dict[str, Any] = {
     "core.split_out": node_split, "core.aggregate": node_aggregate, "core.noop": node_noop, "core.stop": node_stop,
     "data.mail": node_mail, "data.mail_body": node_mail_body, "data.contacts": node_contacts,
     "data.tasks": node_records, "data.follow_ups": node_records, "data.meetings": node_records, "data.hearings": node_records, "data.cases": node_records, "data.calendar": node_records, "data.drive": node_records,
-    "core.merge": node_merge, "msg.send": node_send, "msg.ask": node_ask, "msg.telegram": node_telegram, "msg.mail": node_mail_draft, "ai.agent": node_agent, "respond": node_respond,
+    "core.merge": node_merge, "msg.send": node_send, "msg.ask": node_ask, "msg.telegram": node_telegram, "msg.mail": node_mail_draft, "ai.classify": node_classify, "ai.read": node_read, "core.safe_senders": node_safe_senders, "msg.trash": node_trash, "msg.alert": node_alert, "msg.event": node_event, "ai.agent": node_agent, "respond": node_respond,
 }
 
 
@@ -615,7 +802,7 @@ def escape(text: str) -> str:
 
 
 #: Nodes that reach beyond the workflow (a message to your phone, a draft in your approvals): running one alone needs you to say so.
-SIDE_EFFECTS = ("msg.send", "msg.ask", "msg.mail", "msg.telegram")
+SIDE_EFFECTS = ("msg.send", "msg.ask", "msg.mail", "msg.telegram", "msg.trash", "msg.alert", "msg.event")
 
 
 async def run_one(svc: Any, who: Any, token: str, agent: Any, prepared: Any, node_id: str, items: list[dict[str, Any]] | None, confirm: bool) -> dict[str, Any]:

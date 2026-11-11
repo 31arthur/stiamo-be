@@ -1,6 +1,8 @@
 """Workflows the way n8n runs them: items pass between nodes, branches and loops, this app's data as nodes, a message to the phone, a trace of every node,
 and new agents created from template workflows."""
 
+import json
+
 import pytest
 from app.application.flowrun import NODES
 from app.domain.flow import CATALOG, Flow, validate
@@ -686,3 +688,90 @@ async def test_a_blank_agent_starts_from_just_a_trigger_and_an_answer_and_a_past
     assert (await rig.client.post(f"/v1/agent/agents/{imported.json()['id']}/flow/run", json={"message": "yo"}, headers=headers())).json()["answer"] == "yo!"
     broken = await rig.client.post("/v1/agent/agents", json={"name": "Broken", "flow": {"nodes": [n("a", "respond")], "connections": {}}}, headers=headers())
     assert broken.status_code >= 400  # no trigger: refused, not half-made
+
+
+LABELS = [{"name": "spam", "description": "Unwanted sales mail and newsletters."}, {"name": "keep", "description": "Real mail from real people."}]
+
+
+def verdict(label, confidence=0.95):
+    return ChatResult(json.dumps({"label": label, "confidence": confidence, "reason": "because"}))
+
+
+async def test_mail_is_kept_by_safe_senders_sorted_into_labels_and_only_proposed_for_trash(rig):
+    await planner_ready(rig)
+    nodes = [
+        n("t", "trigger.manual"), n("mail", "data.mail", days=400, limit=10), n("safe", "core.safe_senders", correspondents=True, domains=["client.io"]),
+        n("sort", "ai.classify", prompt="Sort my inbox.", labels=LABELS), n("trash", "msg.trash", tell=False), n("a", "respond", text="{{ $node.safe.count }} through, {{ $node.trash.first.count }} for Trash: {{ $node.trash.first.proposal }}"),
+    ]
+    c = wire(("t", 0, "mail"), ("mail", 0, "safe"), ("safe", 0, "sort"), ("sort", 0, "trash"), ("trash", 0, "a"))
+    assert (await put(rig, nodes, c)).status_code == 200
+    rig.script += [verdict("spam"), verdict("spam")]  # the two mails left once the rules have kept the friend (written to) and the client (a safe domain)
+    out = await run(rig)
+    trace = by_node(await last(rig))
+    assert trace["safe"]["outputs"] == [2, 2]  # 4 read: 2 go on, 2 kept
+    assert trace["sort"]["outputs"] == [2, 0, 0]  # spam, keep, not sure
+    assert len(rig.llm_log) == 2 and "Sort my inbox." in rig.llm_log[0]["system"]  # the older kind's prompt, thresholds and models
+    pid = out["answer"].rsplit(": ", 1)[1]
+    assert rig.data.trashed == []  # nothing moved: it asks first
+    waiting = next(p for p in (await rig.client.get("/v1/agent/proposals", headers=headers())).json()["items"] if p["id"] == pid)
+    assert waiting["title"] == "Move 2 emails to Trash"
+    assert (await rig.client.post(f"/v1/agent/proposals/{pid}/apply", headers=headers())).status_code == 200
+    assert sorted(rig.data.trashed) == [1, 3]
+
+
+async def test_a_label_the_model_is_unsure_about_goes_to_the_last_output_and_a_workflow_run_by_hand_never_trashes_at_once(rig):
+    await planner_ready(rig)
+    nodes = [
+        n("t", "trigger.manual"), n("mail", "data.mail", days=400, limit=1), n("sort", "ai.classify", prompt="Sort.", labels=LABELS, threshold=0.7),
+        n("trash", "msg.trash", auto=True, tell=False), n("a", "respond", text="spam"), n("b", "respond", text="not sure: {{ $json.reason }}"),
+    ]
+    await put(rig, nodes, wire(("t", 0, "mail"), ("mail", 0, "sort"), ("sort", 0, "trash"), ("trash", 0, "a"), ("sort", 2, "b")))
+    rig.script += [verdict("spam", 0.4)]  # under the threshold
+    assert (await run(rig))["answer"].startswith("not sure")
+    rig.script += [verdict("spam", 0.95)]
+    await run(rig)
+    assert rig.data.trashed == []  # auto only counts for a scheduled run: by hand it still asks
+
+
+async def test_a_scheduled_run_may_move_mail_to_trash_when_the_node_says_so(rig):
+    await planner_ready(rig)
+    nodes = [n("t", "trigger.schedule", time="07:30"), n("mail", "data.mail", days=400, limit=1), n("trash", "msg.trash", auto=True, tell=False), n("a", "respond", text="{{ $json.moved }}")]
+    await put(rig, nodes, wire(("t", 0, "mail"), ("mail", 0, "trash"), ("trash", 0, "a")))
+    assert (await run(rig, scheduled=True))["answer"] == "1" and rig.data.trashed == [4]
+
+
+async def test_reading_an_email_in_full_finds_its_event_and_proposes_it_for_the_calendar(rig):
+    await planner_ready(rig)
+    rig.data.bodies[4] = "Please join the review call on 2026-12-03 at 15:00."
+    analysis = {"summary": "A review call is proposed.", "priority": "high", "action": "Confirm", "due": None, "event": {"title": "Review call", "date": "2026-12-03", "start": "15:00", "end": None, "durationMinutes": 30, "location": None, "link": None, "mode": "virtual", "attendees": []}}
+    nodes = [n("t", "trigger.manual"), n("mail", "data.mail", days=400, limit=1), n("read", "ai.read", prompt="Mail that needs me.", route="event"), n("ev", "msg.event", tell=False), n("a", "respond", text="{{ $json.proposal }}")]
+    await put(rig, nodes, wire(("t", 0, "mail"), ("mail", 0, "read"), ("read", 0, "ev"), ("ev", 0, "a")))
+    rig.script += [ChatResult(json.dumps(analysis))]
+    pid = (await run(rig))["answer"]
+    assert pid and rig.data.meetings == []  # proposed, not in the calendar
+    assert "Prepare" not in rig.llm_log[0]["system"] and "Mail that needs me." in rig.llm_log[0]["system"] and "2026-12-03" in rig.llm_log[0]["last"]
+    assert (await rig.client.post(f"/v1/agent/proposals/{pid}/apply", headers=headers())).status_code == 200
+    assert rig.data.meetings[0]["title"] == "Review call" and rig.data.meetings[0]["slot"] == {"date": "2026-12-03", "start": 900, "duration": 30}
+
+
+async def test_the_sorting_nodes_say_what_is_missing_and_run_on_their_own_model(rig):
+    await planner_ready(rig)
+    await connect(rig, provider="gemini")
+    bad = [n("t", "trigger.manual"), n("sort", "ai.classify", prompt="", labels=[{"name": "only", "description": "x"}]), n("a", "respond")]
+    refused = await put(rig, bad, wire(("t", 0, "sort"), ("sort", 0, "a")))
+    assert refused.status_code >= 400 and "what the sorting is for" in refused.text and "between 2 and 12 labels" in refused.text
+    nodes = [n("t", "trigger.manual"), n("mail", "data.mail", days=400, limit=1), n("sort", "ai.classify", prompt="Sort.", labels=LABELS, model={"providerId": "gemini", "modelId": "gemini-test", "thinking": "off"}), n("a", "respond", text="{{ $json.label }}")]
+    await put(rig, nodes, wire(("t", 0, "mail"), ("mail", 0, "sort"), ("sort", 0, "a")))
+    rig.script += [verdict("spam")]
+    assert (await run(rig))["answer"] == "spam" and rig.llm_log[-1]["model"] == "gemini-test"
+
+
+async def test_an_alert_node_raises_each_email_once(rig):
+    await planner_ready(rig)
+    analysis = {"summary": "The court wants the fee today.", "priority": "high", "action": "Pay it", "due": None, "event": None, "replies": []}
+    nodes = [n("t", "trigger.manual"), n("mail", "data.mail", days=400, limit=1), n("read", "ai.read", prompt="Urgent mail.", route="alert"), n("al", "msg.alert"), n("a", "respond", text="{{ $json.alerted }}")]
+    await put(rig, nodes, wire(("t", 0, "mail"), ("mail", 0, "read"), ("read", 0, "al"), ("al", 0, "a")))
+    rig.script += [ChatResult(json.dumps(analysis))]
+    assert (await run(rig))["answer"] == "True"
+    rig.script += [ChatResult(json.dumps(analysis))]
+    assert (await run(rig))["answer"] == "False"  # the same email is never raised twice

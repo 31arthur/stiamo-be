@@ -62,6 +62,13 @@ class ProposalService:
         data = self._data(token)
         try:
             for op in p.ops:
+                if "trash" in op:  # mail a workflow wants moved to Trash (never deleted): approving it is what moves it
+                    t = op["trash"]
+                    await data.mail_trash(str(t["account"]), str(t.get("folder") or "INBOX"), [int(u) for u in t["uids"]])
+                    continue
+                if "meeting" in op:  # an event found in an email: approving it puts it in the calendar
+                    await data.create_meeting(dict(op["meeting"]))
+                    continue
                 if "mail" in op:  # an email drafted by a workflow: approving it is what sends it
                     await data.mail_send(str(op["mail"]["account"]), dict(op["mail"]["message"]))
                     continue

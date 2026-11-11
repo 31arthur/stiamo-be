@@ -355,7 +355,7 @@ class WorkflowService:
             out.append({"accountId": account, "count": len(found), "sample": found[:30], "error": None})
         return out
 
-    async def _decider(self, who: Who, cfg: WorkflowConfig, s: UserSettings, workflow_id: str | None) -> Decider:
+    async def _decider(self, who: Who, cfg: WorkflowConfig, s: UserSettings, workflow_id: str | None, selection: dict[str, Any] | None = None) -> Decider:
         """What decides, for one item or a batch. Raises ValidationFailed when the model it needs isn't set up."""
         names = [lb.name for lb in cfg.labels]
         batch_system = system_prompt(cfg, who.name, True)
@@ -388,9 +388,11 @@ class WorkflowService:
 
             return Decider(one, many, "openrouter", jev_model)
 
-        sel, _ = selection_of(s, workflow_id or "draft")
+        sel = selection or selection_of(s, workflow_id or "draft")[0]
         if not sel or not sel.get("modelId"):
             raise ValidationFailed("Choose a provider and a model for this agent first (Settings).")
+        if sel["providerId"] not in s.keys:
+            raise ValidationFailed(f"{sel['providerId']} has no key connected. Add one under Connections, or pick another model.")
         client = self._llm(sel["providerId"], s.keys[sel["providerId"]])
         model, thinking = sel["modelId"], sel.get("thinking", "off")
 
@@ -455,6 +457,21 @@ class WorkflowService:
                 return [outcome(item, v, ms) for item, v in zip(group, verdicts, strict=True) if v is not None]
 
         return [o for group in await asyncio.gather(*(chunk(g) for g in chunks)) for o in group], len(chunks)
+
+    # --- for a workflow on the canvas: the same judging, as nodes ----------------------------------------------------------
+
+    async def sort_items(self, who: Who, s: UserSettings, agent_id: str, items: list[Item], *, prompt: str, labels: list[dict[str, Any]], decider: str = "model", decision_model: str | None = None, batch_size: int = 1, default_threshold: float = 0.7, selection: dict[str, Any] | None = None) -> list[Outcome]:
+        """Decides which label each item belongs to, exactly as an agent of the older kind does: the same prompt, the same thresholds, the same
+        models. Returns one outcome per item (an item that couldn't be judged comes back failed)."""
+        cfg = self._config({"prompt": prompt, "labels": labels, "decider": decider, "decision_model": decision_model or None, "batch_size": batch_size, "default_threshold": default_threshold})
+        outcomes, _ = await self._decide_all(cfg, items, await self._decider(who, cfg, s, agent_id, selection))
+        return outcomes
+
+    async def read_one(self, who: Who, s: UserSettings, agent_id: str, *, prompt: str, route: str, email: str, selection: dict[str, Any] | None = None) -> tuple[dict[str, Any] | None, dict[str, int], float]:
+        """Reads one email that matters: what it is about, how urgent, what to do, and (for the event route) the date it names."""
+        cfg = self._config({"prompt": prompt, "labels": [{"name": "matters", "description": "Needs the owner's attention."}, {"name": "other", "description": "Anything else."}]})
+        read = await self._analyst(who, cfg, s, agent_id, selection)
+        return await read("matters", route, email)
 
     async def preview(self, who: Who, config: dict[str, Any]) -> dict[str, Any]:
         """Exactly what the model would be sent for this setup, filled with two example emails. Nothing is asked of any model."""
@@ -546,9 +563,9 @@ class WorkflowService:
             "durationMs": int((time.monotonic() - began) * 1000), "items": [o.to_json() for o in outcomes],
         }
 
-    async def _analyst(self, who: Who, cfg: WorkflowConfig, s: UserSettings, workflow_id: str | None):
+    async def _analyst(self, who: Who, cfg: WorkflowConfig, s: UserSettings, workflow_id: str | None, selection: dict[str, Any] | None = None):
         """Reads one email that matters and says what it is about. Needs a chat model: the decision model only chooses between labels."""
-        sel, _ = selection_of(s, workflow_id or "draft")
+        sel = selection or selection_of(s, workflow_id or "draft")[0]
         if not sel or not sel.get("modelId"):
             raise ValidationFailed("Choose a provider and a model in this agent's Settings: it reads the emails that matter, and the decision model can't write a summary or find a date.")
         client = self._llm(sel["providerId"], s.keys[sel["providerId"]])
