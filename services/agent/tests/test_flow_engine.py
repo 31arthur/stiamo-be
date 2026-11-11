@@ -435,3 +435,34 @@ async def test_ask_me_needs_two_to_four_answers_and_a_question(rig):
     ok = [n("t", "trigger.chat"), n("q", "msg.ask", text="Ok?", options=["a", "b", "c"]), n("a", "respond"), n("b", "respond"), n("c", "respond")]
     good = await rig.client.post(f"{F}/check", json={"nodes": ok, "connections": wire(("t", 0, "q"), ("q", 0, "a"), ("q", 1, "b"), ("q", 2, "c"))}, headers=headers())
     assert good.json()["problems"] == []
+
+
+# --- weekdays ---------------------------------------------------------------------------------------------------------------------
+
+
+async def test_a_schedule_runs_only_on_the_weekdays_ticked_by_the_clock_of_its_time_zone(rig):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from app.application.services import Who
+    from app.presentation.deps import build_services, flow_run
+
+    await planner_ready(rig)
+    seed(rig)
+    nodes, conns = scheduled()
+    today = datetime.now(ZoneInfo("Asia/Kolkata")).weekday()
+    nodes[0]["parameters"]["days"] = [today, (today + 1) % 7]
+    assert (await put(rig, nodes, conns)).status_code == 200
+    who = Who("u1", "arjun@example.com")
+    async with rig.app.state.session_factory() as session:
+        agent, _ = build_services(rig.app, session)
+        listed = await agent.schedules(who)
+    assert listed == [{"agent": "daily-planner", "node": "t", "time": "07:30", "timezone": "Asia/Kolkata", "days": sorted([today, (today + 1) % 7])}]
+    before = len((await rig.client.get(f"{PLANNER}/runs", headers=headers())).json()["items"])
+    await flow_run(rig.app, who, "daily-planner", "t", [(today + 1) % 7], "Asia/Kolkata")()  # not today: it does nothing
+    assert len((await rig.client.get(f"{PLANNER}/runs", headers=headers())).json()["items"]) == before
+    await flow_run(rig.app, who, "daily-planner", "t", [today], "Asia/Kolkata")()  # today: it runs
+    assert len((await rig.client.get(f"{PLANNER}/runs", headers=headers())).json()["items"]) == before + 1
+    nodes[0]["parameters"]["days"] = []
+    await put(rig, nodes, conns)
+    assert rig.app.state.flowsched.keys("u1|") == []  # no day ticked: nothing is scheduled

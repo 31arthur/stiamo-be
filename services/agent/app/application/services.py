@@ -614,7 +614,7 @@ class AgentService:
         out = await FlowRunner(self).run(who, token, agent, wait["message"], [], "", "the schedule", trigger="reply", channel_id=wait.get("channel"), prepared=p, resume=wait, choice=choice)
         return out.answer or f"✅ Got it: {wait['options'][choice]}."
 
-    async def schedules(self, who: Who) -> list[dict[str, str]]:
+    async def schedules(self, who: Who) -> list[dict[str, Any]]:
         """The schedule triggers of this person's workflows that are switched on: [{agent, node, time, timezone}], so each can run by itself at its time."""
         from app.application.dayplans import parse_time, zone_of
         from app.domain.flow import Flow
@@ -637,7 +637,10 @@ class AgentService:
                         zone_of(tz)
                     except ValidationFailed:
                         continue  # a time or zone that can't be read doesn't run (the editor says so)
-                    out.append({"agent": agent_id, "node": n.id, "time": at, "timezone": tz})
+                    days = n.parameters.get("days")
+                    days = sorted({int(d) for d in days if str(d).isdigit() and 0 <= int(d) <= 6}) if isinstance(days, list) else list(range(7))
+                    if days:  # (no days ticked: it never runs)
+                        out.append({"agent": agent_id, "node": n.id, "time": at, "timezone": tz, "days": days})
         return out
 
     async def check_flow(self, who: Who, agent_id: str, raw: Any) -> list[str]:

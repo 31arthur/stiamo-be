@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import logging
 from collections.abc import AsyncIterator
-from typing import Annotated
+from datetime import datetime
+from typing import Annotated, Any
+from zoneinfo import ZoneInfo
 
 from fastapi import Depends, FastAPI, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -146,10 +148,13 @@ def reminder_check(app: FastAPI, who: Who):
     return run_once
 
 
-def flow_run(app: FastAPI, who: Who, agent_id: str, node_id: str):
-    """One scheduled run of a workflow, from its schedule trigger: its own session and a fresh token for the owner (nobody is signed in at 7am)."""
+def flow_run(app: FastAPI, who: Who, agent_id: str, node_id: str, days: list[int] | None = None, timezone: str = "Asia/Kolkata"):
+    """One scheduled run of a workflow, from its schedule trigger: its own session and a fresh token for the owner (nobody is signed in at 7am).
+    It runs only on the weekdays ticked (0 is Monday), by the clock in the node's time zone."""
 
     async def run_once() -> None:
+        if days is not None and datetime.now(ZoneInfo(timezone)).weekday() not in days:
+            return
         async with app.state.session_factory() as session:
             try:
                 agent, _ = build_services(app, session)
@@ -162,7 +167,7 @@ def flow_run(app: FastAPI, who: Who, agent_id: str, node_id: str):
     return run_once
 
 
-def apply_schedules(app: FastAPI, who: Who, schedules: list[dict[str, str]]) -> None:
+def apply_schedules(app: FastAPI, who: Who, schedules: list[dict[str, Any]]) -> None:
     """Starts, moves or stops a person's workflow schedules to match what their workflows say."""
     mgr = app.state.flowsched
     prefix = f"{who.user_id}|"
@@ -171,7 +176,7 @@ def apply_schedules(app: FastAPI, who: Who, schedules: list[dict[str, str]]) -> 
         if key not in wanted:
             mgr.stop(key)
     for key, s in wanted.items():
-        mgr.ensure(key, s["time"], s["timezone"], flow_run(app, who, s["agent"], s["node"]))
+        mgr.ensure(key, s["time"], s["timezone"], flow_run(app, who, s["agent"], s["node"], s.get("days"), s["timezone"]))
 
 
 def sync_reminders(app: FastAPI, who: Who, enabled: bool) -> None:
