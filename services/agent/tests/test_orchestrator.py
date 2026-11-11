@@ -133,18 +133,18 @@ async def test_the_assistant_on_a_phone_keeps_one_thread_that_the_web_app_shows_
     c = await telegram(rig, agent="assistant")
     await send(rig, c, f"/start {c['pairingCode']}", chat=555, update=1)
     rig.script += [ChatResult("Call Hemla first.")]
-    await send(rig, c, "who should I call tomorrow?", chat=555, update=2)
+    await send(rig, c, "who should I call tomorrow at S&B?", chat=555, update=2)
     reply = rig.telegram.sent[-1][1]
-    assert reply.startswith("Call Hemla first.") and strip_markup(reply).rstrip().endswith("— Follow-up chaser") and "<i>— Follow-up chaser</i>" in reply
+    assert reply.startswith("Call Hemla first.") and strip_markup(reply).rstrip().endswith("— Follow-up chaser · S&B") and "<i>— Follow-up chaser · S&amp;B</i>" in reply  # signed with the workspace it worked in
     rig.script += [ChatResult("Then the labour office.")]
     await send(rig, c, "and after that?", chat=555, update=3)
-    assert "who should I call tomorrow?" in rig.llm_log[-1]["last"]  # the second message knows the first
+    assert "who should I call tomorrow at S&B?" in rig.llm_log[-1]["last"]  # the second message knows the first (same workspace, no need to say it again)
     threads = (await rig.client.get(C, headers=headers())).json()["items"]
-    assert len(threads) == 1 and threads[0]["title"].startswith("Telegram: who should I call") and threads[0]["turns"] == 2
+    assert len(threads) == 1 and threads[0]["title"].startswith("Telegram: who should I call") and threads[0]["turns"] == 2 and threads[0]["workspace"] == "sb"
     await send(rig, c, "/new", chat=555, update=4)
     assert "Started a new conversation" in rig.telegram.sent[-1][1]
     rig.script += [ChatResult("Plan: nothing much.")]
-    await send(rig, c, "plan my day", chat=555, update=5)
+    await send(rig, c, "plan my day at S&B", chat=555, update=5)
     assert len((await rig.client.get(C, headers=headers())).json()["items"]) == 2  # a new thread; the old one is kept
 
 
@@ -153,14 +153,14 @@ async def test_a_phone_chat_that_has_been_quiet_overnight_starts_fresh(rig):
     c = await telegram(rig, agent="assistant")
     await send(rig, c, f"/start {c['pairingCode']}", chat=555, update=1)
     rig.script += [ChatResult("First.")]
-    await send(rig, c, "who should I call tomorrow?", chat=555, update=2)
+    await send(rig, c, "who should I call tomorrow at S&B?", chat=555, update=2)
     old = (datetime.now(UTC) - timedelta(hours=20)).replace(tzinfo=None)
     async with rig.app.state.session_factory() as s:
         await s.execute(text("update agent_conversations set updated_at = :t"), {"t": old})
         await s.commit()
     rig.script += [ChatResult("Second.")]
-    await send(rig, c, "plan my day", chat=555, update=3)
-    assert "who should I call tomorrow?" not in rig.llm_log[-1]["last"]  # yesterday's talk is not in it
+    await send(rig, c, "plan my day at S&B", chat=555, update=3)
+    assert "who should I call tomorrow at S&B?" not in rig.llm_log[-1]["last"]  # yesterday's talk is not in it
     assert len((await rig.client.get(C, headers=headers())).json()["items"]) == 2
 
 
@@ -171,7 +171,7 @@ async def test_a_yes_on_the_phone_still_saves_what_the_assistants_agent_proposed
     c = await telegram(rig, agent="assistant")
     await send(rig, c, f"/start {c['pairingCode']}", chat=555, update=1)
     rig.script += [ChatResult("", [ToolCall("a", "add_task", {"title": "Call Hemla"})]), ChatResult("Proposed.")]
-    await send(rig, c, "add a task to call Hemla tomorrow", chat=555, update=2)
+    await send(rig, c, "add a task to call Hemla tomorrow at S&B", chat=555, update=2)
     assert "Reply <b>YES</b>" in rig.telegram.sent[-1][1] and rig.data.saved == []
     await send(rig, c, "yes", chat=555, update=3)
     assert rig.telegram.sent[-1][1].startswith("Saved:") and [t for t, _ in rig.data.saved] == ["tasks"]

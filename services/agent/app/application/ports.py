@@ -225,6 +225,8 @@ class RunRecord:
     version: int = 0
     #: The agent's name at the time, for the usage history.
     agent_name: str = ""
+    #: The workspace it ran under (its data was limited to that one); empty when it saw every workspace.
+    workspace: str = ""
 
 
 @dataclass

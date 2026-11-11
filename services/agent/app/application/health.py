@@ -81,7 +81,7 @@ class HealthService:
             ws = c.get("workspace")
             purpose = {"mail": " · mail alerts", "planner": " · daily plan"}.get(c.get("role") or "", "")
             label = f"Telegram · {NAMES.get(ws, ws)}{purpose}" + ("" if purpose else " assistant") if ws else "Telegram · general bot"
-            sees = f"Sees only {NAMES.get(ws, ws)}." if ws else "Sees every workspace: tasks, plans and reminders of all of them. Limit it to one workspace if it is for one."
+            sees = f"Sees only {NAMES.get(ws, ws)}." if ws else "The master assistant: it works out which workspace each message is about, keeps each workspace's information apart, and gets the plans, alerts and reminders of all of them."
             paired = len(c.get("paired") or [])
             if paired:
                 out.append(check(f"tg-{c['id']}", "Phone", label, "ok", f"@{c.get('username', '')} · {paired} chat{'s' if paired != 1 else ''} linked. {sees}", None, {"kind": "channel", "id": c["id"]}))

@@ -41,6 +41,26 @@ def words(text: str) -> set[str]:
     return {w for w in re.findall(r"[a-z0-9\-]+", text.lower()) if w not in _STOP and len(w) > 2}
 
 
+#: Words that say which workspace a message is about. A message with words of one workspace and none of the others is about that one.
+WORKSPACE_WORDS: dict[str, tuple[str, ...]] = {
+    "sb": ("s&b", "s & b", "s and b", "sb ", " sb", "legal", "court", "hearing", "case", "advocate", "affidavit", "petition", "counsel", "judge"),
+    "fsa": ("fsa", "software", "tech", "invoice", "sprint", "deploy", "client project", "developer"),
+    "personal": ("personal", "passport", "family", "home", "doctor", "bills", "holiday"),
+}
+EVERYTHING = ("all workspaces", "every workspace", "all of them", "everything", "across all", "all my workspaces")
+
+
+def workspace_of(message: str) -> str | None:
+    """The workspace a message is about, from its words: "sb", "fsa", "personal" or "all"; None when it doesn't say (or says two)."""
+    text = f" {message.lower()} "
+    if any(w in text for w in EVERYTHING):
+        return "all"
+    hits = {ws: sum(1 for w in words if w in text) for ws, words in WORKSPACE_WORDS.items()}
+    best = max(hits.values())
+    top = [ws for ws, n in hits.items() if n == best]
+    return top[0] if best and len(top) == 1 else None
+
+
 def is_follow_up(message: str) -> bool:
     """Whether a message goes on from the last answer rather than starting something new: short, or opening with a word that continues."""
     m = message.strip().lower()

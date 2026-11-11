@@ -109,6 +109,11 @@ async def get_agent(agent_id: str, agent: deps.Agent, me: deps.Me) -> dict[str, 
     return await agent.agent(me, agent_id)
 
 
+@router.get("/agents/{agent_id}/graph", summary="An agent as the nodes it is made of (trigger, scope, prompt, model, tools, answer), each tied to a setting that can be edited")
+async def agent_graph(agent_id: str, agent: deps.Agent, me: deps.Me, token: deps.Token) -> dict[str, Any]:
+    return await agent.graph(me, token, agent_id)
+
+
 @router.put("/agents/{agent_id}/selection", status_code=status.HTTP_204_NO_CONTENT, summary="Choose the provider, model and thinking level for an agent")
 async def set_selection(agent_id: str, body: SelectionBody, agent: deps.Agent, me: deps.Me) -> Response:
     await agent.set_selection(me, agent_id, body.provider_id, body.model_id, body.thinking)

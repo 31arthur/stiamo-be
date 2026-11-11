@@ -4,7 +4,7 @@ import logging
 import time
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -155,6 +155,10 @@ class Prepared:
     config: PromptConfig
     tools: list[Tool]
     context: dict[str, Any]
+    #: Which pack each tool came from.
+    packs: dict[str, str] = field(default_factory=dict)
+    #: The workspace the data was limited to ("" for none).
+    scope: str = ""
 
 
 class AgentService:
@@ -370,15 +374,18 @@ class AgentService:
             data = ScopedData(data, scope)  # a workspace's assistant sees that workspace's data only
         ctx = PackContext(data, today, decisions, decision.get("modelId") or DECISION_MODELS[0]["id"], lambda: self._waiting(who, scope), self._proposer(who, agent.id, channel_id), channel != "the evening plan", scope)
         tools: list[Tool] = []
+        tool_packs: dict[str, str] = {}
         context: dict[str, Any] = {"today": today, "user": who.name, "channel": channel}
         for name in agent.packs:
             pack = self._registry.packs.get(name)
-            tools += await pack.tools(ctx)
+            made = await pack.tools(ctx)
+            tools += made
+            tool_packs.update({t.spec.name: name for t in made})
             context.update(await pack.context(ctx))
         names = [t.spec.name for t in tools]
         if len(names) != len(set(names)):
             raise RuntimeError(f"Agent {agent.id!r} gets the same tool name from two packs: {sorted({n for n in names if names.count(n) > 1})}")
-        return Prepared(s, prompt or self._prompt(agent, s), tools, context)
+        return Prepared(s, prompt or self._prompt(agent, s), tools, context, tool_packs, scope or "")
 
     def _proposer(self, who: Who, agent_id: str, channel_id: str | None):
         """What an agent's propose tools call to keep a proposal for the person to approve. None when proposals aren't kept here."""
@@ -446,7 +453,7 @@ class AgentService:
         record = RunRecord(
             id=str(uuid.uuid4()), user_id=who.user_id, agent_id=agent.id, trigger=trigger, status="ok", started_at=datetime.now(UTC),
             provider=sel["providerId"], model=sel["modelId"], thinking=sel.get("thinking", "off"), input=message[:MAX_INPUT_CHARS],
-            user_message=pkg.user[:MAX_INPUT_CHARS * 2], system_prompt=pkg.system, tools=[t.name for t in pkg.tools], channel=channel_id, agent_name=agent.name,
+            user_message=pkg.user[:MAX_INPUT_CHARS * 2], system_prompt=pkg.system, tools=[t.name for t in pkg.tools], channel=channel_id, agent_name=agent.name, workspace=p.scope,
         )
         began = time.monotonic()
         try:
@@ -501,8 +508,36 @@ class AgentService:
             raise NotFound("No such run.")
         return {
             **self._run_summary(r), "input": r.input, "output": r.output, "thinking": r.thinking, "userMessage": r.user_message,
-            "systemPrompt": r.system_prompt, "tools": r.tools, "steps": r.steps, "usage": r.usage, "channel": r.channel,
+            "systemPrompt": r.system_prompt, "tools": r.tools, "steps": r.steps, "usage": r.usage, "channel": r.channel, "workspace": r.workspace,
         }
+
+    async def graph(self, who: Who, token: str, agent_id: str) -> dict[str, Any]:
+        """An agent as the nodes it is made of, the way a workflow editor shows it. The graph is the agent's real configuration, not a copy:
+        each node says which stored setting it edits, so changing a node changes how the agent runs. Nothing here is run."""
+        agent = self._registry.get(agent_id)
+        s = await self._load(who)
+        p = await self._prepare(who, token, agent, "the web app")
+        summary = self._summary(agent, s)
+        overrides = p.config.tools
+        tool_nodes = []
+        for t in p.tools:
+            o = overrides.get(t.spec.name)
+            tool_nodes.append({
+                "id": f"tool:{t.spec.name}", "type": "tool", "label": t.spec.name, "pack": p.packs.get(t.spec.name, ""),
+                "config": {"enabled": o.enabled if o else True, "description": (o.description if o and o.description else t.spec.description), "default": t.spec.description},
+            })
+        triggers = ["Chat in the app", "Telegram and WhatsApp"] + (["Evening plan (scheduled)"] if agent.id == "daily-planner" else [])
+        where = s.workspaces.get(agent.id, list(agent.workspaces))
+        nodes: list[dict[str, Any]] = [
+            {"id": "trigger", "type": "trigger", "label": "Starts when", "config": {"triggers": triggers}},
+            {"id": "scope", "type": "scope", "label": "Workspace scope", "config": {"workspaces": where, "rule": "Every run is limited to the one workspace it is about; nothing from another reaches the model."}},
+            {"id": "prompt", "type": "prompt", "label": "Prompt", "config": {"system": p.config.system, "inputTemplate": p.config.input_template, "variables": self._registry.variables(agent), "default": {"system": agent.system, "inputTemplate": agent.input_template}}},
+            {"id": "model", "type": "model", "label": "Model", "config": {"selection": summary.get("selection"), "inherited": summary.get("selectionInherited", False), "maxSteps": self._max_steps}},
+            *tool_nodes,
+            {"id": "output", "type": "output", "label": "Answer", "config": {"delivers": ["The answer, written for the chat", "Cards the tools found (plans, cases, proposals…)", "Proposals you approve with YES or a button"]}},
+        ]
+        edges = [{"from": "trigger", "to": "scope"}, {"from": "scope", "to": "prompt"}, {"from": "prompt", "to": "model"}, {"from": "model", "to": "output"}, *({"from": t["id"], "to": "model"} for t in tool_nodes)]
+        return {"agentId": agent.id, "name": agent.name, "nodes": nodes, "edges": edges}
 
     async def clear_runs(self, who: Who, agent_id: str) -> int:
         await self._known(who, agent_id)

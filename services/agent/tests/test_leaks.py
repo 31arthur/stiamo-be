@@ -79,8 +79,8 @@ async def test_each_workspace_bot_sends_its_model_only_its_own_workspaces_data(r
     await team_ready(rig)
     seed(rig)
     general = await connect_bot(rig, "123:abc", 555)
-    seen_general = await ask_bot(rig, general, 555, 2)
-    assert all(c in seen_general for c in CANARY.values())  # the control: the general bot sees everything, so the search can find a leak
+    seen_general = await ask_bot(rig, general, 555, 2, "Plan my day across all workspaces")
+    assert all(c in seen_general for c in CANARY.values())  # the control: asked to look at everything, the master sees everything, so the search can find a leak
     for n, ws in enumerate(("sb", "fsa", "personal")):
         c = await connect_bot(rig, f"{n}00:ws{n}", 600 + n, workspace=ws)
         seen = await ask_bot(rig, c, 600 + n, 2)
@@ -122,7 +122,7 @@ async def test_an_assistant_thread_begun_under_another_scope_is_not_carried_on(r
     await team_ready(rig)
     seed(rig)
     c = await connect_bot(rig, "123:abc", 555)  # the assistant, as the general bot
-    assert "FSX-" in await ask_bot(rig, c, 555, 2)
+    assert "FSX-" in await ask_bot(rig, c, 555, 2, "Plan my day across all workspaces")
     await rig.client.put(f"{CH}/{c['id']}/scope", json={"workspace": "sb"}, headers=headers())
     after = await ask_bot(rig, c, 555, 3, "Plan my day again")
     assert_clean(after, "sb", "the assistant after it was limited to S&B")  # a new thread: nothing the old one held (it had said FSX-…) is in the preface
@@ -251,7 +251,7 @@ async def test_the_bots_scope_is_in_the_channel_list_and_health(rig):
     assert (listed[c["id"]]["scope"], listed[c["id"]]["role"]) == ("sb", "planner") and (listed[g["id"]]["scope"], listed[g["id"]]["role"]) == ("all", "assistant")
     items = {i["id"]: i for i in (await rig.client.get("/v1/agent/health", headers=headers())).json()["items"]}
     assert "Sees only S&B" in items[f"tg-{c['id']}"]["detail"] and "daily plan" in items[f"tg-{c['id']}"]["label"]
-    assert "Sees every workspace" in items[f"tg-{g['id']}"]["detail"]
+    assert "master assistant" in items[f"tg-{g['id']}"]["detail"]
 
 
 async def test_a_mail_or_plan_bot_needs_a_workspace(rig):
@@ -322,3 +322,92 @@ async def test_what_one_workspace_books_becomes_busy_time_for_the_next(rig):
     assert "SBX-" not in saw  # and FSA's planner was never told what the busy time is
     _, said = await propose(rig, fsa, 602, 3, "t-fsa", 1080)  # 18:00 is free
     assert "FSX-task" in said
+
+
+async def test_an_agent_is_shown_as_nodes_tied_to_its_real_settings_and_a_run_records_its_workspace(rig):
+    await team_ready(rig)
+    seed(rig)
+    g = (await rig.client.get("/v1/agent/agents/daily-planner/graph", headers=headers())).json()
+    kinds = [n["type"] for n in g["nodes"]]
+    assert kinds[:4] == ["trigger", "scope", "prompt", "model"] and kinds[-1] == "output" and kinds.count("tool") >= 5
+    tools = {n["label"]: n for n in g["nodes"] if n["type"] == "tool"}
+    assert {"day_agenda", "propose_schedule"} <= set(tools) and tools["day_agenda"]["pack"] == "agenda" and tools["day_agenda"]["config"]["enabled"] is True
+    assert {"from": "tool:day_agenda", "to": "model"} in g["edges"] and {"from": "model", "to": "output"} in g["edges"]
+    prompt = next(n for n in g["nodes"] if n["type"] == "prompt")["config"]
+    assert "Daily Planner" in prompt["system"] and "tomorrow" in prompt["variables"]
+    # a tool switched off in the prompt settings shows as a disabled node: the graph is the agent's real configuration
+    saved = (await rig.client.get("/v1/agent/agents/daily-planner", headers=headers())).json()["prompt"]
+    await rig.client.put("/v1/agent/agents/daily-planner/prompt", json={**saved, "tools": {"free_time": {"enabled": False}}}, headers=headers())
+    g = (await rig.client.get("/v1/agent/agents/daily-planner/graph", headers=headers())).json()
+    assert next(n for n in g["nodes"] if n["id"] == "tool:free_time")["config"]["enabled"] is False
+
+    # a run under a workspace records it, and shows it in the run detail
+    sb = await connect_bot(rig, "456:def", 556, workspace="sb")
+    await ask_bot(rig, sb, 556, 2)
+    runs = (await rig.client.get("/v1/agent/agents/daily-planner/runs", headers=headers())).json()["items"]
+    detail = (await rig.client.get(f"/v1/agent/runs/{runs[0]['id']}", headers=headers())).json()
+    assert detail["workspace"] == "sb"
+
+
+# --- one master bot: it works out the workspace of each message, and keeps each one's information apart ----------------------------
+
+
+def test_the_workspace_a_message_is_about_is_read_from_its_words():
+    from app.domain.orchestrator import workspace_of
+
+    assert workspace_of("what hearings does S&B have tomorrow") == "sb" and workspace_of("send the invoice to the FSA client") == "fsa"
+    assert workspace_of("renew my passport") == "personal" and workspace_of("what is pending across all workspaces") == "all"
+    assert workspace_of("what is pending?") is None and workspace_of("hearing about the FSA") is None  # words of two workspaces: not guessed
+
+
+async def test_one_master_bot_works_in_the_workspace_each_message_is_about_and_never_mixes_them(rig):
+    await team_ready(rig)
+    seed(rig)
+    master = await connect_bot(rig, "123:abc", 555)  # the one bot: no workspace
+    sb_saw = await ask_bot(rig, master, 555, 2, "Plan my day for S&B")
+    assert CANARY["sb"] in sb_saw
+    assert_clean(sb_saw, "sb", "the master, asked about S&B")
+    sticky = await ask_bot(rig, master, 555, 3, "and what else is pending?")  # no workspace named: it stays in S&B
+    assert_clean(sticky, "sb", "the master, carrying on")
+    fsa_saw = await ask_bot(rig, master, 555, 4, "now the same for FSA")
+    assert CANARY["fsa"] in fsa_saw
+    assert_clean(fsa_saw, "fsa", "the master, asked about FSA")  # not even from the S&B talk just before: its context is S&B's thread
+    assert "SBX-" not in fsa_saw
+    reply = [t for _, t in rig.telegram.sent if "Daily planner" in t or "Follow-up" in t]
+    assert any("· S&amp;B" in t for t in reply) and any("· FSA" in t for t in reply)  # each answer says which workspace it worked in
+    threads = (await rig.client.get("/v1/agent/conversations", headers=headers())).json()["items"]
+    assert sorted(t["workspace"] for t in threads) == ["fsa", "sb"]  # a thread per workspace under the one chat
+
+
+async def test_the_master_asks_which_workspace_when_it_cannot_tell_then_answers_in_that_one(rig):
+    from .test_availability import press
+
+    await team_ready(rig)
+    seed(rig)
+    master = await connect_bot(rig, "123:abc", 555)
+    start = len(rig.llm_log)
+    rig.telegram.keyboards.clear()
+    await say(rig, master, "plan my day", 555, 2)
+    assert len(rig.llm_log) == start  # nothing reached a model: it asked first
+    assert rig.telegram.sent[-1][1] == "🗂️ Which workspace is that for?"
+    keys = [b["callback_data"] for row in rig.telegram.keyboards[-1] for b in row]
+    assert [k.split(":")[1] for k in keys] == ["sb", "fsa", "personal", "all"]
+    rig.script += [ChatResult("", [ToolCall("a", "day_agenda", {"date": TOMORROW}), ToolCall("b", "upcoming", {})]), ChatResult("Here is FSA's day.")]
+    await press(rig, master, next(k for k in keys if k.startswith("ws:fsa:")), 3, chat=555)
+    seen = "\n".join(e["everything"] for e in rig.llm_log[start:])
+    assert "plan my day" in seen and CANARY["fsa"] in seen
+    assert_clean(seen, "fsa", "the master, after FSA was chosen")
+    assert "Here is FSA's day." in rig.telegram.sent[-1][1] and "· FSA" in rig.telegram.sent[-1][1]
+    await press(rig, master, next(k for k in keys if k.startswith("ws:fsa:")), 4, chat=555)  # pressed again: the question is gone
+    assert "out of date" in rig.telegram.sent[-1][1]
+
+
+async def test_a_new_conversation_on_the_master_clears_every_workspaces_thread(rig):
+    await team_ready(rig)
+    seed(rig)
+    master = await connect_bot(rig, "123:abc", 555)
+    await ask_bot(rig, master, 555, 2, "Plan my day for S&B")
+    await say(rig, master, "/new", 555, 3)
+    assert "Started a new conversation" in rig.telegram.sent[-1][1]
+    again = await ask_bot(rig, master, 555, 4, "what else is pending?")  # no recent workspace any more: it asks rather than guessing
+    assert again == "" and rig.telegram.sent[-1][1] == "🗂️ Which workspace is that for?"
