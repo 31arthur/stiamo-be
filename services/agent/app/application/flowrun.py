@@ -320,6 +320,27 @@ async def node_send(run: Run, n: FNode, inputs: list[Item]) -> list[list[Item]]:
     return [[{"json": {"sent": sent, "text": texts[0] if texts else ""}}]]
 
 
+async def node_ask(run: Run, n: FNode, inputs: list[Item]) -> list[list[Item]]:
+    """Asks on the phone and stops here. The question is kept with everything the rest of the workflow needs; the button pressed carries on from the
+    matching output (see AgentService.resume_flow). Nothing waits in memory, so it survives a restart."""
+    p = n.parameters
+    sc = run.scope(inputs)
+    text = str(resolve(p.get("text") or "", sc)).strip()
+    options = [str(o).strip() for o in (p.get("options") or [])][:4]
+    short = uuid.uuid4().hex[:8]
+    state = {
+        "agent": run.agent.id, "node": n.id, "options": options, "text": text, "message": run.message, "asked": run.asked, "workspace": run.workspace, "channel": run.channel_id,
+        "vars": run.vars, "names": run.names, "item": _first(inputs), "at": datetime.now(UTC).isoformat(timespec="seconds"),
+        "results": {nid: [[i["json"] for i in lane] for lane in outs] for nid, outs in run.results.items()},
+    }
+    await run.svc.park_wait(run.who, short, state)
+    sent = await run.svc.ask_phone(run.who, run.workspace, text, [[{"text": o, "callback_data": f"fw:{i}:{short}"}] for i, o in enumerate(options)]) if run.svc.ask_phone is not None else 0
+    if not sent:
+        await run.svc.drop_wait(run.who, short)
+        raise ValidationFailed("Nothing was asked: no Telegram chat is linked to send the question to.")
+    return [[] for _ in options]
+
+
 async def node_agent(run: Run, n: FNode, inputs: list[Item]) -> list[list[Item]]:
     svc, prep, agent = run.svc, run.prep, run.agent
     p = n.parameters
@@ -365,7 +386,7 @@ NODES: dict[str, Any] = {
     "core.split_out": node_split, "core.aggregate": node_aggregate, "core.noop": node_noop, "core.stop": node_stop,
     "data.mail": node_mail, "data.mail_body": node_mail_body, "data.contacts": node_contacts,
     "data.tasks": node_records, "data.follow_ups": node_records, "data.meetings": node_records, "data.hearings": node_records, "data.cases": node_records, "data.calendar": node_records, "data.drive": node_records,
-    "core.merge": node_merge, "msg.send": node_send, "ai.agent": node_agent, "respond": node_respond,
+    "core.merge": node_merge, "msg.send": node_send, "msg.ask": node_ask, "ai.agent": node_agent, "respond": node_respond,
 }
 
 
@@ -376,7 +397,7 @@ class FlowRunner:
     def __init__(self, svc: Any) -> None:
         self._svc = svc
 
-    async def run(self, who: Any, token: str, agent: Any, message: str, past: list[Message], preface: str, channel: str, *, trigger: str, channel_id: str | None, prepared: Any, entry: str | None = None) -> AgentRun:
+    async def run(self, who: Any, token: str, agent: Any, message: str, past: list[Message], preface: str, channel: str, *, trigger: str, channel_id: str | None, prepared: Any, entry: str | None = None, resume: dict[str, Any] | None = None, choice: int = 0) -> AgentRun:
         svc = self._svc
         flow = flow_of(prepared.settings.flows, agent.id)
         asked = f"{preface}\n\nThe person's latest message:\n{message}" if preface else message
@@ -386,8 +407,17 @@ class FlowRunner:
         from app.application.services import MAX_INPUT_CHARS
 
         run.record = RunRecord(id=str(uuid.uuid4()), user_id=who.user_id, agent_id=agent.id, trigger=trigger, status="ok", started_at=datetime.now(UTC), input=message[:MAX_INPUT_CHARS], channel=channel_id, agent_name=agent.name, workspace=prepared.scope)
+        if resume:  # carrying on from an Ask me node: what the earlier nodes produced is restored, and the answer picks the output
+            run.vars = dict(resume.get("vars") or {})
+            run.names = {**run.names, **(resume.get("names") or {})}
+            run.results = {nid: [[{"json": j} for j in lane] for lane in lanes] for nid, lanes in (resume.get("results") or {}).items()}
         start = flow.node(entry) if entry else next((n for n in flow.nodes if n.type in TRIGGERS and (trigger == "schedule") == (n.type == "trigger.schedule")), None) or next(n for n in flow.nodes if n.type in TRIGGERS)
         queue: deque[tuple[str, int, list[Item]]] = deque([(start.id, 0, [])])
+        if resume:
+            queue.clear()
+            answer = {"json": {**(resume.get("item") or {}), "answer": resume["options"][choice], "question": resume["text"], "choice": choice}}
+            for t in flow.targets(resume["node"], choice):
+                queue.append((t["node"], t["index"], [answer]))
         waiting: dict[str, dict[int, list[Item]]] = {}
         loops: dict[str, dict[str, Any]] = {}
         began, runs, failure = time.monotonic(), 0, None

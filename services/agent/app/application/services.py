@@ -177,6 +177,8 @@ class AgentService:
     engine = "flow"
     #: Sends text to the person's phone for a workflow's Send a message node: (who, workspace, text) -> how many chats it reached. Set where the channels are.
     notify: Any = None
+    #: Asks a question with buttons on the phone: (who, workspace, text, buttons) -> how many chats it reached. For an Ask me node.
+    ask_phone: Any = None
 
     def __init__(
         self,
@@ -580,6 +582,37 @@ class AgentService:
         run = await self.chat(who, token, agent_id, message.strip() or "Run", [], "the web app", trigger="schedule" if scheduled else "manual")
         latest = await self._runs.recent(who.user_id, agent_id, limit=1)
         return {"answer": run.answer, "runId": latest[0].id if latest else None}
+
+    # --- workflows that asked a question and are waiting for the answer ------------------------------------------------------
+
+    WAIT_DAYS = 2
+
+    async def park_wait(self, who: Who, short: str, state: dict[str, Any]) -> None:
+        s = await self._load(who)
+        floor = (datetime.now(UTC) - timedelta(days=self.WAIT_DAYS)).isoformat()
+        s.flow_waits = {**{k: v for k, v in s.flow_waits.items() if str(v.get("at", "")) >= floor}, short: state}
+        await self._repo.save(s)
+
+    async def drop_wait(self, who: Who, short: str) -> None:
+        s = await self._load(who)
+        s.flow_waits = {k: v for k, v in s.flow_waits.items() if k != short}
+        await self._repo.save(s)
+
+    async def resume_flow(self, who: Who, token: str, short: str, choice: int) -> str:
+        """A button under an Ask me question was pressed: the workflow carries on from that answer's output. Returns what to tell the person."""
+        from app.application.flowrun import FlowRunner
+
+        s = await self._load(who)
+        wait = s.flow_waits.get(short)
+        floor = (datetime.now(UTC) - timedelta(days=self.WAIT_DAYS)).isoformat()
+        if wait is None or str(wait.get("at", "")) < floor or not 0 <= choice < len(wait.get("options", [])):
+            raise ValidationFailed("That question is out of date. Run the workflow again if it still matters.")
+        s.flow_waits = {k: v for k, v in s.flow_waits.items() if k != short}  # answered once: a second tap does nothing
+        await self._repo.save(s)
+        agent = await self._def(who, wait["agent"])
+        p = await self._prepare(who, token, agent, "the schedule", channel_id=wait.get("channel"), workspace=wait.get("workspace") or None)
+        out = await FlowRunner(self).run(who, token, agent, wait["message"], [], "", "the schedule", trigger="reply", channel_id=wait.get("channel"), prepared=p, resume=wait, choice=choice)
+        return out.answer or f"✅ Got it: {wait['options'][choice]}."
 
     async def schedules(self, who: Who) -> list[dict[str, str]]:
         """The schedule triggers of this person's workflows that are switched on: [{agent, node, time, timezone}], so each can run by itself at its time."""

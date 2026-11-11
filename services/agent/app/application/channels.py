@@ -51,6 +51,10 @@ PRESS_ACKS = {
     "ws:fsa": "Asking FSA…",
     "ws:personal": "Asking Personal…",
     "ws:all": "Looking across everything…",
+    "fw:0": "Got it…",
+    "fw:1": "Got it…",
+    "fw:2": "Got it…",
+    "fw:3": "Got it…",
     "av:c": "Noting you can take calls…",
     "av:f": "Noting you're free…",
     "av:b": "Noting you're busy…",
@@ -359,14 +363,14 @@ class ChannelService:
         sent = await self.push(who, text("telegram", TELEGRAM_MAX), buttons, workspace, f"{workspace} plan", kind="plan", role="planner")
         return len(sent)
 
-    async def tell(self, who: Who, workspace: str, text: str, kind: str = "message") -> int:
+    async def tell(self, who: Who, workspace: str, text: str, kind: str = "message", buttons: list[list[dict[str, str]]] | None = None) -> int:
         """A plain message about a workspace to the phone it belongs to (its own bot, else the master bot). Returns how many chats it reached."""
         import html as _html
 
         _, own = await self._audience(who, workspace or None, "assistant")
         if own:
-            return len(await self.push(who, _html.escape(text), None, workspace, text[:80], kind=kind, role="assistant"))
-        return await self.announce(who, text, kind=kind, summary=text[:80])
+            return len(await self.push(who, _html.escape(text), buttons, workspace, text[:80], kind=kind, role="assistant"))
+        return await self.announce(who, text, kind=kind, summary=text[:80], buttons=buttons)
 
     async def phone_for(self, who: Who, workspace: str) -> str:
         """Where an email alert about a workspace would arrive: its own email bot ("workspace"), the general bot ("general"), or nowhere ("none"):
@@ -625,6 +629,9 @@ class ChannelService:
             await self._strip(token, chat, message)
             reply = await self._ask_in(c, who, f"{c.kind}:{c.id}:{pending['sender']}:{action}", pending["text"], action, "Telegram", TELEGRAM_MAX, "telegram", master=True)
             return reply, None, True
+        if kind == "fw":
+            await self._strip(token, chat, message)
+            return await self._agent.resume_flow(who, access, rest, int(action))
         if kind == "av" and self.availability_actions is not None:
             await self._strip(token, chat, message)
             return availability_confirmation(await self.availability_actions.answer(who, access, action, rest))

@@ -145,6 +145,8 @@ class UserSettings:
     flows: dict[str, Any] = field(default_factory=dict)
     #: Agents the person created from workflows: {agent_id: {name, description, system, packs, suggestions}}.
     custom_agents: dict[str, Any] = field(default_factory=dict)
+    #: Workflows paused at an Ask me node, waiting for a button on the phone: {short id: what is needed to carry on}. See flowrun.py.
+    flow_waits: dict[str, Any] = field(default_factory=dict)
 
 
 class SettingsRepository(ABC):

@@ -36,6 +36,7 @@ class SettingsModel(Base):
     graphs: Mapped[dict[str, Any] | None] = mapped_column(Json)
     flows: Mapped[dict[str, Any] | None] = mapped_column(Json)
     custom_agents: Mapped[dict[str, Any] | None] = mapped_column(Json)
+    flow_waits: Mapped[dict[str, Any] | None] = mapped_column(Json)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime)
 
 
