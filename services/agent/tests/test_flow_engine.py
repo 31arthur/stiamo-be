@@ -466,3 +466,88 @@ async def test_a_schedule_runs_only_on_the_weekdays_ticked_by_the_clock_of_its_t
     nodes[0]["parameters"]["days"] = []
     await put(rig, nodes, conns)
     assert rig.app.state.flowsched.keys("u1|") == []  # no day ticked: nothing is scheduled
+
+
+# --- pinned data, one node at a time, and drafts that need your approval -------------------------------------------------------------
+
+
+def pinned_flow():
+    nodes = [n("t", "trigger.manual"), n("tasks", "data.tasks"), n("agg", "core.aggregate", field="title"), n("a", "respond", text="{{ join($json.title, ',') }}")]
+    nodes[1]["pinData"] = [{"title": "Pinned A"}, {"title": "Pinned B"}]
+    return nodes, wire(("t", 0, "tasks"), ("tasks", 0, "agg"), ("agg", 0, "a"))
+
+
+async def test_pinned_data_stands_in_for_a_node_when_a_workflow_is_run_by_hand_but_never_in_a_real_run(rig):
+    await planner_ready(rig)
+    seed(rig)
+    nodes, conns = pinned_flow()
+    saved = (await put(rig, nodes, conns)).json()
+    assert next(x for x in saved["nodes"] if x["id"] == "tasks")["pinData"] == [{"title": "Pinned A"}, {"title": "Pinned B"}]
+    assert (await run(rig))["answer"] == "Pinned A,Pinned B"  # by hand: the pinned items, the node never ran
+    assert by_node(await last(rig))["tasks"]["pinned"] is True
+    assert (await run(rig, scheduled=True))["answer"] == "SBX-task,FSX-task,PEX-task"  # a real run ignores the pin
+    bad = [dict(x) for x in nodes]
+    bad[1]["pinData"] = "not items"
+    assert (await put(rig, bad, conns)).status_code == 422
+
+
+async def test_one_node_can_be_run_alone_with_given_or_pinned_items_and_a_node_that_sends_needs_confirming(rig):
+    await planner_ready(rig)
+    seed(rig)
+    c = await master(rig)
+    nodes = [n("t", "trigger.manual"), n("s", "core.set", fields=[{"name": "shout", "value": "{{ upper($json.title) }}"}]), n("tasks", "data.tasks"), n("say", "msg.send", text="Hi {{ $json.title }}"), n("a", "respond")]
+    nodes[2]["pinData"] = [{"title": "pinned task"}]
+    conns = wire(("t", 0, "tasks"), ("tasks", 0, "s"), ("s", 0, "say"), ("say", 0, "a"))
+    assert (await put(rig, nodes, conns)).status_code == 200
+    one = f"{F}/node"
+    given = (await rig.client.post(one, json={"nodeId": "s", "items": [{"title": "abc"}]}, headers=headers())).json()
+    assert given["outputs"] == [[{"title": "abc", "shout": "ABC"}]] and given["itemsIn"] == 1 and "error" not in given
+    fed = (await rig.client.post(one, json={"nodeId": "s"}, headers=headers())).json()  # no items: what is pinned on the node leading into it
+    assert fed["outputs"] == [[{"title": "pinned task", "shout": "PINNED TASK"}]]
+    real = (await rig.client.post(one, json={"nodeId": "tasks"}, headers=headers())).json()  # a data node reads the real data
+    assert len(real["outputs"][0]) == 3
+    broken = (await rig.client.post(one, json={"nodeId": "s", "items": [{"title": "x"}]}, headers=headers())).json()
+    assert "error" not in broken
+    rig.telegram.sent.clear()
+    assert (await rig.client.post(one, json={"nodeId": "say", "items": [{"title": "Z"}]}, headers=headers())).status_code == 422
+    assert rig.telegram.sent == []  # nothing was sent without confirming
+    ok = await rig.client.post(one, json={"nodeId": "say", "items": [{"title": "Z"}], "confirm": True}, headers=headers())
+    assert ok.status_code == 200 and [t for chat, t in rig.telegram.sent if chat == 555] == ["Hi Z"] and c
+    assert (await rig.client.post(one, json={"nodeId": "nope"}, headers=headers())).status_code == 422
+
+
+async def test_an_email_drafted_by_a_workflow_is_sent_only_when_it_is_approved(rig):
+    await planner_ready(rig)
+    seed(rig)
+    nodes = [n("t", "trigger.manual"), n("m", "msg.mail", to="h@client.org", subject="About the hearing", text="Dear Hemla, the hearing is tomorrow.", tell=False), n("a", "respond", text="{{ $json.proposal }}")]
+    assert (await put(rig, nodes, wire(("t", 0, "m"), ("m", 0, "a")))).status_code == 200
+    pid = (await run(rig))["answer"]
+    assert pid and rig.data.mail_sent == []  # drafted, not sent
+    waiting = (await rig.client.get("/v1/agent/proposals", headers=headers())).json()["items"]
+    card = next(p for p in waiting if p["id"] == pid)
+    assert card["title"] == "Email to h@client.org: About the hearing" and "Dear Hemla" in " ".join(card["lines"])
+    assert (await rig.client.post(f"/v1/agent/proposals/{pid}/apply", headers=headers())).status_code == 200
+    assert rig.data.mail_sent == [("acc1", {"to": ["h@client.org"], "subject": "About the hearing", "text": "Dear Hemla, the hearing is tomorrow."})]
+    assert (await rig.client.post(f"/v1/agent/proposals/{pid}/apply", headers=headers())).json()["status"] == "applied" and len(rig.data.mail_sent) == 1  # once
+
+
+async def test_a_draft_to_something_that_is_not_an_address_or_with_no_mailbox_or_text_fails_clearly(rig):
+    await planner_ready(rig)
+    seed(rig)
+    base = [n("t", "trigger.manual"), n("a", "respond")]
+
+    async def attempt(**p):
+        nodes = [base[0], n("m", "msg.mail", **p), base[1]]
+        assert (await put(rig, nodes, wire(("t", 0, "m"), ("m", 0, "a")))).status_code == 200
+        r = await rig.client.post(RUN, json={}, headers=headers())
+        return r.status_code, r.json().get("error", {}).get("message", "")
+
+    code, msg = await attempt(to="not-an-address", subject="x", text="hi")
+    assert code == 422 and "isn't an email address" in msg
+    code, msg = await attempt(to="a@b.org", subject="x", text="")
+    assert code == 422 and "no text" in msg
+    rig.data.accounts = []
+    code, msg = await attempt(to="a@b.org", subject="x", text="hi")
+    assert code == 422 and "no mailbox" in msg
+    assert (await put(rig, [base[0], n("m", "msg.mail", subject="x", text="y"), base[1]], wire(("t", 0, "m"), ("m", 0, "a")))).status_code == 422  # no recipient: refused at save
+    assert rig.data.mail_sent == []

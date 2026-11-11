@@ -643,6 +643,13 @@ class AgentService:
                         out.append({"agent": agent_id, "node": n.id, "time": at, "timezone": tz, "days": days})
         return out
 
+    async def run_flow_node(self, who: Who, token: str, agent_id: str, node_id: str, items: list[dict[str, Any]] | None, confirm: bool) -> dict[str, Any]:
+        from app.application.flowrun import run_one
+
+        agent = await self._def(who, agent_id)
+        p = await self._prepare(who, token, agent, "the web app")
+        return await run_one(self, who, token, agent, p, node_id, items, confirm)
+
     async def check_flow(self, who: Who, agent_id: str, raw: Any) -> list[str]:
         from app.domain.flow import Flow, validate
 

@@ -13,6 +13,7 @@ from __future__ import annotations
 import html
 import json
 import logging
+import re
 import time
 import uuid
 from collections import deque
@@ -341,6 +342,32 @@ async def node_ask(run: Run, n: FNode, inputs: list[Item]) -> list[list[Item]]:
     return [[] for _ in options]
 
 
+_EMAIL = re.compile(r"^[^@\s,;]+@[^@\s,;]+\.[^@\s,;]+$")
+
+
+async def node_mail_draft(run: Run, n: FNode, inputs: list[Item]) -> list[list[Item]]:
+    """Writes an email and keeps it as a proposal. Nothing is sent: approving the proposal (in Needs me, or YES on the phone) sends it, from this
+    workspace's mailbox."""
+    p = resolve(n.parameters, run.scope(inputs))
+    to = [a.strip() for a in re.split(r"[,;]", str(p.get("to") or "")) if a.strip()]
+    if not to or any(not _EMAIL.match(a) for a in to):
+        raise ValidationFailed(f"“{', '.join(to) or 'nobody'}” isn't an email address to write to.")
+    boxes = await run.prep.data.mail_accounts()
+    if not boxes:
+        raise ValidationFailed("This workspace has no mailbox to send from.")
+    box = next((b for b in boxes if str(b.get("id")) == str(p.get("account") or "")), boxes[0])
+    subject, text = str(p.get("subject") or "").strip()[:200], str(p.get("text") or "").strip()
+    if not text:
+        raise ValidationFailed("The email has no text.")
+    propose = run.svc._proposer(run.who, run.agent.id, run.channel_id)
+    if propose is None:
+        raise ValidationFailed("Proposals aren't kept here, so a draft can't be made.")
+    pid = await propose("mail.send", f"Email to {', '.join(to)}: {subject or '(no subject)'}", [f"From {box.get('address') or box.get('label') or 'your mailbox'}", f"Subject: {subject}", text[:400]], [{"mail": {"account": str(box["id"]), "message": {"to": to, "subject": subject, "text": text}}}])
+    if p.get("tell", True) and run.svc.notify is not None:
+        await run.svc.notify(run.who, run.workspace, f"✉️ Draft ready for {', '.join(to)}: “{subject or text[:40]}”. Approve it in Needs me to send it.")
+    return [[{"json": {"proposal": pid, "to": to, "subject": subject, "text": text}}]]
+
+
 async def node_agent(run: Run, n: FNode, inputs: list[Item]) -> list[list[Item]]:
     svc, prep, agent = run.svc, run.prep, run.agent
     p = n.parameters
@@ -386,7 +413,7 @@ NODES: dict[str, Any] = {
     "core.split_out": node_split, "core.aggregate": node_aggregate, "core.noop": node_noop, "core.stop": node_stop,
     "data.mail": node_mail, "data.mail_body": node_mail_body, "data.contacts": node_contacts,
     "data.tasks": node_records, "data.follow_ups": node_records, "data.meetings": node_records, "data.hearings": node_records, "data.cases": node_records, "data.calendar": node_records, "data.drive": node_records,
-    "core.merge": node_merge, "msg.send": node_send, "msg.ask": node_ask, "ai.agent": node_agent, "respond": node_respond,
+    "core.merge": node_merge, "msg.send": node_send, "msg.ask": node_ask, "msg.mail": node_mail_draft, "ai.agent": node_agent, "respond": node_respond,
 }
 
 
@@ -448,6 +475,9 @@ class FlowRunner:
                 try:
                     if node.disabled or node.type == "core.note":
                         outs = [items]
+                    elif node.pinned is not None and trigger == "manual":  # a hand-run uses the data pinned on the node instead of running it
+                        outs = [[{"json": dict(j)} for j in node.pinned]] + [[] for _ in range(max(node.outputs(), 1) - 1)]
+                        row["pinned"] = True
                     elif node.type == "core.loop":
                         size = max(1, int(node.parameters.get("batchSize") or 1))
                         st = loops.get(nid)
@@ -515,3 +545,33 @@ class FlowRunner:
 
 def escape(text: str) -> str:
     return html.escape(text)
+
+
+#: Nodes that reach beyond the workflow (a message to your phone, a draft in your approvals): running one alone needs you to say so.
+SIDE_EFFECTS = ("msg.send", "msg.ask", "msg.mail")
+
+
+async def run_one(svc: Any, who: Any, token: str, agent: Any, prepared: Any, node_id: str, items: list[dict[str, Any]] | None, confirm: bool) -> dict[str, Any]:
+    """Runs a single node of the saved workflow with the items you give (or, without any, the data pinned on the nodes leading into it) and says
+    what came out, without making a run of it. The other nodes' pinned data is what `$node[...]` sees."""
+    flow = flow_of(prepared.settings.flows, agent.id)
+    node = flow.node(node_id)
+    if node is None or node.type == "core.note":
+        raise ValidationFailed("That node isn't in the saved workflow. Save first.")
+    if node.type in SIDE_EFFECTS and not confirm:
+        raise ValidationFailed("This node sends something outside the workflow. Run it with the confirm option if you mean it.")
+    run = Run(svc, who, token, agent, prepared, [], "the web app", "manual", None, "Test message", "Test message")
+    run.names = {n.id: n.name for n in flow.nodes}
+    run.results = {n.id: [[{"json": dict(j)} for j in (n.pinned or [])]] for n in flow.nodes if n.pinned is not None}
+    if items is not None:
+        given = [{"json": dict(i)} for i in items[:50]]
+    else:
+        feeders = [src for src, outs in flow.connections.items() for o in outs for t in o if t["node"] == node_id]
+        given = [{"json": dict(j)} for src in feeders for j in ((flow.node(src).pinned or []) if flow.node(src) else [])]
+    t0 = time.monotonic()
+    try:
+        outs = await NODES[node.type](run, node, given) if node.type in NODES else [given]
+        error = None
+    except (ExpressionError, ValidationFailed, AiError) as exc:
+        outs, error = [], str(getattr(exc, "message", None) or exc)
+    return {"outputs": [[i["json"] for i in o[:SAMPLE * 10]] for o in outs], "itemsIn": len(given), "ms": int((time.monotonic() - t0) * 1000), **({"error": error} if error else {})}
