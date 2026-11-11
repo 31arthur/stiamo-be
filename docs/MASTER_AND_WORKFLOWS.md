@@ -34,3 +34,17 @@ The master assistant is drawn at the top of Agents (All workspaces) as its own f
 ## Deploying
 
 `./deploy.sh` runs migration `agent 0019` (a run records the workspace it ran under).
+
+## Deleting the old agents' traces (run once, by hand)
+
+The old run history (every prompt, input, tool call and answer) and the saved chat threads are not needed by the new approach. They are **not** deleted automatically on startup, because that would be permanent and would repeat on every restart. Run this once on the VPS after the new image is up:
+
+```bash
+# shows how many rows it would delete, and deletes nothing
+docker compose -f deploy/docker-compose.prod.yml exec agent python -m app.scripts.purge_traces
+
+# deletes them
+docker compose -f deploy/docker-compose.prod.yml exec agent python -m app.scripts.purge_traces --yes
+```
+
+It keeps what is in use: each agent's model, prompt and workspace settings, connected bots, API keys, the cost and usage ledger (the Usage page), proposals and plans waiting for your approval, the delivery log, and the Task Force agents with their runs. Add `--include-usage` to clear the cost ledger too. There is no undo, so take a database backup first if in doubt (`pg_dump` of `stiamo_agent`).
