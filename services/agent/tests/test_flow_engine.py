@@ -634,3 +634,39 @@ async def test_an_ai_node_whose_provider_has_no_key_says_so(rig):
     await put(rig, nodes, wire(("t", 0, "ai"), ("ai", 0, "a")))
     r = await rig.client.post(RUN, json={"message": "hi"}, headers=headers())
     assert r.status_code >= 400 and "no key connected" in r.text and not rig.llm_log
+
+
+async def test_a_run_starts_from_the_trigger_that_matches_where_the_message_came_from():
+    from app.domain.flow import entry_order
+
+    both = ["trigger.chat", "trigger.telegram", "trigger.orchestrator"]
+    pick = lambda trigger, source="": min(both, key=lambda t: entry_order(trigger, source).index(t))  # noqa: E731
+    assert pick("telegram") == "trigger.telegram" and pick("telegram", "orchestrator") == "trigger.orchestrator"
+    assert pick("chat") == "trigger.chat" and pick("assistant") == "trigger.chat" and pick("whatsapp") == "trigger.chat"
+    assert entry_order("schedule")[0] == "trigger.schedule" and entry_order("manual")[0] == "trigger.manual"
+
+
+async def test_several_triggers_on_one_workflow_each_start_their_own_branch(rig):
+    await planner_ready(rig)
+    nodes = [
+        n("c", "trigger.chat"), n("o", "trigger.orchestrator"), n("tg", "trigger.telegram"),
+        n("fromchat", "core.set", fields=[{"name": "via", "value": "chat"}]), n("fromboss", "core.set", fields=[{"name": "via", "value": "orchestrator"}]),
+        n("a", "respond", text="{{ $json.via }} / {{ $json.source }}"),
+    ]
+    c = wire(("c", 0, "fromchat"), ("o", 0, "fromboss"), ("fromchat", 0, "a"), ("fromboss", 0, "a"))
+    assert (await put(rig, nodes, c)).status_code == 200  # a trigger with nothing after it is fine; two lead into the answer
+    assert (await run(rig, "hi"))["answer"].startswith("chat /")
+
+
+async def test_a_message_the_master_assistant_hands_over_starts_the_orchestrator_trigger(rig):
+    from .test_orchestrator import C, say, start, team_ready
+
+    await team_ready(rig)
+    chaser = "/v1/agent/agents/follow-up-chaser"
+    nodes = [n("c", "trigger.chat"), n("o", "trigger.orchestrator"), n("rc", "respond", text="from the chat trigger"), n("ro", "respond", text="from the orchestrator trigger: {{ $json.source }}")]
+    assert (await put(rig, nodes, wire(("c", 0, "rc"), ("o", 0, "ro")), agent=chaser)).status_code == 200
+    conv = await start(rig, "all")
+    handed = await say(rig, conv["id"], "Who should I call tomorrow?")
+    assert handed["agentId"] == "follow-up-chaser" and handed["answer"].startswith("from the orchestrator trigger: orchestrator")
+    direct = await rig.client.post(f"{chaser}/flow/run", json={"message": "hi"}, headers=headers())
+    assert direct.json()["answer"] == "from the chat trigger"  # run by hand: not handed over by anyone

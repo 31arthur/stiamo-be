@@ -22,6 +22,8 @@ OPS = ("contains", "not_contains", "equals", "not_equals", "matches", "empty", "
 #: type -> (group, label, what it does). The order is the order of the node palette.
 CATALOG: dict[str, tuple[str, str, str]] = {
     "trigger.chat": ("Triggers", "When a message comes in", "Starts the workflow with what was asked, from the app's chat, Telegram or WhatsApp."),
+    "trigger.telegram": ("Triggers", "On a Telegram message", "Starts the workflow when a message arrives on a Telegram bot linked to this agent. Without one, the chat trigger answers Telegram too."),
+    "trigger.orchestrator": ("Triggers", "When called by the orchestrator", "Starts the workflow when the master assistant hands it a message. Without one, the chat trigger answers it."),
     "trigger.schedule": ("Triggers", "On a schedule", "Starts the workflow at a set time of day (the evening plan uses this)."),
     "trigger.manual": ("Triggers", "Run it by hand", "Starts the workflow when you press Run."),
     "core.if": ("Flow", "If", "Sends each item to “true” or “false” by a condition."),
@@ -54,7 +56,15 @@ CATALOG: dict[str, tuple[str, str, str]] = {
     "ai.agent": ("AI", "AI agent", "A model that reads, calls the tools you give it and answers."),
     "respond": ("Output", "Answer", "Ends the run with the answer to give."),
 }
-TRIGGERS = ("trigger.chat", "trigger.schedule", "trigger.manual")
+TRIGGERS = ("trigger.chat", "trigger.telegram", "trigger.orchestrator", "trigger.schedule", "trigger.manual")
+
+
+def entry_order(trigger: str, source: str = "") -> list[str]:
+    """Which trigger types a run starts from, best first: where the message came from decides, and a workflow with only some of them still runs
+    (from the first that is there, a schedule trigger last)."""
+    first = {"orchestrator": ["trigger.orchestrator"], "telegram": ["trigger.telegram"], "schedule": ["trigger.schedule"], "manual": ["trigger.manual"]}
+    wanted = first.get(source) or first.get(trigger) or []
+    return [*wanted, "trigger.chat", "trigger.manual", "trigger.telegram", "trigger.orchestrator", "trigger.schedule"] if trigger != "schedule" else ["trigger.schedule", "trigger.chat", "trigger.manual", "trigger.telegram", "trigger.orchestrator"]
 
 
 @dataclass

@@ -470,7 +470,7 @@ class AgentService:
 
     async def chat(
         self, who: Who, token: str, agent_id: str, message: str, history: list[dict[str, Any]] | None = None, channel: str = "the web app",
-        *, trigger: str = "chat", channel_id: str | None = None, preface: str = "", workspace: str | None = None, plan_for: str | None = None, entry: str | None = None,
+        *, trigger: str = "chat", channel_id: str | None = None, preface: str = "", workspace: str | None = None, plan_for: str | None = None, entry: str | None = None, source: str = "",
     ) -> AgentRun:
         """Asks an agent. Every question that reaches a model is kept in the run log, whether it worked or not."""
         agent = await self._def(who, agent_id)
@@ -492,7 +492,7 @@ class AgentService:
         if self.engine == "flow" or agent.id in p.settings.flows or agent.id in p.settings.custom_agents:  # the agent as an n8n-style workflow of items (flowrun.py)
             from app.application.flowrun import FlowRunner
 
-            return await FlowRunner(self).run(who, token, agent, message, past, preface, channel, trigger=trigger, channel_id=channel_id, prepared=p, entry=entry)
+            return await FlowRunner(self).run(who, token, agent, message, past, preface, channel, trigger=trigger, channel_id=channel_id, prepared=p, entry=entry, source=source)
         asked = f"{preface}\n\nThe person's latest message:\n{message}" if preface else message
         pkg = build_package(p.config, [t.spec for t in p.tools], p.context, asked)
         client = self._llm(sel["providerId"], p.settings.keys[sel["providerId"]])

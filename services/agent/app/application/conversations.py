@@ -148,7 +148,7 @@ class ConversationService:
         scope = scope_line(c.workspace)
         if scope:
             preface = f"{scope}\n\n{preface}".strip()
-        run = await self._agent.chat(who, token, agent_id, message, [], channel_name, trigger=trigger, channel_id=channel_id, preface=preface, workspace=c.workspace if c.workspace != "all" else None)
+        run = await self._agent.chat(who, token, agent_id, message, [], channel_name, trigger=trigger, channel_id=channel_id, preface=preface, workspace=c.workspace if c.workspace != "all" else None, source="orchestrator")
         name = next(a["name"] for a in candidates if a["id"] == agent_id)
         turn = self._turn(message, run, agentId=agent_id, agentName=name, routedBy=by, why=why, gist=gist_of(run.found))
         context = c.context or {}
