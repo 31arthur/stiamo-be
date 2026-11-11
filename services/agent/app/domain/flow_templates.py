@@ -110,6 +110,18 @@ TEMPLATES: list[dict[str, Any]] = [
             "connections": link(("trigger", 0, "tasks"), ("tasks", 0, "sort"), ("sort", 0, "five"), ("five", 0, "list"), ("list", 0, "send")),
         },
     },
+    {
+        "id": "blank",
+        "name": "Blank workflow",
+        "description": "Just a trigger and an answer that repeats what was said. Build everything else yourself, node by node.",
+        "packs": ["agenda"],
+        "system": None,
+        "suggestions": [],
+        "flow": {
+            "nodes": [n("trigger", "trigger.chat", "When a message comes in", 0), n("answer", "respond", "Answer", 300, text="You said: {{ $json.message }}")],
+            "connections": link(("trigger", 0, "answer")),
+        },
+    },
 ]
 
 

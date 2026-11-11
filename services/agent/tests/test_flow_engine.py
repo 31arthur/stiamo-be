@@ -670,3 +670,19 @@ async def test_a_message_the_master_assistant_hands_over_starts_the_orchestrator
     assert handed["agentId"] == "follow-up-chaser" and handed["answer"].startswith("from the orchestrator trigger: orchestrator")
     direct = await rig.client.post(f"{chaser}/flow/run", json={"message": "hi"}, headers=headers())
     assert direct.json()["answer"] == "from the chat trigger"  # run by hand: not handed over by anyone
+
+
+async def test_a_blank_agent_starts_from_just_a_trigger_and_an_answer_and_a_pasted_workflow_makes_one_too(rig):
+    await planner_ready(rig)
+    made = await rig.client.post("/v1/agent/agents", json={"name": "From scratch", "templateId": "blank"}, headers=headers())
+    assert made.status_code == 201, made.text
+    a = f"/v1/agent/agents/{made.json()['id']}"
+    f = (await rig.client.get(f"{a}/flow", headers=headers())).json()
+    assert [x["type"] for x in f["nodes"]] == ["trigger.chat", "respond"] and f["problems"] == []
+    assert (await rig.client.post(f"{a}/flow/run", json={"message": "hi"}, headers=headers())).json()["answer"] == "You said: hi"
+    pasted = {"nodes": [n("t", "trigger.chat"), n("s", "core.set", fields=[{"name": "x", "value": "{{ $json.message }}!"}]), n("a", "respond", text="{{ $json.x }}")], "connections": wire(("t", 0, "s"), ("s", 0, "a"))}
+    imported = await rig.client.post("/v1/agent/agents", json={"name": "Pasted", "flow": pasted}, headers=headers())
+    assert imported.status_code == 201, imported.text
+    assert (await rig.client.post(f"/v1/agent/agents/{imported.json()['id']}/flow/run", json={"message": "yo"}, headers=headers())).json()["answer"] == "yo!"
+    broken = await rig.client.post("/v1/agent/agents", json={"name": "Broken", "flow": {"nodes": [n("a", "respond")], "connections": {}}}, headers=headers())
+    assert broken.status_code >= 400  # no trigger: refused, not half-made
