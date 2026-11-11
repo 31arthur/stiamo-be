@@ -79,6 +79,7 @@ class RunModel(Base):
     usage: Mapped[dict[str, int]] = mapped_column(Json, default=dict)
     channel: Mapped[str | None] = mapped_column(String(36))
     version: Mapped[int] = mapped_column(Integer, default=0)
+    workspace: Mapped[str] = mapped_column(String(16), default="", server_default="")
 
     __table_args__ = (Index("ix_agent_runs_agent", "user_id", "agent_id", "started_at"),)
 

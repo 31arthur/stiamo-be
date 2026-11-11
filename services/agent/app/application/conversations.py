@@ -24,6 +24,7 @@ from app.domain.orchestrator import (
     scope_line,
     update_digest,
     update_focus,
+    workspace_of,
 )
 
 #: What a thread remembers for the model: the last messages, so a long thread doesn't grow without end.
@@ -153,6 +154,21 @@ class ConversationService:
         context = c.context or {}
         c.context = {"focus": update_focus(context.get("focus") or {}, message, run.found), "digest": update_digest(context.get("digest") or [], turn)}
         return turn
+
+    async def pick_workspace(self, who: Who, base_key: str, message: str) -> str | None:
+        """Which workspace a message to the master assistant is about: what its words say; else the one this chat was last working in (within a
+        few hours); else None, and the person is asked. Each workspace has a thread of its own under the chat, so nothing said about one is in
+        another's context."""
+        said = workspace_of(message)
+        if said is not None:
+            return said
+        now = datetime.now(UTC)
+        recent = []
+        for ws in ("sb", "fsa", "personal", "all"):
+            c = await self._repo.by_channel(who.user_id, f"{base_key}:{ws}")
+            if c is not None and now - c.updated_at <= CHANNEL_IDLE:
+                recent.append((c.updated_at, ws))
+        return max(recent)[1] if recent else None
 
     async def channel_ask(self, who: Who, token: str, channel_key: str, channel_name: str, message: str, channel_id: str, workspace: str = "all") -> tuple[str, list[dict[str, Any]], str | None]:
         """A message from a phone chat. It goes into that chat's thread (the same thread, on any day within a few hours of each other), which

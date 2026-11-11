@@ -86,8 +86,8 @@ async def test_each_assistant_keeps_its_own_thread_and_only_routes_to_the_agents
     sb = await bot(rig, "sb", "789:ghi", 999)
     for i, (c, chat) in enumerate(((general, 555), (fsa, 888), (sb, 999))):
         rig.script += [ChatResult("ok")]
-        await send(rig, c, "Plan my day", chat=chat, update=2, secret=rig.telegram.webhooks[i][1])  # each bot has its own webhook secret
+        await send(rig, c, "Plan my day" + (" for FSA" if c is general else ""), chat=chat, update=2, secret=rig.telegram.webhooks[i][1])  # each bot has its own webhook secret
     threads = (await rig.client.get(C, headers=headers())).json()["items"]
-    assert sorted(t["workspace"] for t in threads) == ["all", "fsa", "sb"]  # a thread each
+    assert sorted(t["workspace"] for t in threads) == ["fsa", "fsa", "sb"]  # a thread each (the master bot worked in FSA, as asked)
     turns = {t["workspace"]: (await rig.client.get(f"{C}/{t['id']}", headers=headers())).json()["turns"][0] for t in threads}
     assert turns["sb"]["agentId"] == "daily-planner" and turns["fsa"]["agentId"] != "daily-planner"

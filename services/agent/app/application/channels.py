@@ -10,7 +10,7 @@ from typing import Any
 from stiamo_common.errors import Forbidden, NotFound, ValidationFailed
 
 from app.application.availability import confirmation as availability_confirmation
-from app.application.conversations import ConversationService
+from app.application.conversations import NEW_THREAD, ConversationService
 from app.application.dayplans import approval_text
 from app.application.ports import AccessTokens, Channel, ChannelRepository, TelegramApi, TwilioApi
 from app.application.proposals import ProposalService, verdict_of
@@ -47,6 +47,10 @@ PRESS_ACKS = {
     "rm:d": "Marking it done…",
     "rm:s": "Setting the next reminder…",
     "rm:t": "Moving it to tomorrow…",
+    "ws:sb": "Asking S&B…",
+    "ws:fsa": "Asking FSA…",
+    "ws:personal": "Asking Personal…",
+    "ws:all": "Looking across everything…",
     "av:c": "Noting you can take calls…",
     "av:f": "Noting you're free…",
     "av:b": "Noting you're busy…",
@@ -412,9 +416,9 @@ class ChannelService:
         if ws:
             name = WORKSPACE_NAMES.get(ws, ws)
             return f"I'm the {name} assistant. Ask me what's pending or what's on today, to plan tomorrow, to put things on your schedule (like “call Hemla tomorrow at 11”), or to add a task or follow-up. I show you what I'd save and you reply YES. I plan around everything else on your day. I only see {name}."
-        return "Ask me about a case or a document."
+        return "I'm your Stiamo assistant, one for all your workspaces. Ask me what's pending, to plan tomorrow, to call someone, or to add a task. I work out which workspace each message is about (S&B, FSA or Personal) and ask when it isn't clear, and I keep each one's information apart."
 
-    async def _answer(self, c: Channel, sender: str, text: str, channel_name: str, limit: int, style: Style) -> str:
+    async def _answer(self, c: Channel, sender: str, text: str, channel_name: str, limit: int, style: Style) -> str | tuple[str, list[list[dict[str, str]]]]:
         """Runs the agent for the channel's owner and returns what to say back, written for the chat."""
         words = Writer(style).text
         settings_email = c.public.get("ownerEmail", "")
@@ -427,12 +431,22 @@ class ChannelService:
             if settled is not None:
                 return clip(words(settled), limit)
         if agent_id == ORCHESTRATOR_ID and self._conversations is not None:
-            # The assistant: it picks the agent for each message and keeps the thread, which is also visible in the web app.
-            try:
-                answer, found, name = await self._conversations.channel_ask(who, self._tokens.mint(who.user_id, who.email), f"{c.kind}:{c.id}:{sender}", channel_name, text, c.id, c.public.get("workspace") or "all")
-            except (ValidationFailed, AiError) as exc:
-                return words(str(getattr(exc, "message", None) or exc))
-            return format_answer(answer, found, limit, name, style)
+            # The assistant: it picks the agent for each message and keeps the thread, which is also visible in the web app. A bot of one workspace
+            # answers about that workspace; the master bot (no workspace) works out which one each message is about, and asks when it can't tell.
+            base = f"{c.kind}:{c.id}:{sender}"
+            scope = c.public.get("workspace")
+            if scope:
+                return await self._ask_in(c, who, base, text, scope, channel_name, limit, style)
+            if text.strip().lower() in NEW_THREAD:  # a new conversation on the master starts every workspace's thread afresh
+                for k in ("sb", "fsa", "personal", "all"):
+                    await self._conversations.channel_ask(who, self._tokens.mint(who.user_id, who.email), f"{base}:{k}", channel_name, text, c.id, k)
+                return "Started a new conversation. What do you need?"
+            ws = await self._conversations.pick_workspace(who, base, text)
+            if ws is None:
+                if style == "telegram":
+                    return await self._ask_workspace(c, sender, text)
+                ws = "all"  # WhatsApp can't offer buttons: the master looks across everything
+            return await self._ask_in(c, who, f"{base}:{ws}", text, ws, channel_name, limit, style, master=True)
         if agent_id == ORCHESTRATOR_ID:
             agent_id = self._agent.registry.default_id
         key = (c.id, f"{agent_id}:{sender}")  # changing the channel's agent starts a fresh conversation
@@ -443,6 +457,25 @@ class ChannelService:
             return words(str(getattr(exc, "message", None) or exc))
         self._memory[key] = [m.to_json() for m in run.messages][-REMEMBER:]
         return format_reply(run, limit, style)
+
+    async def _ask_in(self, c: Channel, who: Who, key: str, text: str, ws: str, channel_name: str, limit: int, style: Style, master: bool = False) -> str:
+        """One message to the assistant, in the thread of one workspace ("all": every workspace together)."""
+        try:
+            answer, found, name = await self._conversations.channel_ask(who, self._tokens.mint(who.user_id, who.email), key, channel_name, text, c.id, ws)
+        except (ValidationFailed, AiError) as exc:
+            return Writer(style).text(str(getattr(exc, "message", None) or exc))
+        if master and name:
+            name = f"{name} · {WORKSPACE_NAMES.get(ws, 'All workspaces')}"  # signed with the workspace it worked in
+        return format_answer(answer, found, limit, name, style)
+
+    async def _ask_workspace(self, c: Channel, sender: str, text: str) -> tuple[str, list[list[dict[str, str]]]]:
+        """The message doesn't say which workspace it is about: keep it, and ask with buttons. Pressing one answers it, in that workspace."""
+        short = uuid.uuid4().hex[:8]
+        pending = {**(c.state.get("pending") or {}), short: {"text": text[:2000], "sender": sender, "at": datetime.now(UTC).isoformat()}}
+        c.state = {**c.state, "pending": dict(list(pending.items())[-5:])}
+        await self._repo.save(c)
+        row = [{"text": f"{'⚖️' if k == 'sb' else '💻' if k == 'fsa' else '🏠'} {WORKSPACE_NAMES[k]}", "callback_data": f"ws:{k}:{short}"} for k in ("sb", "fsa", "personal")]
+        return "🗂️ Which workspace is that for?", [row, [{"text": "🌐 All of them", "callback_data": f"ws:all:{short}"}]]
 
     def check_telegram(self, c: Channel | None, secret_header: str | None) -> Channel:
         if c is None or c.kind != "telegram":
@@ -493,7 +526,11 @@ class ChannelService:
                 if await self.alerts.take_text(who, self._tokens.mint(who.user_id, who.email), c.id, chat, text):
                     return
             await self._tg.send_typing(token, chat)
-            await self._tg.send_message(token, chat, await self._answer(c, str(chat), text, "Telegram", TELEGRAM_MAX, "telegram"), html=True)
+            reply = await self._answer(c, str(chat), text, "Telegram", TELEGRAM_MAX, "telegram")
+            if isinstance(reply, tuple):
+                await self._tg.send_message(token, chat, reply[0], buttons=reply[1])  # a question with buttons
+            else:
+                await self._tg.send_message(token, chat, reply, html=True)
         except Exception:  # noqa: BLE001
             log.exception("telegram update failed for channel %s", c.id)
 
@@ -517,10 +554,11 @@ class ChannelService:
         except Exception as exc:  # noqa: BLE001  a button must always answer
             log.exception("a button press failed on channel %s", c.id)
             result = "⚠️ " + str(getattr(exc, "message", None) or "That didn't work.") + " Nothing was changed. Try again, or do it in Stiamo."
-        buttons = None
+        buttons, html = None, False
         if isinstance(result, tuple):
-            result, buttons = result
-        await self._settle(token, chat, holder, result, buttons)
+            result, buttons, *rest = result
+            html = bool(rest and rest[0])
+        await self._settle(token, chat, holder, result, buttons, html)
 
     async def _toast(self, token: str, callback_id: str, text: str) -> None:
         try:
@@ -535,16 +573,16 @@ class ChannelService:
             log.info("could not say a button was received")
             return None
 
-    async def _settle(self, token: str, chat: int | str, holder: int | None, text: str, buttons: list[list[dict[str, str]]] | None = None) -> None:
+    async def _settle(self, token: str, chat: int | str, holder: int | None, text: str, buttons: list[list[dict[str, str]]] | None = None, html: bool = False) -> None:
         """The result goes into the message that said it was being done; if that can't be changed it is sent on its own."""
         if holder is not None:
             try:
-                await self._tg.edit_message(token, chat, holder, text, buttons=buttons)
+                await self._tg.edit_message(token, chat, holder, text, html=html, buttons=buttons)
                 return
             except Exception:  # noqa: BLE001
                 log.info("could not change the holding message")
         try:
-            await self._tg.send_message(token, chat, text, buttons=buttons)
+            await self._tg.send_message(token, chat, text, html=html, buttons=buttons)
         except Exception:  # noqa: BLE001
             log.warning("could not report what a button did")
 
@@ -554,7 +592,7 @@ class ChannelService:
         except Exception:  # noqa: BLE001
             log.info("could not take the buttons off a message")
 
-    async def _run_press(self, c: Channel, who: Who, chat: int | str, message: dict[str, Any], data: str) -> str | tuple[str, list[list[dict[str, str]]]]:
+    async def _run_press(self, c: Channel, who: Who, chat: int | str, message: dict[str, Any], data: str) -> str | tuple[Any, ...]:
         """Does what the button says and returns what to tell the person (and buttons to leave under it, if any)."""
         token = c.secrets["botToken"]
         access = self._tokens.mint(who.user_id, who.email)
@@ -570,6 +608,14 @@ class ChannelService:
                 return (approval_text(done), calls) if calls else approval_text(done)  # the calls it booked stay one tap away
             await self.plan_actions.dismiss(who, rest)
             return "👍 Dropped. Nothing was changed on your planner or in Google Calendar.\n\nSay “plan tomorrow” if you want a new one."
+        if kind == "ws":
+            pending = (c.state.get("pending") or {}).pop(rest, None)
+            if pending is None or action not in ("sb", "fsa", "personal", "all"):
+                return "That question is out of date. Send your message again."
+            await self._repo.save(c)
+            await self._strip(token, chat, message)
+            reply = await self._ask_in(c, who, f"{c.kind}:{c.id}:{pending['sender']}:{action}", pending["text"], action, "Telegram", TELEGRAM_MAX, "telegram", master=True)
+            return reply, None, True
         if kind == "av" and self.availability_actions is not None:
             await self._strip(token, chat, message)
             return availability_confirmation(await self.availability_actions.answer(who, access, action, rest))
