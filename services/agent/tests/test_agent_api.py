@@ -47,7 +47,7 @@ async def test_a_key_the_provider_rejects_is_not_kept(rig):
 
 async def test_the_registry_lists_every_agent(rig):
     view = (await rig.client.get("/v1/agent/settings", headers=headers())).json()
-    assert [a["id"] for a in view["agents"]] == ["cases", "daily-planner", "hearing-prep", "follow-up-chaser", "deadline-scout", "librarian"] and view["defaultAgent"] == "cases"
+    assert [a["id"] for a in view["agents"]] == ["cases", "daily-planner", "librarian"] and view["defaultAgent"] == "cases"
     assert view["agents"][0]["suggestions"] and view["agents"][0]["selection"] is None
 
 
@@ -92,7 +92,7 @@ async def test_removing_a_key_clears_the_models_that_used_it(rig):
 
 async def test_an_agents_prompt_can_be_edited_checked_and_reset_without_touching_the_others(rig):
     base = await detail(rig)
-    assert "{{tools}}" in base["prompt"]["system"] and set(base["variables"]) >= {"input", "today", "cases", "drive"} and base["packs"] == ["cases", "drive", "decisions"]
+    assert "{{tools}}" in base["prompt"]["system"] and set(base["variables"]) >= {"input", "today", "cases", "drive"} and base["packs"] == ["cases", "drive", "decisions", "agenda", "changes"]
     bad = await rig.client.put(f"{CASES}/prompt", json={"system": "Hello {{nope}}", "inputTemplate": "{{input}}"}, headers=headers())
     assert bad.status_code == 422 and "{{nope}}" in bad.json()["error"]["message"]
     lost = await rig.client.put(f"{CASES}/prompt", json={"system": "ok", "inputTemplate": "no variable here"}, headers=headers())
@@ -120,7 +120,7 @@ async def test_preview_shows_the_whole_package_with_overrides_applied(rig):
     assert out["system"].startswith("Hi Owner on the web app. 2 cases, drive connected.")
     assert "- search_cases: Custom words." in out["system"] and "get_case" not in out["system"]
     assert out["user"] == "Q: wages?"
-    assert {t["name"] for t in out["tools"]} == {"search_cases", "case_documents", "find_documents"}
+    assert {"search_cases", "case_documents", "find_documents", "day_agenda"} <= {t["name"] for t in out["tools"]}
 
 
 async def test_each_agent_gets_only_the_tools_of_its_packs(rig):

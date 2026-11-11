@@ -54,15 +54,15 @@ def test_a_schedule_must_fit_around_what_is_fixed_and_itself():
 
 async def test_the_team_is_registered_with_the_tools_each_one_needs(rig):
     ids = [a["id"] for a in (await rig.client.get("/v1/agent/settings", headers=headers())).json()["agents"]]
-    assert {"daily-planner", "hearing-prep", "follow-up-chaser", "deadline-scout"} <= set(ids)
+    assert {"daily-planner", "cases"} <= set(ids) and not {"hearing-prep", "follow-up-chaser", "deadline-scout"} & set(ids)  # merged into these two
     out = (await rig.client.post(f"{PLANNER}/prompt/preview", json={"question": "x"}, headers=headers())).json()
     assert [t["name"] for t in out["tools"]] == ["day_agenda", "free_time", "upcoming", "present_plan", "propose_schedule", "search_cases", "get_case", "case_documents", "waiting_in_attention", "add_task", "change_task", "add_follow_up", "change_follow_up", "add_hearing", "add_case", "add_action_plan"]
     assert TOMORROW in out["system"] and "21:00" in out["system"]
-    prep = (await rig.client.post("/v1/agent/agents/hearing-prep/prompt/preview", json={"question": "x"}, headers=headers())).json()
-    assert "find_documents" in [t["name"] for t in prep["tools"]]
-    chaser = (await rig.client.post("/v1/agent/agents/follow-up-chaser/prompt/preview", json={"question": "x"}, headers=headers())).json()
-    assert [t["name"] for t in chaser["tools"]] == ["day_agenda", "free_time", "upcoming", "present_plan", "propose_schedule", "add_task", "change_task", "add_follow_up", "change_follow_up", "add_hearing", "add_case", "add_action_plan"]
-    assert all(set(a["workspaces"]) == {"personal", "sb", "fsa", "media"} for a in (await rig.client.get("/v1/agent/settings", headers=headers())).json()["agents"] if a["id"] in ("daily-planner", "follow-up-chaser", "deadline-scout"))
+    prep = (await rig.client.post("/v1/agent/agents/cases/prompt/preview", json={"question": "x"}, headers=headers())).json()
+    assert {"find_documents", "day_agenda", "get_case"} <= {t["name"] for t in prep["tools"]}  # the case agent also prepares you for a hearing
+    assert all(set(a["workspaces"]) == {"personal", "sb", "fsa", "media"} for a in (await rig.client.get("/v1/agent/settings", headers=headers())).json()["agents"] if a["id"] == "daily-planner")
+    for old, new in (("hearing-prep", "cases"), ("follow-up-chaser", "daily-planner"), ("deadline-scout", "daily-planner")):  # a saved link to a merged agent opens the one that took over
+        assert (await rig.client.get(f"/v1/agent/agents/{old}", headers=headers())).json()["id"] == new
 
 
 async def test_the_day_agenda_lists_what_is_fixed_what_is_due_and_what_is_free(rig):
@@ -97,7 +97,7 @@ async def test_a_schedule_that_clashes_is_sent_back_with_the_reason(rig):
 async def test_the_scout_reads_the_attention_queue_and_what_is_coming(rig):
     fill(rig)
     await connect(rig)
-    scout = "/v1/agent/agents/deadline-scout"
+    scout = "/v1/agent/agents/daily-planner"
     await choose(rig, agent=scout)
     rig.script += [ChatResult("", [ToolCall("a", "upcoming", {"days": 3}), ToolCall("b", "waiting_in_attention", {})]), ChatResult("Two things.")]
     out = (await rig.client.post(f"{scout}/chat", json={"message": "What is due?"}, headers=headers())).json()
