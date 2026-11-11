@@ -1,6 +1,6 @@
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Query, Response, status
+from fastapi import APIRouter, Query, Request, Response, status
 from pydantic import Field
 from stiamo_common.models import DomainModel
 
@@ -158,13 +158,16 @@ async def flow_catalog() -> dict[str, Any]:
 
 
 @router.post("/agents", status_code=status.HTTP_201_CREATED, summary="Create an agent from a workflow template (or one you send)")
-async def create_agent(body: NewAgentBody, agent: deps.Agent, me: deps.Me, token: deps.Token) -> dict[str, Any]:
-    return await agent.create_agent(me, token, body.name, body.description, body.template_id, body.flow.model_dump() if body.flow else None, body.packs)
+async def create_agent(body: NewAgentBody, agent: deps.Agent, me: deps.Me, token: deps.Token, request: Request) -> dict[str, Any]:
+    out = await agent.create_agent(me, token, body.name, body.description, body.template_id, body.flow.model_dump() if body.flow else None, body.packs)
+    deps.apply_schedules(request.app, me, await agent.schedules(me))
+    return out
 
 
 @router.delete("/agents/{agent_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Delete an agent you created from a workflow")
-async def delete_agent(agent_id: str, agent: deps.Agent, me: deps.Me) -> Response:
+async def delete_agent(agent_id: str, agent: deps.Agent, me: deps.Me, request: Request) -> Response:
     await agent.delete_agent(me, agent_id)
+    deps.apply_schedules(request.app, me, await agent.schedules(me))
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -174,8 +177,10 @@ async def get_flow(agent_id: str, agent: deps.Agent, me: deps.Me, token: deps.To
 
 
 @router.put("/agents/{agent_id}/flow", summary="Save an agent's workflow (only one that can run is kept)")
-async def put_flow(agent_id: str, body: FlowBody, agent: deps.Agent, me: deps.Me, token: deps.Token) -> dict[str, Any]:
-    return await agent.set_flow(me, token, agent_id, body.model_dump())
+async def put_flow(agent_id: str, body: FlowBody, agent: deps.Agent, me: deps.Me, token: deps.Token, request: Request) -> dict[str, Any]:
+    out = await agent.set_flow(me, token, agent_id, body.model_dump())
+    deps.apply_schedules(request.app, me, await agent.schedules(me))
+    return out
 
 
 @router.post("/agents/{agent_id}/flow/check", summary="What is wrong with a workflow, without saving it")
@@ -195,8 +200,10 @@ async def run_flow(agent_id: str, body: RunFlowBody, agent: deps.Agent, me: deps
 
 
 @router.delete("/agents/{agent_id}/flow", summary="Back to the default workflow")
-async def reset_flow(agent_id: str, agent: deps.Agent, me: deps.Me, token: deps.Token) -> dict[str, Any]:
-    return await agent.reset_flow(me, token, agent_id)
+async def reset_flow(agent_id: str, agent: deps.Agent, me: deps.Me, token: deps.Token, request: Request) -> dict[str, Any]:
+    out = await agent.reset_flow(me, token, agent_id)
+    deps.apply_schedules(request.app, me, await agent.schedules(me))
+    return out
 
 
 @router.put("/agents/{agent_id}/selection", status_code=status.HTTP_204_NO_CONTENT, summary="Choose the provider, model and thinking level for an agent")

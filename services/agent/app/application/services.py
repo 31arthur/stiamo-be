@@ -466,7 +466,7 @@ class AgentService:
 
     async def chat(
         self, who: Who, token: str, agent_id: str, message: str, history: list[dict[str, Any]] | None = None, channel: str = "the web app",
-        *, trigger: str = "chat", channel_id: str | None = None, preface: str = "", workspace: str | None = None, plan_for: str | None = None,
+        *, trigger: str = "chat", channel_id: str | None = None, preface: str = "", workspace: str | None = None, plan_for: str | None = None, entry: str | None = None,
     ) -> AgentRun:
         """Asks an agent. Every question that reaches a model is kept in the run log, whether it worked or not."""
         agent = await self._def(who, agent_id)
@@ -488,7 +488,7 @@ class AgentService:
         if self.engine == "flow" or agent.id in p.settings.flows or agent.id in p.settings.custom_agents:  # the agent as an n8n-style workflow of items (flowrun.py)
             from app.application.flowrun import FlowRunner
 
-            return await FlowRunner(self).run(who, token, agent, message, past, preface, channel, trigger=trigger, channel_id=channel_id, prepared=p)
+            return await FlowRunner(self).run(who, token, agent, message, past, preface, channel, trigger=trigger, channel_id=channel_id, prepared=p, entry=entry)
         if self.engine == "graph":  # the agent as a workflow of nodes (see graphrun.py); the loop below is the classic fallback
             from app.application.graphrun import GraphRunner
 
@@ -635,6 +635,32 @@ class AgentService:
         run = await self.chat(who, token, agent_id, message.strip() or "Run", [], "the web app", trigger="schedule" if scheduled else "manual")
         latest = await self._runs.recent(who.user_id, agent_id, limit=1)
         return {"answer": run.answer, "runId": latest[0].id if latest else None}
+
+    async def schedules(self, who: Who) -> list[dict[str, str]]:
+        """The schedule triggers of this person's workflows that are switched on: [{agent, node, time, timezone}], so each can run by itself at its time."""
+        from app.application.dayplans import parse_time, zone_of
+        from app.domain.flow import Flow
+
+        s = await self._load(who)
+        known = {a.id for a in self._all(s)}
+        out = []
+        for agent_id, raw in s.flows.items():
+            if agent_id not in known:
+                continue
+            try:
+                f = Flow.from_json(raw)
+            except ValueError:
+                continue
+            for n in f.nodes:
+                if n.type == "trigger.schedule" and not n.disabled:
+                    at, tz = str(n.parameters.get("time") or "07:30"), str(n.parameters.get("timezone") or "Asia/Kolkata")
+                    try:
+                        parse_time(at)
+                        zone_of(tz)
+                    except ValidationFailed:
+                        continue  # a time or zone that can't be read doesn't run (the editor says so)
+                    out.append({"agent": agent_id, "node": n.id, "time": at, "timezone": tz})
+        return out
 
     async def check_flow(self, who: Who, agent_id: str, raw: Any) -> list[str]:
         from app.domain.flow import Flow, validate
