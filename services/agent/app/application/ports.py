@@ -324,10 +324,6 @@ class TelegramApi(ABC):
     async def download_file(self, token: str, file_id: str) -> bytes:
         """What a person sent (a voice note, say), as bytes."""
 
-    @abstractmethod
-    async def send_voice(self, token: str, chat_id: int | str, audio: bytes, caption: str = "") -> None:
-        """A spoken message (MP3 or OGG/Opus), which Telegram shows as a voice message that plays in the chat."""
-
 
 class CallApi(ABC):
     """Rings a Telegram account and reads a message aloud when it is answered."""
@@ -338,7 +334,7 @@ class CallApi(ABC):
 
 
 class VoiceApi(ABC):
-    """Turns words into speech."""
+    """Turns what you say in a voice note into words."""
 
     @abstractmethod
     async def check(self, key: str) -> None:
@@ -347,10 +343,6 @@ class VoiceApi(ABC):
     @abstractmethod
     async def transcribe(self, key: str, audio: bytes, mime: str) -> str:
         """What was said in the audio, as text."""
-
-    @abstractmethod
-    async def speak(self, key: str, text: str, model: str) -> bytes:
-        """The words as MP3 audio, read by the voice `model`."""
 
 
 class TwilioApi(ABC):

@@ -95,13 +95,6 @@ class HttpTelegramApi(TelegramApi):
             raise ValidationFailed(f"Telegram wouldn't hand over the file ({r.status_code}).")
         return r.content
 
-    async def send_voice(self, token: str, chat_id: int | str, audio: bytes, caption: str = "") -> None:
-        try:
-            r = await self._http.post(f"{TELEGRAM}/bot{token}/sendVoice", data={"chat_id": str(chat_id), "caption": caption[:1000]}, files={"voice": ("reminder.mp3", audio, "audio/mpeg")})
-        except httpx.HTTPError as exc:
-            raise ValidationFailed("Couldn't reach Telegram. Try again in a moment.") from exc
-        if r.status_code != 200:
-            raise ValidationFailed(f"Telegram refused the voice message ({r.status_code}).")
 
 
 class HttpTwilioApi(TwilioApi):

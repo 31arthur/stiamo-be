@@ -19,7 +19,7 @@ Reminders = Annotated[ReminderService, deps.Depends(_service)]
 
 class SettingsBody(DomainModel):
     enabled: bool
-    #: Also speak it, as a voice message on Telegram (needs a Deepgram key). Off unless asked for: the notification is enough.
+    #: Ignored: reminders are no longer sent as voice messages (a real call is what rings you). Kept so an older screen can still save.
     voice: bool = False
     #: Also ring me on Telegram (through CallMeBot), reading the reminder aloud.
     call: bool = False
@@ -29,14 +29,14 @@ class SettingsBody(DomainModel):
     call_voice: Annotated[str, Field(max_length=40)] = ""
 
 
-@router.get("", summary="Whether reminders about calls not marked done are on, and whether they are spoken")
+@router.get("", summary="Whether reminders about calls not marked done are on, and whether they ring you")
 async def get_settings(reminders: Reminders, me: deps.Me) -> dict[str, Any]:
     return await reminders.view(me)
 
 
 @router.put("", summary="Switch the reminders on or off")
 async def set_settings(body: SettingsBody, reminders: Reminders, me: deps.Me, request: Request) -> dict[str, Any]:
-    out = await reminders.set_settings(me, body.enabled, body.voice, body.call, body.call_user, body.call_voice)
+    out = await reminders.set_settings(me, body.enabled, body.call, body.call_user, body.call_voice)
     deps.sync_reminders(request.app, me, out["enabled"])
     return out
 

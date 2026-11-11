@@ -279,7 +279,3 @@ async def test_no_call_when_the_agent_did_not_ask_for_calls(rig):
     assert rig.caller.calls == [] and "URGENT" in rig.telegram.sent[-1][1]
 
 
-async def test_spoken_reminders_are_off_unless_asked_for(rig):
-    got = (await rig.client.put("/v1/agent/reminders", json={"enabled": True}, headers=headers())).json()
-    assert got["voice"] is False
-    assert (await rig.client.get("/v1/agent/reminders", headers=headers())).json()["voice"] is False

@@ -4,7 +4,6 @@ import httpx
 from stiamo_common.errors import ValidationFailed
 
 from app.application.ports import VoiceApi
-from app.domain.nudge import DEFAULT_VOICE
 
 DEEPGRAM = "https://api.deepgram.com/v1"
 #: Deepgram takes at most 2000 characters in one request.
@@ -36,12 +35,3 @@ class DeepgramVoice(VoiceApi):
             return str(r.json()["results"]["channels"][0]["alternatives"][0]["transcript"]).strip()
         except (KeyError, IndexError, ValueError, TypeError):
             return ""
-
-    async def speak(self, key: str, text: str, model: str) -> bytes:
-        try:
-            r = await self._http.post(f"{DEEPGRAM}/speak", params={"model": model or DEFAULT_VOICE, "encoding": "mp3"}, headers={"Authorization": f"Token {key}"}, json={"text": text[:MAX_CHARS]})
-        except httpx.HTTPError as exc:
-            raise ValidationFailed("Couldn't reach Deepgram. Try again in a moment.") from exc
-        if r.status_code >= 400:
-            raise ValidationFailed(f"Deepgram couldn't make the voice message ({r.status_code}).")
-        return r.content

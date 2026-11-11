@@ -27,4 +27,4 @@ One bot per workspace. To change it, remove the bot (Disconnect) and connect ano
 
 ## What isn't per workspace
 
-The evening plan, call reminders and the voice message go to the general bot only. The Drive and news feeds are not split by workspace.
+The evening plan and call reminders go to the general bot only. The Drive and news feeds are not split by workspace.

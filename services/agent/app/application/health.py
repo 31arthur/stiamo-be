@@ -93,7 +93,7 @@ class HealthService:
             if ws not in have_ws:
                 out.append(check(f"ws-{ws}", "Phone", f"{NAMES[ws]} alerts", "ok" if general else "error", f"No {NAMES[ws]} bot of its own: its alerts go to your general bot." if general else f"No Telegram chat is linked for {NAMES[ws]}, so its alerts have nowhere to go.", "phone"))
         key = s.keys.get(VOICE_KEY)
-        out.append(check("deepgram", "Phone", "Voice (Deepgram)", "ok" if key else "off", "Key set. Voice notes and spoken reminders can be used." if key else "Not set. Needed only for voice notes and spoken reminders (Developer → Environment).", None if key else "/agents/environment", {"kind": "secret", "id": "deepgram"} if key else None))
+        out.append(check("deepgram", "Phone", "Voice (Deepgram)", "ok" if key else "off", "Key set. Voice notes you send to the bot are understood." if key else "Not set. Needed only to understand voice notes you send (Developer → Environment).", None if key else "/agents/environment", {"kind": "secret", "id": "deepgram"} if key else None))
         cfg = reminder_settings(s.reminders)
         if cfg["call"]:
             tried = [d for d in await self._deliveries.recent(who.user_id, 200) if d.kind == "call"]
