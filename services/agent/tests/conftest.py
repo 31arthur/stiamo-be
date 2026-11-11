@@ -209,7 +209,6 @@ class FakeTelegram(TelegramApi):
         self.sent: list[tuple[Any, str]] = []
         self.webhooks: list[tuple[str, str]] = []
         self.deleted = 0
-        self.voices: list[tuple[int | str, bytes, str]] = []
         #: The inline keyboard of each message sent (None when it had none), the buttons pressed, and the messages whose buttons were taken away.
         self.keyboards: list = []
         self.answered: list[str] = []
@@ -283,9 +282,6 @@ class FakeTelegram(TelegramApi):
     async def download_file(self, token, file_id):
         return self.files[file_id]
 
-    async def send_voice(self, token, chat_id, audio, caption=""):
-        self.voices.append((chat_id, audio, caption))
-
 
 class FakeTwilio(TwilioApi):
     def __init__(self) -> None:
@@ -317,9 +313,6 @@ class FakeVoice(VoiceApi):
     async def transcribe(self, key, audio, mime):
         return audio.decode()
 
-    async def speak(self, key, text, model):
-        self.said.append((model, text))
-        return text.encode()
 
 
 class FakeCaller(CallApi):

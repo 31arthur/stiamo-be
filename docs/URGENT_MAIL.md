@@ -15,7 +15,7 @@ An agent that watches a mailbox can ping your phone the moment something arrives
 Each workspace can have its own bot, which is also that workspace's assistant (see [WORKSPACE_ASSISTANTS.md](WORKSPACE_ASSISTANTS.md)), so S&B's mail doesn't land in the same chat as personal mail. Make a bot in @BotFather for the workspace, then in the app: Assistant → **On your phone** → **Workspace assistants**, paste its token and press Start in the bot. One bot per workspace.
 
 - An alert about a mailbox goes to the bot of **that mailbox's workspace**, never another's. A workspace with no email bot of its own falls back to your general bot (the one under Telegram).
-- A workspace bot carries that workspace's email alerts and its assistant's chat. The evening plan, call reminders and voice messages go to the general bot.
+- A workspace bot carries that workspace's email alerts and its assistant's chat. The evening plan and call reminders go to the general bot.
 
 ## Each agent chooses
 
@@ -24,7 +24,7 @@ On a mail agent's setup (Developer → the agent → Settings) there is an **Ema
 - **Send updates to Telegram**: what the agent queues for you (Attention, events) also arrives on the workspace's bot. Mail the model judges high priority, and any label set to *Ping me on Telegram*, comes as the loud 🚨 alert; the rest as a calmer 📬 *Needs you* update. Both carry the link and suggested replies.
 - **Call me for priority mail**: for a loud alert, also ring you on Telegram (CallMeBot, at the username or number set under Call reminders): "Stiamo. Urgent email in S&B, from …: …. Check Telegram." A burst of urgent mail is one call: the same workspace isn't called again within 15 minutes.
 
-No voice messages are sent for email: the Telegram notification is enough, and the call is kept for what is urgent.
+No audio is sent for email: the Telegram notification is enough, and the call is kept for what is urgent.
 
 ## What happens on an alert
 

@@ -306,23 +306,6 @@ class ChannelService:
                 log.warning("could not announce on channel %s", c.id)
         return sent
 
-    async def announce_voice(self, who: Who, audio: bytes, caption: str = "") -> int:
-        """Sends a spoken message to every Telegram chat the person has paired (WhatsApp through Twilio can't carry one without a public file)."""
-        sent = 0
-        for c in await self._repo.for_user(who.user_id):
-            if c.kind != "telegram" or c.public.get("workspace"):
-                continue
-            for p in c.public.get("paired", []):
-                try:
-                    await self._tg.send_voice(c.secrets["botToken"], p["id"], audio, caption)
-                except Exception as exc:  # noqa: BLE001
-                    await self._logged(who, "voice", "telegram", self._who(c, p), False, str(getattr(exc, "message", None) or exc), caption)
-                    log.warning("could not send a voice message on channel %s", c.id)
-                    continue
-                await self._logged(who, "voice", "telegram", self._who(c, p), True, summary=caption)
-                sent += 1
-        return sent
-
     # --- alerts: messages with buttons ----------------------------------------------------------------------------------
 
     async def _audience(self, who: Who, workspace: str | None, role: str) -> tuple[list[Channel], bool]:

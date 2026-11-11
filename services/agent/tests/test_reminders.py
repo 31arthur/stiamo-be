@@ -19,12 +19,11 @@ def call(i, start, title, status="open"):
     return {"id": i, "title": title, "channel": "call", "due": {"date": DAY, "time": start}, "duration": 15, "outcome": {"status": status}}
 
 
-async def ready(rig, voice=True):
+async def ready(rig):
     c = await telegram(rig)
     await send(rig, c, f"/start {c['pairingCode']}", chat=555, update=1)
     rig.data.tables = {"follow-ups": [call("a", 540, "Call him again"), call("b", 555, "Followup with Hemla Pawar")], "meetings": [], "tasks": []}
-    assert (await rig.client.put(f"{S}/deepgram", json={"value": "dg-key-1234567"}, headers=headers())).status_code == 200
-    assert (await rig.client.put(R, json={"enabled": True, "voice": voice}, headers=headers())).json()["enabled"] is True
+    assert (await rig.client.put(R, json={"enabled": True}, headers=headers())).json()["enabled"] is True
 
 
 async def check(rig, when):
@@ -32,29 +31,28 @@ async def check(rig, when):
     return (await rig.client.post(f"{R}/check", headers=headers())).json()["reminded"]
 
 
-async def test_the_reminders_come_after_the_calls_end_then_an_hour_half_an_hour_and_ten_minutes_later_with_a_voice(rig):
+async def test_the_reminders_come_after_the_calls_end_then_an_hour_half_an_hour_and_ten_minutes_later_in_writing(rig):
     await ready(rig)
     assert await check(rig, at(9, 39)) is None  # the calls end at 09:30: ten minutes on is 09:40
     first = await check(rig, at(9, 40))
-    assert first == {"calls": ["a", "b"], "step": 1, "spoken": True, "rang": False}
+    assert first == {"calls": ["a", "b"], "step": 1, "rang": False}
     text = strip_markup(rig.telegram.sent[-1][1])
     assert "🔔 2 calls still pending" in text and "Call him again" in text and "Followup with Hemla Pawar" in text and "Mark them done in Stiamo" in text
-    chat, audio, _ = rig.telegram.voices[-1]
-    assert chat == 555 and b"2 calls are still pending" in audio and b"1, Call him again; 2, Followup with Hemla Pawar" in audio
+    assert not hasattr(rig.telegram, "voices")  # no audio is ever sent: a real call is what rings
     assert await check(rig, at(9, 41)) is None and await check(rig, at(10, 39)) is None  # not again for an hour
     assert (await check(rig, at(10, 40)))["step"] == 2
     assert await check(rig, at(11, 9)) is None and (await check(rig, at(11, 10)))["step"] == 3
-    assert (await check(rig, at(11, 20)))["step"] == 4 and b"last reminder" in rig.telegram.voices[-1][1]
-    assert await check(rig, at(12, 0)) is None and len(rig.telegram.voices) == 4  # that was the last
+    assert (await check(rig, at(11, 20)))["step"] == 4
+    assert await check(rig, at(12, 0)) is None  # that was the last
 
 
 async def test_a_call_marked_done_is_left_out_and_all_done_means_silence(rig):
     await ready(rig)
     rig.data.tables["follow-ups"][0]["outcome"] = {"status": "done"}
     assert (await check(rig, at(9, 40)))["calls"] == ["b"]
-    assert b"A call is still pending" in rig.telegram.voices[-1][1]
+    assert "1 call still pending" in strip_markup(rig.telegram.sent[-1][1])
     rig.data.tables["follow-ups"][1]["outcome"] = {"status": "done"}
-    assert await check(rig, at(10, 40)) is None and len(rig.telegram.voices) == 1
+    assert await check(rig, at(10, 40)) is None
 
 
 async def test_it_waits_for_a_free_minute_and_stays_quiet_outside_the_working_day(rig):
@@ -66,25 +64,17 @@ async def test_it_waits_for_a_free_minute_and_stays_quiet_outside_the_working_da
     assert await check(rig, at(21, 30)) is None  # past nine in the evening
 
 
-async def test_without_a_voice_key_or_with_the_voice_off_the_reminder_is_written_only(rig):
-    await ready(rig, voice=False)
-    assert (await check(rig, at(9, 40)))["spoken"] is False and rig.telegram.voices == [] and rig.voice.said == []
-    await rig.client.put(R, json={"enabled": True, "voice": True}, headers=headers())
-    await rig.client.delete(f"{S}/deepgram", headers=headers())
-    assert (await check(rig, at(10, 40)))["spoken"] is False and rig.telegram.voices == []
-
-
-async def test_nothing_is_sent_while_the_reminders_are_off_and_a_bad_key_is_refused(rig):
+async def test_nothing_is_sent_while_the_reminders_are_off(rig):
     await ready(rig)
-    await rig.client.put(R, json={"enabled": False, "voice": True}, headers=headers())
-    assert await check(rig, at(9, 40)) is None and rig.telegram.voices == []
-    assert (await rig.client.get(R, headers=headers())).json()["voiceKey"] == {"connected": True}  # whether, never what
+    await rig.client.put(R, json={"enabled": False}, headers=headers())
+    assert await check(rig, at(9, 40)) is None
+    assert "voice" not in (await rig.client.get(R, headers=headers())).json()  # (an older screen may still send it; it does nothing)
 
 
-async def test_a_test_reminder_can_be_sent_to_hear_the_voice(rig):
+async def test_a_test_reminder_can_be_sent_to_see_it(rig):
     await ready(rig)
     out = (await rig.client.post(f"{R}/test", headers=headers())).json()
-    assert out == {"sent": 1, "spoken": True, "rang": False} and "A test reminder" in strip_markup(rig.telegram.sent[-1][1])
+    assert out == {"sent": 1, "rang": False} and "A test reminder" in strip_markup(rig.telegram.sent[-1][1])
 
 
 async def test_it_rings_on_telegram_each_time_when_that_is_on_and_a_failed_call_does_not_stop_the_message(rig):
@@ -121,7 +111,7 @@ async def test_the_call_can_be_tested_on_its_own_and_says_why_it_failed(rig):
     out = (await rig.client.post(TC, json={"callUser": "@arjun"}, headers=headers())).json()  # before anything is saved
     assert out == {"called": True, "user": "@arjun"}
     user, said, lang, repeat = rig.caller.calls[-1]
-    assert (user, repeat) == ("@arjun", 1) and "test call" in said and rig.telegram.voices == [] and len(rig.telegram.sent) == 1  # only the call: no message, no voice
+    assert (user, repeat) == ("@arjun", 1) and "test call" in said and len(rig.telegram.sent) == 1  # only the call: no message, no voice
     await rig.client.put(R, json={"enabled": True, "voice": False, "call": True, "callUser": "+919876543210"}, headers=headers())
     assert (await rig.client.post(TC, headers=headers())).json()["user"] == "+919876543210"  # the saved one
     rig.caller.fail = True

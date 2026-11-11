@@ -129,7 +129,7 @@ def sync_evening(app: FastAPI, who: Who, planner: dict) -> None:
 def build_reminders(app: FastAPI, session: AsyncSession) -> ReminderService:
     s = app.state
     _, channels = build_services(app, session)
-    return ReminderService(SqlSettingsRepository(session, s.box), s.data_factory, s.tokens, s.voice, s.caller, lambda who, text, buttons=None: channels.announce(who, text, kind="reminder", buttons=buttons), channels.announce_voice, lambda: s.clock(), s.deliveries, s.settings.app_url)
+    return ReminderService(SqlSettingsRepository(session, s.box), s.data_factory, s.tokens, s.caller, lambda who, text, buttons=None: channels.announce(who, text, kind="reminder", buttons=buttons), lambda: s.clock(), s.deliveries, s.settings.app_url)
 
 
 def reminder_check(app: FastAPI, who: Who):

@@ -17,7 +17,6 @@ LADDER: tuple[int, ...] = (10, 60, 30, 10)
 RUN_GAP = 10
 DEFAULT_CALL = 15
 #: The voice that reads a reminder aloud (a Deepgram Aura voice).
-DEFAULT_VOICE = "aura-2-thalia-en"
 
 TONES = ("A reminder.", "A reminder again.", "Another reminder.", "This is the last reminder for now.")
 
@@ -93,10 +92,3 @@ def call_speech(step: int, pending: list[dict[str, Any]], limit: int = CALL_LIMI
     return (head + tail)[:limit]
 
 
-def speech(step: int, pending: list[dict[str, Any]]) -> str:
-    """What is said aloud: short, with the names of the calls and no references."""
-    names = [str(c.get("title") or "a call") for c in pending]
-    shown = names[:5]
-    listed = "; ".join(f"{i}, {n}" for i, n in enumerate(shown, 1)) + (f"; and {len(names) - 5} more" if len(names) > 5 else "")
-    count = f"{len(names)} calls are" if len(names) != 1 else "A call is"
-    return f"Hello, this is Stiamo. {TONES[min(step, len(TONES) - 1)]} {count} still pending. {listed}. Please make them, and mark them done when you have."
