@@ -1,4 +1,4 @@
-"""Environment variables the person sets for their own account: write-only secrets the services use (a voice for the reminders, say).
+"""Environment variables the person sets for their own account: write-only secrets the services use (the key that turns your voice notes into text, say).
 
 A value is sealed with the server's key as soon as it arrives and is never sent back: the app can see that one is set, replace it, remove it
 and test it, but never read it again. Only the names listed in `SECRETS` can be set, so nothing stored here is a surprise.
@@ -18,7 +18,7 @@ SECRETS: dict[str, dict[str, str]] = {
     "deepgram": {
         "name": "DEEPGRAM_API_KEY",
         "label": "Deepgram API key",
-        "description": "Gives the call reminders a spoken voice on Telegram. Deepgram gives a new account free credit.",
+        "description": "Lets the bot understand voice notes you send it (it never sends audio back). Deepgram gives a new account free credit.",
         "helpUrl": "https://console.deepgram.com/",
     },
 }
