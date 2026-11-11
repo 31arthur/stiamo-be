@@ -74,6 +74,8 @@ def build_services(app: FastAPI, session: AsyncSession) -> tuple[AgentService, C
     agent.engine = s.settings.engine
     box: list[ChannelService] = []  # (the channels are made after the agent, and the agent sends through them)
     agent.notify = lambda who, workspace, text: box[0].tell(who, workspace, text)
+    agent.sorter = lambda: WorkflowService(SqlWorkflowRepository(session), SqlSettingsRepository(session, s.box), s.runs, s.llm_factory, s.decision_factory, s.data_factory, s.running, s.sweeps.is_active, box[0].alerts)
+    agent.raise_alert = lambda who, token, **kw: box[0].alerts.raise_alert(who, token, **kw)
     agent.send_telegram = lambda who, workspace, channel_id, chat, text: box[0].send_with(who, workspace, channel_id, chat, text)
     agent.ask_phone = lambda who, workspace, text, buttons: box[0].tell(who, workspace, text, buttons=buttons)
     channels = ChannelService(SqlChannelRepository(session, s.box), agent, s.telegram, s.twilio, s.tokens, public_url=s.settings.public_url, pairing_minutes=s.settings.pairing_minutes, memory=s.chat_memory, proposals=build_proposals(app, session), conversations=ConversationService(SqlConversationRepository(session), agent, SqlProposalRepository(session)))

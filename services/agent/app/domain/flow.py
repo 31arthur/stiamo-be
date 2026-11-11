@@ -11,6 +11,7 @@ a message, the AI agent, and the answer. See application/flownodes.py for what e
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -53,6 +54,12 @@ CATALOG: dict[str, tuple[str, str, str]] = {
     "msg.telegram": ("Messages", "Telegram", "Sends a message with one of your Telegram bots: pick the bot (its credential) and, if you like, one chat. Cannot send for another workspace than the bot's."),
     "msg.mail": ("Mail", "Draft an email", "Writes an email for you to approve. Nothing is sent until you approve it (in Needs me, or by saying YES)."),
     "msg.ask": ("Messages", "Ask me", "Asks you on your phone with buttons and waits. The button you press decides which output the workflow carries on from."),
+    "ai.classify": ("AI", "Sort into labels", "Reads each item and gives it one of your labels, with how sure it is. One output for each label, and one for what it isn't sure about."),
+    "ai.read": ("AI", "Read and summarise", "Opens each email in full and says what it is about, how urgent it is, what to do, and (for events) the date it names."),
+    "core.safe_senders": ("Mail", "Keep safe senders", "Lets mail from people you trust go no further: your correspondents, listed domains, addresses and phrases. The rest goes on."),
+    "msg.trash": ("Mail", "Move to Trash", "Moves emails to Trash (never deletes them). By default it asks you first: you approve it in Needs me, or by saying YES."),
+    "msg.alert": ("Messages", "Alert me", "Pings your phone about an email, with its summary and a few suggested replies. Once per email."),
+    "msg.event": ("Messages", "Propose a calendar event", "Puts the event an email names in front of you to approve. Nothing reaches the calendar until you do."),
     "ai.agent": ("AI", "AI agent", "A model that reads, calls the tools you give it and answers."),
     "respond": ("Output", "Answer", "Ends the run with the answer to give."),
 }
@@ -86,6 +93,10 @@ class FNode:
             return len(p.get("rules") or []) + 1
         if self.type == "msg.ask":
             return max(2, len(p.get("options") or []))
+        if self.type == "ai.classify":
+            return len(p.get("labels") or []) + 1  # one for each label, then the ones it isn't sure about
+        if self.type == "core.safe_senders":
+            return 2  # carry on, kept
         if self.type in ("core.stop", "respond", "core.note"):
             return 0
         return 1
@@ -148,7 +159,7 @@ def validate(f: Flow) -> list[str]:
     live = [n for n in f.nodes if n.type != "core.note"]
     if not any(n.type in TRIGGERS for n in live):
         problems.append("A workflow needs a trigger to start from.")
-    if not any(n.type in ("ai.agent", "respond", "msg.send", "msg.telegram") for n in live):
+    if not any(n.type in ("ai.agent", "ai.classify", "respond", "msg.send", "msg.telegram", "msg.trash", "msg.alert", "msg.event", "msg.mail") for n in live):
         problems.append("A workflow needs an AI agent, an Answer or a Send a message node, so it does something with what it finds.")
     if sum(1 for n in f.nodes if n.type == "ai.agent") > MAX_AGENTS:
         problems.append(f"A workflow can have at most {MAX_AGENTS} AI agent nodes.")
@@ -190,6 +201,19 @@ def validate(f: Flow) -> list[str]:
                 problems.append(f"“{n.name or n.id}” needs a Telegram bot to send with (its credential).")
             if not str(p.get("text") or "").strip():
                 problems.append(f"“{n.name or n.id}” needs the text to send.")
+        if t == "ai.classify":
+            labels = [x for x in (p.get("labels") or []) if isinstance(x, dict)]
+            names = [str(x.get("name") or "") for x in labels]
+            if not str(p.get("prompt") or "").strip():
+                problems.append(f"“{n.name or n.id}” needs to be told what the sorting is for.")
+            if not 2 <= len(labels) <= 12:
+                problems.append(f"“{n.name or n.id}” needs between 2 and 12 labels.")
+            elif any(not re.match(r"^[a-z][a-z0-9_]{0,39}$", x) for x in names) or len(set(names)) != len(names):
+                problems.append(f"The labels of “{n.name or n.id}” are lower case letters, digits and _, each different, starting with a letter.")
+            elif any(not str(x.get("description") or "").strip() for x in labels):
+                problems.append(f"Every label of “{n.name or n.id}” needs a description: it is what the model reads to choose.")
+        if t == "ai.read" and not str(p.get("prompt") or "").strip():
+            problems.append(f"“{n.name or n.id}” needs to be told what matters.")
         if t == "msg.mail" and not str(p.get("to") or "").strip():
             problems.append(f"“{n.name or n.id}” needs who to write to.")
         if t == "core.set" and not p.get("fields"):

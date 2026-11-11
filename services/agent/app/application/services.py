@@ -181,6 +181,9 @@ class AgentService:
     ask_phone: Any = None
     #: Sends text with one named Telegram bot for a Telegram node: (who, workspace, channel id, chat id or None, text) -> how many chats it reached.
     send_telegram: Any = None
+    #: The older kind of agent's judging, for the sorting nodes: a function giving a WorkflowService (see application/workflows.py), and one that raises an alert on the phone.
+    sorter: Any = None
+    raise_alert: Any = None
 
     def __init__(
         self,
