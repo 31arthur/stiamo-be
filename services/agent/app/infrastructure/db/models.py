@@ -33,6 +33,7 @@ class SettingsModel(Base):
     #: The priority mail watch: which workspaces have it switched off.
     mailwatch: Mapped[dict[str, Any] | None] = mapped_column(Json)
     availability: Mapped[dict[str, Any] | None] = mapped_column(Json)
+    graphs: Mapped[dict[str, Any] | None] = mapped_column(Json)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime)
 
 
@@ -80,6 +81,7 @@ class RunModel(Base):
     channel: Mapped[str | None] = mapped_column(String(36))
     version: Mapped[int] = mapped_column(Integer, default=0)
     workspace: Mapped[str] = mapped_column(String(16), default="", server_default="")
+    trace: Mapped[list[dict[str, Any]] | None] = mapped_column(Json)
 
     __table_args__ = (Index("ix_agent_runs_agent", "user_id", "agent_id", "started_at"),)
 

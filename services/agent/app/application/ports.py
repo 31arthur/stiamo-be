@@ -135,6 +135,8 @@ class UserSettings:
     mailwatch: dict[str, Any] = field(default_factory=dict)
     #: What was said about time inside events: {events: {key: [mode, day]}, rules: {title: mode}, asked: {short: question}}. See application/availability.py.
     availability: dict[str, Any] = field(default_factory=dict)
+    #: Each agent's workflow where the person changed it from the default: {agent_id: {nodes, edges}}. See domain/graph.py.
+    graphs: dict[str, Any] = field(default_factory=dict)
 
 
 class SettingsRepository(ABC):
@@ -227,6 +229,8 @@ class RunRecord:
     agent_name: str = ""
     #: The workspace it ran under (its data was limited to that one); empty when it saw every workspace.
     workspace: str = ""
+    #: What each node of the workflow did, in the order they ran (see application/graphrun.py).
+    trace: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass

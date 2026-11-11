@@ -324,22 +324,19 @@ async def test_what_one_workspace_books_becomes_busy_time_for_the_next(rig):
     assert "FSX-task" in said
 
 
-async def test_an_agent_is_shown_as_nodes_tied_to_its_real_settings_and_a_run_records_its_workspace(rig):
+async def test_an_agent_is_shown_as_its_workflow_and_a_run_records_its_workspace(rig):
     await team_ready(rig)
     seed(rig)
     g = (await rig.client.get("/v1/agent/agents/daily-planner/graph", headers=headers())).json()
-    kinds = [n["type"] for n in g["nodes"]]
-    assert kinds[:4] == ["trigger", "scope", "prompt", "model"] and kinds[-1] == "output" and kinds.count("tool") >= 5
-    tools = {n["label"]: n for n in g["nodes"] if n["type"] == "tool"}
-    assert {"day_agenda", "propose_schedule"} <= set(tools) and tools["day_agenda"]["pack"] == "agenda" and tools["day_agenda"]["config"]["enabled"] is True
-    assert {"from": "tool:day_agenda", "to": "model"} in g["edges"] and {"from": "model", "to": "output"} in g["edges"]
-    prompt = next(n for n in g["nodes"] if n["type"] == "prompt")["config"]
-    assert "Daily Planner" in prompt["system"] and "tomorrow" in prompt["variables"]
-    # a tool switched off in the prompt settings shows as a disabled node: the graph is the agent's real configuration
+    assert [n["type"] for n in g["nodes"]] == ["trigger", "scope", "prompt", "agent", "output"] and g["custom"] is False
+    tools = {t["name"]: t for t in g["tools"]}
+    assert {"day_agenda", "propose_schedule"} <= set(tools) and tools["day_agenda"]["pack"] == "agenda" and tools["day_agenda"]["enabled"] is True
+    assert "Daily Planner" in g["defaults"]["system"] and "tomorrow" in g["variables"]
+    # a tool switched off in the prompt settings shows as off: the workflow's tools are the agent's real ones
     saved = (await rig.client.get("/v1/agent/agents/daily-planner", headers=headers())).json()["prompt"]
     await rig.client.put("/v1/agent/agents/daily-planner/prompt", json={**saved, "tools": {"free_time": {"enabled": False}}}, headers=headers())
     g = (await rig.client.get("/v1/agent/agents/daily-planner/graph", headers=headers())).json()
-    assert next(n for n in g["nodes"] if n["id"] == "tool:free_time")["config"]["enabled"] is False
+    assert next(t for t in g["tools"] if t["name"] == "free_time")["enabled"] is False
 
     # a run under a workspace records it, and shows it in the run detail
     sb = await connect_bot(rig, "456:def", 556, workspace="sb")
