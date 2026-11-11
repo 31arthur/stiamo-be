@@ -183,6 +183,8 @@ class AgentService:
     send_telegram: Any = None
     #: The older kind of agent's judging, for the sorting nodes: a function giving a WorkflowService (see application/workflows.py), and one that raises an alert on the phone.
     sorter: Any = None
+    #: What each agent has handled, kept per item (the older agents' ledger): a function giving the repository. For "Only new items" and "Add to Attention".
+    ledger: Any = None
     raise_alert: Any = None
 
     def __init__(

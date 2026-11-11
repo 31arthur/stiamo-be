@@ -775,3 +775,45 @@ async def test_an_alert_node_raises_each_email_once(rig):
     assert (await run(rig))["answer"] == "True"
     rig.script += [ChatResult(json.dumps(analysis))]
     assert (await run(rig))["answer"] == "False"  # the same email is never raised twice
+
+
+async def test_only_new_items_go_through_in_a_scheduled_run_and_a_run_by_hand_uses_nothing_up(rig):
+    await planner_ready(rig)
+    nodes = [n("t", "trigger.schedule", time="07:30"), n("h", "trigger.manual"), n("mail", "data.mail", days=400, limit=10), n("new", "core.only_new"), n("a", "respond", text="{{ $node.new.count }}")]
+    await put(rig, nodes, wire(("t", 0, "mail"), ("h", 0, "mail"), ("mail", 0, "new"), ("new", 0, "a")))
+    assert (await run(rig))["answer"] == "4" and (await run(rig))["answer"] == "4"  # by hand: everything, every time
+    assert (await run(rig, scheduled=True))["answer"] == "4"  # the first real run sees them all…
+    assert (await run(rig, scheduled=True))["answer"] in ("", "0")  # …and the next sees nothing new (nothing arrives, so nothing answers)
+    rig.data.mail.append({"uid": 9, "subject": "Brand new", "sender": {"name": "X", "address": "x@y.io"}, "snippet": "hello", "date": "2026-11-01T10:00:00Z"})
+    assert (await run(rig, scheduled=True))["answer"] == "1"
+
+
+async def test_the_mail_sorter_template_trashes_junk_on_approval_and_puts_what_matters_in_attention(rig):
+    await planner_ready(rig)
+    made = await rig.client.post("/v1/agent/agents", json={"name": "Inbox", "templateId": "mail-sorter"}, headers=headers())
+    assert made.status_code == 201, made.text
+    a = f"/v1/agent/agents/{made.json()['id']}"
+    f = (await rig.client.get(f"{a}/flow", headers=headers())).json()
+    assert f["problems"] == [] and {x["type"] for x in f["nodes"]} >= {"core.only_new", "core.safe_senders", "ai.classify", "msg.trash", "ai.read", "msg.attention"}
+    for x in f["nodes"]:  # ask about one mail at a time, so the test can give one answer for each
+        if x["type"] == "ai.classify":
+            x["parameters"]["batchSize"] = 1
+        if x["type"] == "data.mail":
+            x["parameters"]["days"] = 400
+    assert (await rig.client.put(f"{a}/flow", json={"nodes": f["nodes"], "connections": f["connections"]}, headers=headers())).status_code == 200
+    analysis = {"summary": "A client wants a quote.", "priority": "high", "action": "Reply with a quote", "due": None, "event": None}
+    rig.script += [verdict("important"), verdict("junk"), verdict("junk"), ChatResult(json.dumps(analysis))]  # the lead; then the shop and the newsletter; then the reading of the lead
+    out = await rig.client.post(f"{a}/flow/run", json={"message": "go", "scheduled": True}, headers=headers())
+    assert out.status_code == 200, out.text
+    assert rig.data.trashed == []  # junk is only proposed
+    cards = (await rig.client.get("/v1/agent/proposals", headers=headers())).json()["items"]
+    trash = next(p for p in cards if p["action"] == "mail.trash")
+    assert trash["title"] == "Move 2 emails to Trash"
+    queue = (await rig.client.get("/v1/agent/attention", headers=headers())).json()
+    assert queue["count"] == 1 and queue["items"][0]["agentName"] == "Inbox" and queue["items"][0]["summary"] == "A client wants a quote." and queue["items"][0]["priority"] == "high"
+    item = queue["items"][0]
+    assert (await rig.client.post("/v1/agent/attention/act", json={"agentId": item["agentId"], "itemId": item["itemId"], "action": "done"}, headers=headers())).status_code == 200
+    # a second morning: nothing is new, so nothing is judged again and what was settled stays settled
+    before = len(rig.llm_log)
+    assert (await rig.client.post(f"{a}/flow/run", json={"message": "go", "scheduled": True}, headers=headers())).status_code in (200, 400, 422)
+    assert len(rig.llm_log) == before and (await rig.client.get("/v1/agent/attention", headers=headers())).json()["count"] == 0

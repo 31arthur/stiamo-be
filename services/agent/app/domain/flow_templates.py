@@ -122,6 +122,32 @@ TEMPLATES: list[dict[str, Any]] = [
             "connections": link(("trigger", 0, "answer")),
         },
     },
+    {
+        "id": "mail-sorter",
+        "name": "Mail sorter",
+        "description": "Every morning it reads new mail, keeps the people you trust out of it, and sorts the rest: junk is proposed for Trash (you approve), what matters goes to your Attention queue with a summary, and anything it is unsure about comes to you too.",
+        "packs": ["agenda"],
+        "system": None,
+        "suggestions": [],
+        "flow": {
+            "nodes": [
+                n("morning", "trigger.schedule", "Every morning", 0, 0, time="07:30", timezone="Asia/Kolkata", days=[0, 1, 2, 3, 4, 5, 6]),
+                n("byhand", "trigger.manual", "Run it by hand", 0, 160),
+                n("mail", "data.mail", "New mail", 260, 80, days=2, limit=50),
+                n("new", "core.only_new", "Only what is new", 500, 80),
+                n("safe", "core.safe_senders", "Keep people I trust", 740, 80, correspondents=True, domains=[], addresses=[], phrases=[]),
+                n("sort", "ai.classify", "Sort the mail", 980, 80, prompt="This is my work inbox. Sort each email: is it junk, does it need me, or is it fine to leave?", threshold=0.7, decider="model", batchSize=5, labels=[
+                    {"name": "junk", "description": "Unwanted sales mail, newsletters, mass mailings and promotions that nobody asked for."},
+                    {"name": "important", "description": "Needs me: a person waiting for an answer, a deadline, a hearing or court matter, a client, an invoice or money."},
+                    {"name": "fine", "description": "Everything else that can stay in the inbox without a look."},
+                ]),
+                n("trash", "msg.trash", "Move junk to Trash", 1260, 0, folder="INBOX", auto=False, tell=True),
+                n("read", "ai.read", "Read what matters", 1260, 200, prompt="Mail that needs my attention: what is it, how urgent, what should I do.", route="event"),
+                n("attention", "msg.attention", "Add to Attention", 1540, 200),
+            ],
+            "connections": link(("morning", 0, "mail"), ("byhand", 0, "mail"), ("mail", 0, "new"), ("new", 0, "safe"), ("safe", 0, "sort"), ("sort", 0, "trash"), ("sort", 1, "read"), ("sort", 3, "read"), ("read", 0, "attention")),
+        },
+    },
 ]
 
 
