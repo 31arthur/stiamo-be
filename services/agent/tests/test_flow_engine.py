@@ -551,3 +551,26 @@ async def test_a_draft_to_something_that_is_not_an_address_or_with_no_mailbox_or
     assert code == 422 and "no mailbox" in msg
     assert (await put(rig, [base[0], n("m", "msg.mail", subject="x", text="y"), base[1]], wire(("t", 0, "m"), ("m", 0, "a")))).status_code == 422  # no recipient: refused at save
     assert rig.data.mail_sent == []
+
+
+async def test_a_run_reports_each_node_while_it_goes_and_when_it_is_over(rig):
+    await planner_ready(rig)
+    nodes = [n("t", "trigger.chat"), n("s", "core.set", fields=[{"name": "x", "value": "1"}]), n("a", "respond", text="done")]
+    assert (await put(rig, nodes, wire(("t", 0, "s"), ("s", 0, "a")))).status_code == 200
+    P = f"{PLANNER}/flow/progress"
+    assert (await rig.client.get(f"{P}/nothing-yet", headers=headers())).json() == {"nodes": {}, "done": False}
+    r = await rig.client.post(RUN, json={"message": "hi", "progressId": "run-1"}, headers=headers())
+    assert r.status_code == 200, r.text
+    got = (await rig.client.get(f"{P}/run-1", headers=headers())).json()
+    assert got["done"] is True and set(got["nodes"]) == {"t", "s", "a"}
+    assert all(v["state"] == "ok" and "ms" in v for v in got["nodes"].values()) and got["nodes"]["t"]["outputs"] == [1]
+    assert (await rig.client.get(f"{P}/bad id!", headers=headers())).status_code in (404, 422)
+
+
+async def test_a_failed_run_marks_the_node_that_failed_and_is_still_over(rig):
+    await planner_ready(rig)
+    nodes = [n("t", "trigger.chat"), n("s", "core.set", fields=[{"name": "x", "value": "{{ nope( }}"}]), n("a", "respond", text="done")]
+    await put(rig, nodes, wire(("t", 0, "s"), ("s", 0, "a")))
+    r = await rig.client.post(RUN, json={"message": "hi", "progressId": "run-2"}, headers=headers())
+    got = (await rig.client.get(f"{PLANNER}/flow/progress/run-2", headers=headers())).json()
+    assert r.status_code >= 400 and got["done"] is True and got["nodes"]["t"]["state"] == "ok" and got["nodes"]["s"]["state"] == "error" and "a" not in got["nodes"]

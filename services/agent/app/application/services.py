@@ -576,10 +576,18 @@ class AgentService:
             "catalog": [{"type": t, "group": g, "label": lab, "description": d} for t, (g, lab, d) in CATALOG.items()],
         }
 
-    async def run_flow(self, who: Who, token: str, agent_id: str, message: str = "", scheduled: bool = False) -> dict[str, Any]:
+    async def run_flow(self, who: Who, token: str, agent_id: str, message: str = "", scheduled: bool = False, progress_id: str | None = None) -> dict[str, Any]:
         """Runs an agent's workflow now, by hand: from its chat trigger with a message, or from its schedule trigger. Returns the answer and the run
         (open it in the executions list for every node's items)."""
-        run = await self.chat(who, token, agent_id, message.strip() or "Run", [], "the web app", trigger="schedule" if scheduled else "manual")
+        from app.application.flowrun import current_progress, progress_begin, progress_done
+
+        key = progress_begin(who.user_id, progress_id) if progress_id else None
+        mark = current_progress.set(key)
+        try:
+            run = await self.chat(who, token, agent_id, message.strip() or "Run", [], "the web app", trigger="schedule" if scheduled else "manual")
+        finally:
+            current_progress.reset(mark)
+            progress_done(key)
         latest = await self._runs.recent(who.user_id, agent_id, limit=1)
         return {"answer": run.answer, "runId": latest[0].id if latest else None}
 
@@ -642,6 +650,12 @@ class AgentService:
                     if days:  # (no days ticked: it never runs)
                         out.append({"agent": agent_id, "node": n.id, "time": at, "timezone": tz, "days": days})
         return out
+
+    async def flow_progress(self, who: Who, agent_id: str, progress_id: str) -> dict[str, Any]:
+        from app.application.flowrun import progress_get
+
+        await self._def(who, agent_id)
+        return progress_get(who.user_id, progress_id)
 
     async def run_flow_node(self, who: Who, token: str, agent_id: str, node_id: str, items: list[dict[str, Any]] | None, confirm: bool) -> dict[str, Any]:
         from app.application.flowrun import run_one

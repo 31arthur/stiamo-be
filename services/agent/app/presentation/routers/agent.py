@@ -1,6 +1,6 @@
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Query, Request, Response, status
+from fastapi import APIRouter, Path, Query, Request, Response, status
 from pydantic import Field
 from stiamo_common.models import DomainModel
 
@@ -167,11 +167,18 @@ class RunFlowBody(DomainModel):
     message: Annotated[str, Field(max_length=4000)] = ""
     #: Start from the schedule trigger instead of the chat one.
     scheduled: bool = False
+    #: Made up by the editor so it can ask how far the run has got (GET .../flow/progress/{id}) while it is still going.
+    progress_id: Annotated[str | None, Field(max_length=64, pattern=r"^[A-Za-z0-9_-]+$")] = None
 
 
 @router.post("/agents/{agent_id}/flow/run", summary="Run a workflow now, by hand")
 async def run_flow(agent_id: str, body: RunFlowBody, agent: deps.Agent, me: deps.Me, token: deps.Token) -> dict[str, Any]:
-    return await agent.run_flow(me, token, agent_id, body.message, body.scheduled)
+    return await agent.run_flow(me, token, agent_id, body.message, body.scheduled, body.progress_id)
+
+
+@router.get("/agents/{agent_id}/flow/progress/{progress_id}", summary="How far a run has got: each node's state, and whether it is over")
+async def flow_progress(agent_id: str, progress_id: Annotated[str, Path(max_length=64, pattern=r"^[A-Za-z0-9_-]+$")], agent: deps.Agent, me: deps.Me) -> dict[str, Any]:
+    return await agent.flow_progress(me, agent_id, progress_id)
 
 
 class RunNodeBody(DomainModel):
