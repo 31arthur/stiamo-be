@@ -62,6 +62,9 @@ class ProposalService:
         data = self._data(token)
         try:
             for op in p.ops:
+                if "mail" in op:  # an email drafted by a workflow: approving it is what sends it
+                    await data.mail_send(str(op["mail"]["account"]), dict(op["mail"]["message"]))
+                    continue
                 table = op.get("table")
                 if table not in TABLES:
                     raise ValidationFailed("That kind of change isn't allowed.")

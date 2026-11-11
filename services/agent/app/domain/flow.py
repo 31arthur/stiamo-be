@@ -48,6 +48,7 @@ CATALOG: dict[str, tuple[str, str, str]] = {
     "data.calendar": ("Work", "Get calendar events", "Events from this workspace's Google calendars."),
     "data.drive": ("Work", "Search the Drive", "Documents in the Drive (S&B)."),
     "msg.send": ("Messages", "Send a message", "Sends text to your phone: the master bot on Telegram."),
+    "msg.mail": ("Mail", "Draft an email", "Writes an email for you to approve. Nothing is sent until you approve it (in Needs me, or by saying YES)."),
     "msg.ask": ("Messages", "Ask me", "Asks you on your phone with buttons and waits. The button you press decides which output the workflow carries on from."),
     "ai.agent": ("AI", "AI agent", "A model that reads, calls the tools you give it and answers."),
     "respond": ("Output", "Answer", "Ends the run with the answer to give."),
@@ -63,6 +64,8 @@ class FNode:
     position: tuple[float, float] = (0.0, 0.0)
     parameters: dict[str, Any] = field(default_factory=dict)
     disabled: bool = False
+    #: Items to use in place of what this node would give, when a workflow is run by hand (to try the rest of it with fixed data). None: not pinned.
+    pinned: list[dict[str, Any]] | None = None
 
     def outputs(self) -> int:
         p = self.parameters
@@ -80,7 +83,7 @@ class FNode:
         return 2 if self.type == "core.merge" else (0 if self.type in TRIGGERS or self.type == "core.note" else 1)
 
     def to_json(self) -> dict[str, Any]:
-        return {"id": self.id, "type": self.type, "name": self.name or CATALOG[self.type][1], "position": list(self.position), "parameters": self.parameters, **({"disabled": True} if self.disabled else {})}
+        return {"id": self.id, "type": self.type, "name": self.name or CATALOG[self.type][1], "position": list(self.position), "parameters": self.parameters, **({"disabled": True} if self.disabled else {}), **({"pinData": self.pinned} if self.pinned is not None else {})}
 
 
 @dataclass
@@ -109,7 +112,10 @@ class Flow:
             if not isinstance(n, dict) or not isinstance(n.get("id"), str) or n.get("type") not in CATALOG:
                 raise ValueError("Every node needs an id and a known type.")
             pos = n.get("position") or [0, 0]
-            nodes.append(FNode(n["id"][:40], n["type"], str(n.get("name") or "")[:60], (float(pos[0]), float(pos[1])), dict(n.get("parameters") or {}), bool(n.get("disabled"))))
+            pin = n.get("pinData")
+            if pin is not None and (not isinstance(pin, list) or len(pin) > 50 or any(not isinstance(i, dict) for i in pin) or len(str(pin)) > 100_000):
+                raise ValueError("Pinned data is a list of up to 50 items, each an object, and not too long.")
+            nodes.append(FNode(n["id"][:40], n["type"], str(n.get("name") or "")[:60], (float(pos[0]), float(pos[1])), dict(n.get("parameters") or {}), bool(n.get("disabled")), pin))
         conns: dict[str, list[list[dict[str, Any]]]] = {}
         for src, v in (raw.get("connections") or {}).items():
             main = (v or {}).get("main") if isinstance(v, dict) else None
@@ -168,6 +174,8 @@ def validate(f: Flow) -> list[str]:
                 problems.append(f"“{n.name or n.id}” needs two to four answers to offer, each with a name.")
             if not str(p.get("text") or "").strip():
                 problems.append(f"“{n.name or n.id}” needs the question to ask.")
+        if t == "msg.mail" and not str(p.get("to") or "").strip():
+            problems.append(f"“{n.name or n.id}” needs who to write to.")
         if t == "core.set" and not p.get("fields"):
             problems.append(f"“{n.name or n.id}” needs at least one field to set.")
         if t == "core.merge" and sum(1 for outs in f.connections.values() for o in outs for x in o if x["node"] == n.id) < 2:

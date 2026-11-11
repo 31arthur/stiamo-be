@@ -174,6 +174,19 @@ async def run_flow(agent_id: str, body: RunFlowBody, agent: deps.Agent, me: deps
     return await agent.run_flow(me, token, agent_id, body.message, body.scheduled)
 
 
+class RunNodeBody(DomainModel):
+    node_id: Annotated[str, Field(max_length=40)]
+    #: The items to give it; left out, the data pinned on the nodes leading into it.
+    items: list[dict[str, Any]] | None = Field(default=None, max_length=50)
+    #: Needed to run a node that sends or drafts something outside the workflow.
+    confirm: bool = False
+
+
+@router.post("/agents/{agent_id}/flow/node", summary="Run one node of the saved workflow with items you give, to see what it does")
+async def run_flow_node(agent_id: str, body: RunNodeBody, agent: deps.Agent, me: deps.Me, token: deps.Token) -> dict[str, Any]:
+    return await agent.run_flow_node(me, token, agent_id, body.node_id, body.items, body.confirm)
+
+
 @router.delete("/agents/{agent_id}/flow", summary="Back to the default workflow")
 async def reset_flow(agent_id: str, agent: deps.Agent, me: deps.Me, token: deps.Token, request: Request) -> dict[str, Any]:
     out = await agent.reset_flow(me, token, agent_id)
