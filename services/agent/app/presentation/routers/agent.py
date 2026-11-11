@@ -134,6 +134,71 @@ async def reset_agent_graph(agent_id: str, agent: deps.Agent, me: deps.Me, token
     return await agent.reset_graph(me, token, agent_id)
 
 
+class FlowBody(DomainModel):
+    nodes: list[dict[str, Any]] = Field(max_length=70)
+    connections: dict[str, Any] = Field(default_factory=dict)
+
+
+class NewAgentBody(DomainModel):
+    name: Annotated[str, Field(min_length=1, max_length=60)]
+    description: Annotated[str, Field(max_length=300)] = ""
+    #: A template to start from (see GET /flow/catalog); left out: the plain chat assistant.
+    template_id: Annotated[str | None, Field(max_length=40)] = None
+    #: Or a workflow of your own.
+    flow: FlowBody | None = None
+    packs: list[str] | None = Field(default=None, max_length=10)
+
+
+@router.get("/flow/catalog", summary="The nodes a workflow can be made of, and the templates a new agent can start from")
+async def flow_catalog() -> dict[str, Any]:
+    from app.domain.flow import CATALOG
+    from app.domain.flow_templates import TEMPLATES
+
+    return {"nodes": [{"type": t, "group": g, "label": lab, "description": d} for t, (g, lab, d) in CATALOG.items()], "templates": TEMPLATES}
+
+
+@router.post("/agents", status_code=status.HTTP_201_CREATED, summary="Create an agent from a workflow template (or one you send)")
+async def create_agent(body: NewAgentBody, agent: deps.Agent, me: deps.Me, token: deps.Token) -> dict[str, Any]:
+    return await agent.create_agent(me, token, body.name, body.description, body.template_id, body.flow.model_dump() if body.flow else None, body.packs)
+
+
+@router.delete("/agents/{agent_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Delete an agent you created from a workflow")
+async def delete_agent(agent_id: str, agent: deps.Agent, me: deps.Me) -> Response:
+    await agent.delete_agent(me, agent_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get("/agents/{agent_id}/flow", summary="An agent's workflow: nodes, connections, and what an editor needs")
+async def get_flow(agent_id: str, agent: deps.Agent, me: deps.Me, token: deps.Token) -> dict[str, Any]:
+    return await agent.flow(me, token, agent_id)
+
+
+@router.put("/agents/{agent_id}/flow", summary="Save an agent's workflow (only one that can run is kept)")
+async def put_flow(agent_id: str, body: FlowBody, agent: deps.Agent, me: deps.Me, token: deps.Token) -> dict[str, Any]:
+    return await agent.set_flow(me, token, agent_id, body.model_dump())
+
+
+@router.post("/agents/{agent_id}/flow/check", summary="What is wrong with a workflow, without saving it")
+async def check_flow(agent_id: str, body: FlowBody, agent: deps.Agent, me: deps.Me) -> dict[str, Any]:
+    return {"problems": await agent.check_flow(me, agent_id, body.model_dump())}
+
+
+class RunFlowBody(DomainModel):
+    message: Annotated[str, Field(max_length=4000)] = ""
+    #: Start from the schedule trigger instead of the chat one.
+    scheduled: bool = False
+
+
+@router.post("/agents/{agent_id}/flow/run", summary="Run a workflow now, by hand")
+async def run_flow(agent_id: str, body: RunFlowBody, agent: deps.Agent, me: deps.Me, token: deps.Token) -> dict[str, Any]:
+    return await agent.run_flow(me, token, agent_id, body.message, body.scheduled)
+
+
+@router.delete("/agents/{agent_id}/flow", summary="Back to the default workflow")
+async def reset_flow(agent_id: str, agent: deps.Agent, me: deps.Me, token: deps.Token) -> dict[str, Any]:
+    return await agent.reset_flow(me, token, agent_id)
+
+
 @router.put("/agents/{agent_id}/selection", status_code=status.HTTP_204_NO_CONTENT, summary="Choose the provider, model and thinking level for an agent")
 async def set_selection(agent_id: str, body: SelectionBody, agent: deps.Agent, me: deps.Me) -> Response:
     await agent.set_selection(me, agent_id, body.provider_id, body.model_id, body.thinking)

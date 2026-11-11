@@ -95,6 +95,10 @@ class DataGateway(ABC):
         """The events in the owner's Google calendars between two days (YYYY-MM-DD), on their own clock. Empty when none are connected."""
         return []
 
+    async def contacts(self, query: str = "", limit: int = 50) -> list[dict[str, Any]]:
+        """People from the owner's Google contacts (each with name, phones, emails, organisation, workspaces), by a word in their name. Empty when none are connected."""
+        return []
+
     async def calendar_sync(self) -> dict[str, Any] | None:
         """Has Google's calendars read and Stiamo's meetings, tasks and calls sent to them now. What it did ({pulled, sent, errors}), or None when
         the calendar service couldn't be reached (nothing is lost: the background sync does it within minutes)."""
@@ -137,6 +141,10 @@ class UserSettings:
     availability: dict[str, Any] = field(default_factory=dict)
     #: Each agent's workflow where the person changed it from the default: {agent_id: {nodes, edges}}. See domain/graph.py.
     graphs: dict[str, Any] = field(default_factory=dict)
+    #: Each agent's workflow in the item-passing form (see domain/flow.py), where it was changed from the default: {agent_id: {nodes, connections}}.
+    flows: dict[str, Any] = field(default_factory=dict)
+    #: Agents the person created from workflows: {agent_id: {name, description, system, packs, suggestions}}.
+    custom_agents: dict[str, Any] = field(default_factory=dict)
 
 
 class SettingsRepository(ABC):

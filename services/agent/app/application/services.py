@@ -144,6 +144,15 @@ class Memo(DataGateway):
     async def calendar_events(self, start, end):
         return await self._once(f"calendar:{start}:{end}", lambda: self._inner.calendar_events(start, end))
 
+    async def contacts(self, query="", limit=50):
+        return await self._once(f"contacts:{query}:{limit}", lambda: self._inner.contacts(query, limit))
+
+    async def calendar_sync(self):
+        return await self._inner.calendar_sync()
+
+    async def google_links(self):
+        return await self._inner.google_links()
+
     async def save_record(self, table, record):
         await self._inner.save_record(table, record)
         self._memo.pop(f"records:{table}", None)
@@ -159,11 +168,15 @@ class Prepared:
     packs: dict[str, str] = field(default_factory=dict)
     #: The workspace the data was limited to ("" for none).
     scope: str = ""
+    #: The data the agent's tools and a workflow's data nodes read (limited to the workspace when there is one).
+    data: Any = None
 
 
 class AgentService:
     #: "graph" runs each agent as a workflow of nodes; "classic" is the original single loop. Set from the AGENT_ENGINE setting.
     engine = "classic"
+    #: Sends text to the person's phone for a workflow's Send a message node: (who, workspace, text) -> how many chats it reached. Set where the channels are.
+    notify: Any = None
 
     def __init__(
         self,
@@ -201,7 +214,7 @@ class AgentService:
             "decision": {"enabled": bool(decision.get("enabled")), "modelId": decision.get("modelId") or DECISION_MODELS[0]["id"]},
             "decisionModels": list(DECISION_MODELS),
             "thinkingLevels": list(THINKING_LEVELS),
-            "agents": [self._summary(a, s) for a in self._registry.all()] + [self._workflow_summary(w, s) for w in await self._workflows.all(who.user_id)],
+            "agents": [self._summary(a, s) for a in self._all(s)] + [self._workflow_summary(w, s) for w in await self._workflows.all(who.user_id)],
             "defaultAgent": self._registry.default_id,
         }
 
@@ -272,10 +285,33 @@ class AgentService:
     def _selection(self, s: UserSettings, agent_id: str) -> tuple[dict[str, Any] | None, bool]:
         return selection_of(s, agent_id)
 
+    def _custom(self, s: UserSettings) -> list[AgentDefinition]:
+        """The agents this person created from workflows, as definitions (their prompt and tools; the workflow itself is in `s.flows`)."""
+        out = []
+        for k, v in s.custom_agents.items():
+            try:
+                out.append(AgentDefinition(id=k, name=v["name"], description=v.get("description", ""), system=v.get("system") or "You are a helpful assistant for {{user}}.", packs=tuple(v.get("packs") or ("agenda",)), suggestions=tuple(v.get("suggestions") or ()), workspaces=tuple(v.get("workspaces") or ("personal", "sb", "fsa"))))
+            except (KeyError, ValueError):
+                log.warning("a created agent %s can't be read", k)
+        return out
+
+    def _all(self, s: UserSettings) -> list[AgentDefinition]:
+        return [*self._registry.all(), *self._custom(s)]
+
+    async def _def(self, who: Who, agent_id: str) -> AgentDefinition:
+        """An agent by id: one in code, or one this person created. Raises UnknownAgent for neither."""
+        try:
+            return self._registry.get(agent_id)
+        except UnknownAgent:
+            found = next((a for a in self._custom(await self._load(who)) if a.id == agent_id), None)
+            if found is None:
+                raise
+            return found
+
     async def _known(self, who: Who, agent_id: str) -> None:
         """Agents come in two kinds: the ones in code, and the ones this person built. Either may have a model and a history."""
         try:
-            self._registry.get(agent_id)
+            await self._def(who, agent_id)
         except UnknownAgent:
             if await self._workflows.get(who.user_id, agent_id) is None:
                 raise
@@ -297,7 +333,7 @@ class AgentService:
 
     async def agent(self, who: Who, agent_id: str) -> dict[str, Any]:
         """Everything the prompt editor needs for one agent."""
-        agent = self._registry.get(agent_id)
+        agent = await self._def(who, agent_id)
         s = await self._load(who)
         prompt = self._prompt(agent, s)
         return {
@@ -312,7 +348,7 @@ class AgentService:
         """The team's agents that can answer in a workspace ("all": every one), as the person has assigned them."""
         s = await self._load(who)
         out = []
-        for a in self._registry.all():
+        for a in self._all(s):
             where = s.workspaces.get(a.id, list(a.workspaces))
             if workspace == "all" or workspace in where:
                 out.append({"id": a.id, "name": a.name, "description": a.description, "suggestions": list(a.suggestions)})
@@ -350,13 +386,13 @@ class AgentService:
         await self._repo.save(s)
 
     async def set_prompt(self, who: Who, agent_id: str, prompt: PromptConfig) -> None:
-        agent = self._registry.get(agent_id)
+        agent = await self._def(who, agent_id)
         s = await self._load(who)
         s.prompts = {**s.prompts, agent_id: prompt.validated(self._registry.variables(agent)).model_dump()}
         await self._repo.save(s)
 
     async def reset_prompt(self, who: Who, agent_id: str) -> None:
-        self._registry.get(agent_id)
+        await self._def(who, agent_id)
         s = await self._load(who)
         s.prompts = {k: v for k, v in s.prompts.items() if k != agent_id}
         await self._repo.save(s)
@@ -388,7 +424,7 @@ class AgentService:
         names = [t.spec.name for t in tools]
         if len(names) != len(set(names)):
             raise RuntimeError(f"Agent {agent.id!r} gets the same tool name from two packs: {sorted({n for n in names if names.count(n) > 1})}")
-        return Prepared(s, prompt or self._prompt(agent, s), tools, context, tool_packs, scope or "")
+        return Prepared(s, prompt or self._prompt(agent, s), tools, context, tool_packs, scope or "", data)
 
     def _proposer(self, who: Who, agent_id: str, channel_id: str | None):
         """What an agent's propose tools call to keep a proposal for the person to approve. None when proposals aren't kept here."""
@@ -423,7 +459,7 @@ class AgentService:
 
     async def preview(self, who: Who, token: str, agent_id: str, question: str, prompt: PromptConfig | None = None) -> dict[str, Any]:
         """Exactly what would be sent to the model for this question, so the prompt can be judged before it is used."""
-        agent = self._registry.get(agent_id)
+        agent = await self._def(who, agent_id)
         p = await self._prepare(who, token, agent, "the web app", prompt.validated(self._registry.variables(agent)) if prompt else None)
         pkg = build_package(p.config, [t.spec for t in p.tools], p.context, question)
         return {"system": pkg.system, "user": pkg.user, "tools": [{"name": t.name, "description": t.description, "parameters": t.parameters} for t in pkg.tools]}
@@ -433,7 +469,7 @@ class AgentService:
         *, trigger: str = "chat", channel_id: str | None = None, preface: str = "", workspace: str | None = None, plan_for: str | None = None,
     ) -> AgentRun:
         """Asks an agent. Every question that reaches a model is kept in the run log, whether it worked or not."""
-        agent = self._registry.get(agent_id)
+        agent = await self._def(who, agent_id)
         message = message.strip()
         if not message:
             raise ValidationFailed("Ask something first.")
@@ -449,6 +485,10 @@ class AgentService:
         except (ValueError, AttributeError, TypeError) as exc:
             raise ValidationFailed("The earlier conversation couldn't be read. Start a new chat.") from exc
         # What the conversation has established so far (when another agent may have answered before), ahead of the message itself.
+        if self.engine == "flow" or agent.id in p.settings.flows or agent.id in p.settings.custom_agents:  # the agent as an n8n-style workflow of items (flowrun.py)
+            from app.application.flowrun import FlowRunner
+
+            return await FlowRunner(self).run(who, token, agent, message, past, preface, channel, trigger=trigger, channel_id=channel_id, prepared=p)
         if self.engine == "graph":  # the agent as a workflow of nodes (see graphrun.py); the loop below is the classic fallback
             from app.application.graphrun import GraphRunner
 
@@ -524,7 +564,7 @@ class AgentService:
         from app.application.graphrun import graph_of
         from app.domain.graph import NODE_TYPES, validate
 
-        agent = self._registry.get(agent_id)
+        agent = await self._def(who, agent_id)
         s = await self._load(who)
         p = await self._prepare(who, token, agent, "the web app")
         g = graph_of(s.graphs, agent.id)
@@ -543,7 +583,7 @@ class AgentService:
         """What would stop a workflow from running, in words for a person. Empty: it can be saved and run."""
         from app.domain.graph import Graph, validate
 
-        self._registry.get(agent_id)
+        await self._def(who, agent_id)
         try:
             return validate(Graph.from_json(raw))
         except ValueError as exc:
@@ -563,11 +603,117 @@ class AgentService:
         return await self.graph(who, token, agent_id)
 
     async def reset_graph(self, who: Who, token: str, agent_id: str) -> dict[str, Any]:
-        self._registry.get(agent_id)
+        await self._def(who, agent_id)
         s = await self._load(who)
         s.graphs = {k: v for k, v in s.graphs.items() if k != agent_id}
         await self._repo.save(s)
         return await self.graph(who, token, agent_id)
+
+    # --- workflows in the n8n form: nodes, connections, items ---------------------------------------------------------------
+
+    async def flow(self, who: Who, token: str, agent_id: str) -> dict[str, Any]:
+        """An agent's workflow (its own, or the default), with what an editor needs: the tools its AI agent nodes can be given, the node catalog, the
+        variables a prompt may use, and what is wrong with it if anything."""
+        from app.application.flowrun import flow_of
+        from app.domain.flow import CATALOG, validate
+
+        agent = await self._def(who, agent_id)
+        s = await self._load(who)
+        p = await self._prepare(who, token, agent, "the web app")
+        f = flow_of(s.flows, agent.id)
+        overrides = p.config.tools
+        tools = [{"name": t.spec.name, "pack": p.packs.get(t.spec.name, ""), "description": t.spec.description, "enabled": overrides[t.spec.name].enabled if t.spec.name in overrides else True} for t in p.tools]
+        return {
+            "agentId": agent.id, "name": agent.name, "description": agent.description, **f.to_json(), "custom": agent.id in s.flows, "created": agent.id in s.custom_agents, "engine": self.engine,
+            "problems": validate(f), "tools": tools, "variables": self._registry.variables(agent), "defaults": {"system": agent.system, "inputTemplate": agent.input_template},
+            "catalog": [{"type": t, "group": g, "label": lab, "description": d} for t, (g, lab, d) in CATALOG.items()],
+        }
+
+    async def run_flow(self, who: Who, token: str, agent_id: str, message: str = "", scheduled: bool = False) -> dict[str, Any]:
+        """Runs an agent's workflow now, by hand: from its chat trigger with a message, or from its schedule trigger. Returns the answer and the run
+        (open it in the executions list for every node's items)."""
+        run = await self.chat(who, token, agent_id, message.strip() or "Run", [], "the web app", trigger="schedule" if scheduled else "manual")
+        latest = await self._runs.recent(who.user_id, agent_id, limit=1)
+        return {"answer": run.answer, "runId": latest[0].id if latest else None}
+
+    async def check_flow(self, who: Who, agent_id: str, raw: Any) -> list[str]:
+        from app.domain.flow import Flow, validate
+
+        await self._def(who, agent_id)
+        try:
+            return validate(Flow.from_json(raw))
+        except ValueError as exc:
+            return [str(exc)]
+
+    async def set_flow(self, who: Who, token: str, agent_id: str, raw: Any) -> dict[str, Any]:
+        from app.domain.flow import Flow
+
+        problems = await self.check_flow(who, agent_id, raw)
+        if problems:
+            raise ValidationFailed(" ".join(problems[:3]))
+        s = await self._load(who)
+        s.flows = {**s.flows, agent_id: Flow.from_json(raw).to_json()}
+        await self._repo.save(s)
+        return await self.flow(who, token, agent_id)
+
+    async def reset_flow(self, who: Who, token: str, agent_id: str) -> dict[str, Any]:
+        await self._def(who, agent_id)
+        s = await self._load(who)
+        s.flows = {k: v for k, v in s.flows.items() if k != agent_id}
+        await self._repo.save(s)
+        return await self.flow(who, token, agent_id)
+
+    async def create_agent(self, who: Who, token: str, name: str, description: str, template_id: str | None, flow: Any = None, packs: list[str] | None = None) -> dict[str, Any]:
+        """A new agent, made from a template workflow (or one you send). It appears in the agent list with its own model, prompt and history."""
+        import re as _re
+
+        from app.domain.flow import Flow
+        from app.domain.flow_templates import template
+
+        name = name.strip()
+        if not name:
+            raise ValidationFailed("Give the agent a name.")
+        t = template(template_id) if template_id else None
+        if template_id and t is None:
+            raise ValidationFailed("That template doesn't exist.")
+        raw = flow if flow is not None else (t["flow"] if t else template("assistant")["flow"])  # type: ignore[index]
+        chosen = packs or (t["packs"] if t else ["agenda", "changes"])
+        missing = [x for x in chosen if x not in self._registry.packs]
+        if missing:
+            raise ValidationFailed(f"There is no tool pack called {', '.join(missing)}.")
+        problems = await self._check_new(raw)
+        if problems:
+            raise ValidationFailed(" ".join(problems[:3]))
+        s = await self._load(who)
+        slug = _re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[:30] or "agent"
+        taken = {a.id for a in self._all(s)}
+        agent_id, i = slug, 2
+        while agent_id in taken:
+            agent_id, i = f"{slug}-{i}", i + 1
+        s.custom_agents = {**s.custom_agents, agent_id: {"name": name[:60], "description": (description or (t["description"] if t else ""))[:300], "system": (t["system"] if t else None), "packs": list(chosen), "suggestions": list(t["suggestions"]) if t else [], "workspaces": ["personal", "sb", "fsa"]}}
+        s.flows = {**s.flows, agent_id: Flow.from_json(raw).to_json()}
+        await self._repo.save(s)
+        return {**self._summary(next(a for a in self._all(s) if a.id == agent_id), s), "id": agent_id}
+
+    @staticmethod
+    async def _check_new(raw: Any) -> list[str]:
+        from app.domain.flow import Flow, validate
+
+        try:
+            return validate(Flow.from_json(raw))
+        except ValueError as exc:
+            return [str(exc)]
+
+    async def delete_agent(self, who: Who, agent_id: str) -> None:
+        """Removes an agent that was created from a workflow (the ones built into Stiamo stay). Its history goes with it."""
+        s = await self._load(who)
+        if agent_id not in s.custom_agents:
+            raise ValidationFailed("Only agents you created can be deleted.")
+        s.custom_agents = {k: v for k, v in s.custom_agents.items() if k != agent_id}
+        for field_ in ("flows", "prompts", "selections", "workspaces", "graphs"):
+            setattr(s, field_, {k: v for k, v in getattr(s, field_).items() if k != agent_id})
+        await self._repo.save(s)
+        await self._runs.clear(who.user_id, agent_id)
 
     async def clear_runs(self, who: Who, agent_id: str) -> int:
         await self._known(who, agent_id)

@@ -37,7 +37,7 @@ class SqlSettingsRepository(SettingsRepository):
         if row is None:
             return None
         keys = {k: v for k, v in self._box.open(row.keys_sealed).items() if isinstance(v, str)}
-        return UserSettings(row.user_id, row.email, keys, dict(row.selection or {}), row.decision, dict(row.prompt or {}), dict(row.workspaces or {}), row.updated_at, dict(row.planner or {}), dict(row.reminders or {}), list(row.themes or []), dict(row.mailwatch or {}), dict(row.availability or {}), dict(row.graphs or {}))
+        return UserSettings(row.user_id, row.email, keys, dict(row.selection or {}), row.decision, dict(row.prompt or {}), dict(row.workspaces or {}), row.updated_at, dict(row.planner or {}), dict(row.reminders or {}), list(row.themes or []), dict(row.mailwatch or {}), dict(row.availability or {}), dict(row.graphs or {}), dict(row.flows or {}), dict(row.custom_agents or {}))
 
     async def save(self, s: UserSettings) -> None:
         row = await self._s.get(SettingsModel, s.user_id) or SettingsModel(user_id=s.user_id)
@@ -50,6 +50,8 @@ class SqlSettingsRepository(SettingsRepository):
         row.mailwatch = dict(s.mailwatch)
         row.availability = dict(s.availability)
         row.graphs = dict(s.graphs)
+        row.flows = dict(s.flows)
+        row.custom_agents = dict(s.custom_agents)
         row.updated_at = datetime.now(UTC)
         self._s.add(row)
         await self._s.flush()

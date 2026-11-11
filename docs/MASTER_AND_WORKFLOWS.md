@@ -48,3 +48,22 @@ docker compose -f deploy/docker-compose.prod.yml exec agent python -m app.script
 ```
 
 It keeps what is in use: each agent's model, prompt and workspace settings, connected bots, API keys, the cost and usage ledger (the Usage page), proposals and plans waiting for your approval, the delivery log, and the Task Force agents with their runs. Add `--include-usage` to clear the cost ledger too. There is no undo, so take a database backup first if in doubt (`pg_dump` of `stiamo_agent`).
+
+## Workflows the n8n way (the flow engine)
+
+Agents can also run as workflows in the shape n8n uses: **nodes on a canvas, joined output to input, passing lists of items.** (Built from n8n's ideas, not its code: n8n's Sustainable Use License doesn't allow copying its code into a product, so the engine, nodes and expressions here are written for this app.)
+
+- **Items:** every node takes the items that arrive and gives items on each of its outputs. An **If** has two outputs (true, false), a **Switch** one per rule plus a fallback. A node that gets nothing doesn't run, which is how a branch ends (set `runWhenEmpty` on a node to answer "found nobody").
+- **Expressions:** any text can hold `{{ … }}`: `{{ $json.subject }}`, `{{ $input.length }}`, `{{ $node["Mail"].first.sender }}`, `{{ join($json.title, ", ") }}`, `{{ contains($json.subject, "invoice") && $json.n > 2 }}`. A whole `{{ }}` keeps its type (a list stays a list). Nothing is run as code.
+- **Nodes:** triggers (chat message, schedule, by hand); If, Switch, Merge, Loop over items, Filter, Sort, Limit, Split out, Aggregate, Edit fields, Do nothing, Stop and fail, Sticky note; **this app's data**: read mail, read a message, find contacts, tasks, follow-ups, meetings, hearings, cases, calendar events, Drive; **Send a message** to your phone; **AI agent** (with the tools you give it); **Answer**.
+- **Workspace limits still hold:** a workflow's data nodes read through the same workspace-limited data the agent's tools use, so a run about S&B can't read FSA's tasks, mail or contacts.
+- **Trace:** every node run is kept with how long it took and the items that went in and came out, so an execution can be opened node by node.
+
+### Create an agent from a workflow
+`GET /v1/agent/flow/catalog` lists the nodes and the templates (Chat assistant, Daily calls digest, Mail digest, Contact lookup, Overdue tasks nudge). `POST /v1/agent/agents {name, templateId}` creates an agent from one (or send your own `flow`); it appears in the agent list with its own model, prompt, workflow and history. `DELETE /v1/agent/agents/{id}` removes one you created. `GET|PUT|DELETE /v1/agent/agents/{id}/flow` read, save (only a workflow that can run is kept) and reset a workflow; `POST …/flow/check` says what's wrong; `POST …/flow/run` runs it by hand.
+
+### State of it
+- `AGENT_ENGINE=flow` runs **every** agent on this engine. The whole test suite (380) passes under `classic`, `graph` and `flow`, so each agent behaves the same on all three. The default engine is still `graph`, until the canvas editor for flows ships; an agent you created from a workflow, or whose flow you saved, runs on the flow engine regardless.
+- Not built yet: the canvas editor for this form (the current Workflow tab edits the older graph), running a schedule trigger by itself at its time, a node to ask you a question on Telegram and wait for the answer, pinning a node's output and running one node, and sending mail from a workflow (it will need your approval, like proposals).
+
+`./deploy.sh` runs migration `agent 0021` (each agent's flow, and the agents you create).

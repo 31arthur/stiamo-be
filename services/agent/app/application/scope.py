@@ -109,6 +109,10 @@ class ScopedData(DataGateway):
     async def google_links(self):
         return await self._inner.google_links()
 
+    async def contacts(self, query: str = "", limit: int = 50):
+        """Only the people of this workspace's contact accounts."""
+        return [c for c in await self._inner.contacts(query, 200) if self.workspace in (c.get("workspaces") or [])][:limit]
+
     async def calendar_sync(self):
         return await self._inner.calendar_sync()
 

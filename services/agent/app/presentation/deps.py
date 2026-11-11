@@ -70,7 +70,10 @@ def build_services(app: FastAPI, session: AsyncSession) -> tuple[AgentService, C
     s = app.state
     agent = AgentService(SqlSettingsRepository(session, s.box), s.registry, s.runs, SqlWorkflowRepository(session), s.llm_factory, s.decision_factory, s.data_factory, s.settings.max_steps, SqlProposalRepository(session))
     agent.engine = s.settings.engine
+    box: list[ChannelService] = []  # (the channels are made after the agent, and the agent sends through them)
+    agent.notify = lambda who, workspace, text: box[0].tell(who, workspace, text)
     channels = ChannelService(SqlChannelRepository(session, s.box), agent, s.telegram, s.twilio, s.tokens, public_url=s.settings.public_url, pairing_minutes=s.settings.pairing_minutes, memory=s.chat_memory, proposals=build_proposals(app, session), conversations=ConversationService(SqlConversationRepository(session), agent, SqlProposalRepository(session)))
+    box.append(channels)
     channels.deliveries = s.deliveries
     channels.app_url = s.settings.app_url
     channels.reminder_actions = ReminderActions(SqlSettingsRepository(session, s.box), s.data_factory, lambda: s.clock())

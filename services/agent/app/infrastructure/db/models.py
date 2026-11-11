@@ -34,6 +34,8 @@ class SettingsModel(Base):
     mailwatch: Mapped[dict[str, Any] | None] = mapped_column(Json)
     availability: Mapped[dict[str, Any] | None] = mapped_column(Json)
     graphs: Mapped[dict[str, Any] | None] = mapped_column(Json)
+    flows: Mapped[dict[str, Any] | None] = mapped_column(Json)
+    custom_agents: Mapped[dict[str, Any] | None] = mapped_column(Json)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime)
 
 

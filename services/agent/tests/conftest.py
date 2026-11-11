@@ -176,6 +176,11 @@ class FakeData(DataGateway):
         return [e for e in self.calendar if start <= e["date"] <= end]
 
     google: dict | None = None  # what the calendar service says is connected; None = not asked
+    people: list = []  # contacts: {name, phones, emails, workspaces}
+
+    async def contacts(self, query="", limit=50):
+        return [p for p in self.people if query.lower() in str(p.get("name", "")).lower()][:limit]
+
     syncs = 0  # how many times Google's calendars were asked to sync now
     sync_result: dict | None = {"pulled": 0, "sent": {"added": 2, "changed": 0, "removed": 0}, "errors": []}
 
