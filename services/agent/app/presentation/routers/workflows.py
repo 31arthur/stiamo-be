@@ -98,6 +98,11 @@ async def delete(workflow_id: str, request: Request, workflows: deps.Workflows, 
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
+@router.post("/{workflow_id}/rebuild", status_code=status.HTTP_201_CREATED, summary="Make a copy of this mail-sorting agent as a workflow on the canvas (this one is left as it is, so the two can run side by side)")
+async def rebuild(workflow_id: str, workflows: deps.Workflows, agent: deps.Agent, me: deps.Me, token: deps.Token) -> dict[str, Any]:
+    return await agent.rebuild_on_canvas(me, token, await workflows.get(me, workflow_id))
+
+
 @router.post("/{workflow_id}/test", summary="Test run: the saved setup on a sample, nothing applied or remembered")
 async def test(workflow_id: str, body: TestBody, workflows: deps.Workflows, me: deps.Me, token: deps.Token) -> dict[str, Any]:
     return await workflows.test(me, token, workflow_id, body.manual)

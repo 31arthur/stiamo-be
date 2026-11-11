@@ -277,9 +277,12 @@ async def node_mail(run: Run, n: FNode, inputs: list[Item]) -> list[list[Item]]:
     data = run.prep.data
     since = datetime.now(UTC).date() - timedelta(days=int(p.get("days") or 3))
     word = str(p.get("query") or "").lower()
+    only = {str(a) for a in (p.get("accounts") or [])}  # empty: every mailbox
     out: list[dict[str, Any]] = []
     try:
         for acc in await data.mail_accounts():
+            if only and str(acc["id"]) not in only:
+                continue
             got = await data.mail_uids(str(acc["id"]), str(p.get("folder") or "INBOX"), since, None)
             uids = list(got.get("uids", []))[: max(1, min(int(p.get("limit") or 20), 100))]
             for m in await data.mail_summaries(str(acc["id"]), str(p.get("folder") or "INBOX"), uids) if uids else []:
