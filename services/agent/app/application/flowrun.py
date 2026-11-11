@@ -448,12 +448,15 @@ async def node_agent(run: Run, n: FNode, inputs: list[Item]) -> list[list[Item]]
 
         rec.provider, rec.model, rec.thinking = sel["providerId"], sel["modelId"], sel.get("thinking", "off")
         rec.user_message, rec.system_prompt, rec.tools = pkg.user[: MAX_INPUT_CHARS * 2], pkg.system, [t.name for t in pkg.tools]
-    client = svc._llm(sel["providerId"], prep.settings.keys[sel["providerId"]])
+    key = prep.settings.keys.get(sel["providerId"])
+    if not key:
+        raise ValidationFailed(f"“{n.name or n.id}” uses {sel['providerId']}, which has no key connected. Add one under Credentials, or pick another model.")
+    client = svc._llm(sel["providerId"], key)
     hist = run.past if (not run.used_history and p.get("history", True)) else []
     run.used_history = True
     out = await run_agent(client=client, model=sel["modelId"], thinking=sel.get("thinking", "off"), system=pkg.system, user=pkg.user, tools=tools, history=hist, max_steps=int(p.get("maxSteps") or svc._max_steps))
     run.runs.append(out)
-    return [[{"json": {"text": out.answer, "cards": len(out.found), "tools": [s.call.name for s in out.steps]}}]]
+    return [[{"json": {"text": out.answer, "cards": len(out.found), "tools": [s.call.name for s in out.steps], "model": f"{sel['providerId']}/{sel['modelId']}"}}]]
 
 
 async def node_merge(run: Run, n: FNode, inputs: list[Item]) -> list[list[Item]]:

@@ -615,3 +615,22 @@ async def test_the_telegram_node_needs_a_bot_and_text_and_a_bot_of_another_works
     gone = [n("t", "trigger.chat"), n("tg", "msg.telegram", credential="not-a-bot", text="x"), n("a", "respond", text="ok")]
     await put(rig, gone, wire(("t", 0, "tg"), ("tg", 0, "a")))
     assert "isn't connected" in (await rig.client.post(RUN, json={"message": "hi"}, headers=headers())).text
+
+
+async def test_an_ai_node_can_run_on_its_own_model_and_says_which(rig):
+    await planner_ready(rig)
+    await connect(rig, provider="gemini")
+    own = {"providerId": "gemini", "modelId": "gemini-test", "thinking": "off"}
+    nodes = [n("t", "trigger.chat"), n("ai", "ai.agent", model=own, tools=[], history=False), n("a", "respond", text="{{ $node.ai.first.model }}: {{ $node.ai.first.text }}")]
+    assert (await put(rig, nodes, wire(("t", 0, "ai"), ("ai", 0, "a")))).status_code == 200
+    rig.script += [ChatResult("Fine.")]
+    assert (await run(rig, "hi"))["answer"] == "gemini/gemini-test: Fine."
+    assert rig.llm_log[-1]["model"] == "gemini-test"
+
+
+async def test_an_ai_node_whose_provider_has_no_key_says_so(rig):
+    await planner_ready(rig)
+    nodes = [n("t", "trigger.chat"), n("ai", "ai.agent", name="Thinker", model={"providerId": "gemini", "modelId": "gemini-test", "thinking": "off"}, tools=[]), n("a", "respond")]
+    await put(rig, nodes, wire(("t", 0, "ai"), ("ai", 0, "a")))
+    r = await rig.client.post(RUN, json={"message": "hi"}, headers=headers())
+    assert r.status_code >= 400 and "no key connected" in r.text and not rig.llm_log
