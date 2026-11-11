@@ -11,6 +11,7 @@ Data nodes read through the same workspace-limited gateway the agent's tools use
 from __future__ import annotations
 
 import html
+from contextvars import ContextVar
 import json
 import logging
 import re
@@ -105,6 +106,44 @@ def _test(op: str, left: Any, right: Any) -> bool:
         except (TypeError, ValueError):
             return False
     return False
+
+
+# --- live progress: which node a run is on, so the editor can light it up while the run is still going ---------------------------------------
+# Kept in memory, per (user, id the editor made up): it only matters for the minute a run takes, and a restart simply ends it.
+
+_PROGRESS: dict[tuple[str, str], dict[str, Any]] = {}
+_PROGRESS_KEEP = 40
+_PROGRESS_SECONDS = 600
+current_progress: ContextVar[tuple[str, str] | None] = ContextVar("current_progress", default=None)
+
+
+def progress_begin(user: str, pid: str) -> tuple[str, str]:
+    now = time.monotonic()
+    for k in [k for k, v in _PROGRESS.items() if now - v["t"] > _PROGRESS_SECONDS]:
+        del _PROGRESS[k]
+    while len(_PROGRESS) >= _PROGRESS_KEEP:
+        del _PROGRESS[next(iter(_PROGRESS))]
+    _PROGRESS[(user, pid)] = {"t": now, "nodes": {}, "done": False}
+    return (user, pid)
+
+
+def progress_note(key: tuple[str, str] | None, node: str, state: str, ms: int | None = None, outputs: list[int] | None = None) -> None:
+    entry = _PROGRESS.get(key) if key else None
+    if entry is None:
+        return
+    prev = entry["nodes"].get(node, {})
+    entry["nodes"][node] = {"state": state, "runs": prev.get("runs", 0) + (1 if state == "running" else 0), **({"ms": ms} if ms is not None else {}), **({"outputs": outputs} if outputs is not None else {})}
+
+
+def progress_done(key: tuple[str, str] | None) -> None:
+    if key and key in _PROGRESS:
+        _PROGRESS[key]["done"] = True
+
+
+def progress_get(user: str, pid: str) -> dict[str, Any]:
+    """What a run has done so far: each node's state (running, ok, error) and whether the run is over. Nothing yet: an empty answer."""
+    entry = _PROGRESS.get((user, pid))
+    return {"nodes": dict(entry["nodes"]), "done": entry["done"]} if entry else {"nodes": {}, "done": False}
 
 
 class Run:
@@ -448,6 +487,7 @@ class FlowRunner:
         waiting: dict[str, dict[int, list[Item]]] = {}
         loops: dict[str, dict[str, Any]] = {}
         began, runs, failure = time.monotonic(), 0, None
+        pkey = current_progress.get()
         try:
             while queue or loops:
                 if not queue:  # a loop whose last batch never came back is finished with what it has
@@ -471,6 +511,7 @@ class FlowRunner:
                 if runs > MAX_RUNS:
                     raise ValidationFailed("This workflow ran too many steps and was stopped.")
                 t0 = time.monotonic()
+                progress_note(pkey, node.id, "running")
                 row: dict[str, Any] = {"node": node.id, "name": node.name or node.type, "type": node.type, "state": "ok", "itemsIn": len(items), "in": _clip([i["json"] for i in items[:SAMPLE]])}
                 try:
                     if node.disabled or node.type == "core.note":
@@ -505,6 +546,7 @@ class FlowRunner:
                 finally:
                     row["ms"] = int((time.monotonic() - t0) * 1000)
                     run.trace.append(row)
+                    progress_note(pkey, node.id, row["state"], row["ms"], row.get("outputs"))
                 for i, produced in enumerate(outs):
                     for t in flow.targets(node.id, i):
                         target = flow.node(t["node"])
