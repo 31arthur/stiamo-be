@@ -58,6 +58,8 @@ CATALOG: dict[str, tuple[str, str, str]] = {
     "ai.read": ("AI", "Read and summarise", "Opens each email in full and says what it is about, how urgent it is, what to do, and (for events) the date it names."),
     "core.only_new": ("Mail", "Only new items", "Lets through only the items this agent has not handled in an earlier run, so a mail is judged once. When you run it by hand it lets everything through and remembers nothing."),
     "msg.attention": ("Messages", "Add to Attention", "Puts each email, with its summary and what to do, in your Attention queue (an email that names an event is shown with it, to approve). Needs the output of Read and summarise."),
+    "core.wait": ("Flow", "Wait", "Pauses the workflow for a few seconds (up to a minute) before carrying on. The items pass through unchanged."),
+    "core.call_agent": ("Flow", "Run another agent", "Hands a message to another agent, runs its workflow, and brings its answer back as an item (a sub-workflow). An agent cannot call itself, and a call can go two deep."),
     "core.safe_senders": ("Mail", "Keep safe senders", "Lets mail from people you trust go no further: your correspondents, listed domains, addresses and phrases. The rest goes on."),
     "msg.trash": ("Mail", "Move to Trash", "Moves emails to Trash (never deletes them). By default it asks you first: you approve it in Needs me, or by saying YES."),
     "msg.alert": ("Messages", "Alert me", "Pings your phone about an email, with its summary and a few suggested replies. Once per email."),
@@ -66,6 +68,26 @@ CATALOG: dict[str, tuple[str, str, str]] = {
     "respond": ("Output", "Answer", "Ends the run with the answer to give."),
 }
 TRIGGERS = ("trigger.chat", "trigger.telegram", "trigger.orchestrator", "trigger.schedule", "trigger.manual")
+
+
+def clean_settings(raw: Any) -> dict[str, Any]:
+    """A node's settings as they are kept: only the ones that are set, each in its range."""
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, Any] = {}
+    if raw.get("retryOnFail"):
+        out["retryOnFail"] = True
+        out["maxTries"] = max(2, min(int(raw.get("maxTries") or 3), 5))
+        out["waitBetween"] = max(0, min(int(raw.get("waitBetween") or 1000), 10_000))
+    if raw.get("onError") == "continue":
+        out["onError"] = "continue"
+    if raw.get("executeOnce"):
+        out["executeOnce"] = True
+    if raw.get("alwaysOutput"):
+        out["alwaysOutput"] = True
+    if str(raw.get("notes") or "").strip():
+        out["notes"] = str(raw["notes"])[:2000]
+    return out
 
 
 def entry_order(trigger: str, source: str = "") -> list[str]:
@@ -86,6 +108,8 @@ class FNode:
     disabled: bool = False
     #: Items to use in place of what this node would give, when a workflow is run by hand (to try the rest of it with fixed data). None: not pinned.
     pinned: list[dict[str, Any]] | None = None
+    #: How this node behaves around its work: retryOnFail (maxTries, waitBetween ms), onError ("stop" or "continue"), executeOnce, alwaysOutput, notes.
+    settings: dict[str, Any] = field(default_factory=dict)
 
     def outputs(self) -> int:
         p = self.parameters
@@ -107,7 +131,7 @@ class FNode:
         return 2 if self.type == "core.merge" else (0 if self.type in TRIGGERS or self.type == "core.note" else 1)
 
     def to_json(self) -> dict[str, Any]:
-        return {"id": self.id, "type": self.type, "name": self.name or CATALOG[self.type][1], "position": list(self.position), "parameters": self.parameters, **({"disabled": True} if self.disabled else {}), **({"pinData": self.pinned} if self.pinned is not None else {})}
+        return {"id": self.id, "type": self.type, "name": self.name or CATALOG[self.type][1], "position": list(self.position), "parameters": self.parameters, **({"disabled": True} if self.disabled else {}), **({"pinData": self.pinned} if self.pinned is not None else {}), **({"settings": self.settings} if self.settings else {})}
 
 
 @dataclass
@@ -139,7 +163,7 @@ class Flow:
             pin = n.get("pinData")
             if pin is not None and (not isinstance(pin, list) or len(pin) > 50 or any(not isinstance(i, dict) for i in pin) or len(str(pin)) > 100_000):
                 raise ValueError("Pinned data is a list of up to 50 items, each an object, and not too long.")
-            nodes.append(FNode(n["id"][:40], n["type"], str(n.get("name") or "")[:60], (float(pos[0]), float(pos[1])), dict(n.get("parameters") or {}), bool(n.get("disabled")), pin))
+            nodes.append(FNode(n["id"][:40], n["type"], str(n.get("name") or "")[:60], (float(pos[0]), float(pos[1])), dict(n.get("parameters") or {}), bool(n.get("disabled")), pin, clean_settings(n.get("settings"))))
         conns: dict[str, list[list[dict[str, Any]]]] = {}
         for src, v in (raw.get("connections") or {}).items():
             main = (v or {}).get("main") if isinstance(v, dict) else None

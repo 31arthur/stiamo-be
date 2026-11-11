@@ -10,6 +10,7 @@ Data nodes read through the same workspace-limited gateway the agent's tools use
 
 from __future__ import annotations
 
+import asyncio
 import html
 from contextvars import ContextVar
 import json
@@ -694,6 +695,75 @@ async def node_attention(run: Run, n: FNode, inputs: list[Item]) -> list[list[It
 
 
 
+MAX_WAIT = 60.0
+MAX_CALL_DEPTH = 2
+call_depth: ContextVar[int] = ContextVar("call_depth", default=0)
+
+
+async def execute_node(run: Run, node: FNode, items: list[Item], row: dict[str, Any]) -> list[list[Item]]:
+    """Runs one node the way its settings say: only the first item when it is set to run once, again after a pause when it fails (up to the tries
+    allowed), carrying on with the items it was given when it is set to continue on an error, and giving an empty item when it would give none."""
+    st = node.settings
+    given = items[:1] if st.get("executeOnce") else items
+    tries = int(st.get("maxTries") or 1) if st.get("retryOnFail") else 1
+    last: Exception | None = None
+    outs: list[list[Item]] = []
+    for attempt in range(1, tries + 1):
+        try:
+            outs = await NODES[node.type](run, node, given)
+            last = None
+            break
+        except (ExpressionError, ValidationFailed, AiError) as exc:
+            last = exc
+            if isinstance(exc, ExpressionError) or attempt == tries:
+                break  # a mistake in what was written is not mended by trying again
+            row["retries"] = attempt
+            await asyncio.sleep(int(st.get("waitBetween") or 0) / 1000)
+    if last is not None:
+        if st.get("onError") != "continue":
+            raise last
+        row["state"], row["error"] = "error", str(getattr(last, "message", None) or last)[:300]  # said in the trace, but the run goes on
+        outs = [items] + [[] for _ in range(max(node.outputs(), 1) - 1)]
+    if st.get("alwaysOutput") and outs and not outs[0]:
+        outs = [[{"json": {}}], *outs[1:]]
+    return outs
+
+
+async def node_wait(run: Run, n: FNode, inputs: list[Item]) -> list[list[Item]]:
+    """Pauses, then lets the items through. A web request can't be kept waiting long, so a pause is at most a minute."""
+    p = resolve(n.parameters, run.scope(inputs))
+    seconds = float(p.get("amount") or 0) * (60 if str(p.get("unit") or "seconds").startswith("min") else 1)
+    if seconds > MAX_WAIT:
+        raise ValidationFailed(f"“{n.name or n.id}” waits longer than a minute. Waiting is at most {int(MAX_WAIT)} seconds.")
+    await asyncio.sleep(max(0.0, seconds))
+    return [inputs]
+
+
+async def node_call_agent(run: Run, n: FNode, inputs: list[Item]) -> list[list[Item]]:
+    """Hands a message to another agent and brings its answer back: the other agent's own workflow runs (it starts from its "called by the
+    orchestrator" trigger if it has one), and is kept in its own history. For each item, up to five."""
+    target = str(n.parameters.get("agent") or "").strip()
+    if not target:
+        raise ValidationFailed(f"“{n.name or n.id}” needs the agent to call.")
+    if target == run.agent.id:
+        raise ValidationFailed("An agent can't call itself.")
+    if call_depth.get() >= MAX_CALL_DEPTH:
+        raise ValidationFailed("Agents are calling each other too deeply: a call can go two deep.")
+    out: list[Item] = []
+    mark = call_depth.set(call_depth.get() + 1)
+    try:
+        for it in (inputs or [{"json": {}}])[: 5 if n.parameters.get("each") else 1]:
+            message = str(resolve(n.parameters.get("message") or "{{ $json.message }}", run.scope(inputs, it))).strip() or run.message
+            try:
+                answer = await run.svc.chat(run.who, run.token, target, message, [], run.channel, trigger="chat", channel_id=run.channel_id, workspace=run.workspace or None, source="orchestrator")
+            except AiError as exc:
+                raise ValidationFailed(str(getattr(exc, "message", None) or exc)) from exc
+            out.append({"json": {**it["json"], "text": answer.answer, "agent": target}})
+    finally:
+        call_depth.reset(mark)
+    return [out]
+
+
 async def node_merge(run: Run, n: FNode, inputs: list[Item]) -> list[list[Item]]:
     return [inputs]  # (the executor has already waited for both inputs and put their items together)
 
@@ -709,7 +779,7 @@ NODES: dict[str, Any] = {
     "core.split_out": node_split, "core.aggregate": node_aggregate, "core.noop": node_noop, "core.stop": node_stop,
     "data.mail": node_mail, "data.mail_body": node_mail_body, "data.contacts": node_contacts,
     "data.tasks": node_records, "data.follow_ups": node_records, "data.meetings": node_records, "data.hearings": node_records, "data.cases": node_records, "data.calendar": node_records, "data.drive": node_records,
-    "core.merge": node_merge, "msg.send": node_send, "msg.ask": node_ask, "msg.telegram": node_telegram, "msg.mail": node_mail_draft, "ai.classify": node_classify, "ai.read": node_read, "core.safe_senders": node_safe_senders, "core.only_new": node_only_new, "msg.attention": node_attention, "msg.trash": node_trash, "msg.alert": node_alert, "msg.event": node_event, "ai.agent": node_agent, "respond": node_respond,
+    "core.merge": node_merge, "msg.send": node_send, "msg.ask": node_ask, "msg.telegram": node_telegram, "msg.mail": node_mail_draft, "ai.classify": node_classify, "ai.read": node_read, "core.wait": node_wait, "core.call_agent": node_call_agent, "core.safe_senders": node_safe_senders, "core.only_new": node_only_new, "msg.attention": node_attention, "msg.trash": node_trash, "msg.alert": node_alert, "msg.event": node_event, "ai.agent": node_agent, "respond": node_respond,
 }
 
 
@@ -792,7 +862,7 @@ class FlowRunner:
                                 outs = [[], st["acc"]]
                                 del loops[nid]
                     else:
-                        outs = await NODES[node.type](run, node, items)
+                        outs = await execute_node(run, node, items, row)
                     run.results[node.id] = outs
                     row["outputs"] = [len(o) for o in outs]
                     row["out"] = _clip([[i["json"] for i in o[:SAMPLE]] for o in outs])
@@ -877,7 +947,7 @@ async def run_one(svc: Any, who: Any, token: str, agent: Any, prepared: Any, nod
         given = [{"json": dict(j)} for src in feeders for j in ((flow.node(src).pinned or []) if flow.node(src) else [])]
     t0 = time.monotonic()
     try:
-        outs = await NODES[node.type](run, node, given) if node.type in NODES else [given]
+        outs = await execute_node(run, node, given, {}) if node.type in NODES else [given]
         error = None
     except (ExpressionError, ValidationFailed, AiError) as exc:
         outs, error = [], str(getattr(exc, "message", None) or exc)
