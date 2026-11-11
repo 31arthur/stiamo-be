@@ -9,7 +9,7 @@ from app.domain.llm import AiError, ChatResult
 
 from .conftest import headers
 from .test_agent_api import choose, connect
-from .test_channels import telegram
+from .test_channels import send, telegram
 from .test_dayplans import planner_ready
 from .test_leaks import CANARY, TOMORROW, connect_bot, seed
 from .test_planning import PLANNER
@@ -574,3 +574,44 @@ async def test_a_failed_run_marks_the_node_that_failed_and_is_still_over(rig):
     r = await rig.client.post(RUN, json={"message": "hi", "progressId": "run-2"}, headers=headers())
     got = (await rig.client.get(f"{PLANNER}/flow/progress/run-2", headers=headers())).json()
     assert r.status_code >= 400 and got["done"] is True and got["nodes"]["t"]["state"] == "ok" and got["nodes"]["s"]["state"] == "error" and "a" not in got["nodes"]
+
+
+async def paired_bot(rig, chat=555):
+    bot = await telegram(rig, agent=PLANNER.rsplit("/", 1)[-1])
+    await send(rig, bot, f"/start {bot['pairingCode']}", chat=chat, update=int(chat))
+    return bot
+
+
+async def test_the_telegram_node_sends_with_the_bot_it_is_given_and_to_one_chat_if_asked(rig):
+    await planner_ready(rig)
+    bot = await paired_bot(rig)
+    sent_before = len(rig.telegram.sent)
+    nodes = [n("t", "trigger.chat"), n("tg", "msg.telegram", credential=bot["id"], text="Hello {{ $json.message }}"), n("a", "respond", text="ok")]
+    assert (await put(rig, nodes, wire(("t", 0, "tg"), ("tg", 0, "a")))).status_code == 200
+    assert (await run(rig, "there"))["answer"] == "ok"
+    assert rig.telegram.sent[sent_before:] == [(555, "Hello there")]
+    only = [n("t", "trigger.chat"), n("tg", "msg.telegram", credential=bot["id"], chat="555", text="one"), n("a", "respond", text="ok")]
+    await put(rig, only, wire(("t", 0, "tg"), ("tg", 0, "a")))
+    await run(rig)
+    assert rig.telegram.sent[-1] == (555, "one")
+    elsewhere = [n("t", "trigger.chat"), n("tg", "msg.telegram", credential=bot["id"], chat="999", text="x"), n("a", "respond", text="ok")]
+    await put(rig, elsewhere, wire(("t", 0, "tg"), ("tg", 0, "a")))
+    r = await rig.client.post(RUN, json={"message": "hi"}, headers=headers())
+    assert r.status_code >= 400 and "isn't linked" in r.text
+
+
+async def test_the_telegram_node_needs_a_bot_and_text_and_a_bot_of_another_workspace_is_refused(rig):
+    await planner_ready(rig)
+    bot = await paired_bot(rig)
+    bare = [n("t", "trigger.chat"), n("tg", "msg.telegram", text="x"), n("a", "respond", text="ok")]
+    refused = await put(rig, bare, wire(("t", 0, "tg"), ("tg", 0, "a")))
+    assert refused.status_code >= 400 and "Telegram bot" in refused.text
+    assert (await rig.client.put(f"/v1/agent/channels/{bot['id']}/scope", json={"workspace": "sb", "role": "assistant"}, headers=headers())).status_code == 200
+    nodes = [n("t", "trigger.chat"), n("tg", "msg.telegram", credential=bot["id"], text="secret"), n("a", "respond", text="ok")]
+    await put(rig, nodes, wire(("t", 0, "tg"), ("tg", 0, "a")))
+    before = len(rig.telegram.sent)
+    r = await rig.client.post(RUN, json={"message": "hi"}, headers=headers())
+    assert r.status_code >= 400 and "only that workspace" in r.text and len(rig.telegram.sent) == before  # nothing went out
+    gone = [n("t", "trigger.chat"), n("tg", "msg.telegram", credential="not-a-bot", text="x"), n("a", "respond", text="ok")]
+    await put(rig, gone, wire(("t", 0, "tg"), ("tg", 0, "a")))
+    assert "isn't connected" in (await rig.client.post(RUN, json={"message": "hi"}, headers=headers())).text

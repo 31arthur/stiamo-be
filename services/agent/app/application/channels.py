@@ -346,6 +346,33 @@ class ChannelService:
         sent = await self.push(who, text("telegram", TELEGRAM_MAX), buttons, workspace, f"{workspace} plan", kind="plan", role="planner")
         return len(sent)
 
+    async def send_with(self, who: Who, workspace: str | None, channel_id: str, chat: str | None, text: str) -> int:
+        """A message with one named Telegram bot (a workflow's Telegram node): to all of its linked chats, or to the one given. A bot that belongs to
+        a workspace is only for work in that workspace. Returns how many chats it reached; a failure is said, not swallowed."""
+        try:
+            c = await self._mine(who, channel_id)
+        except NotFound as exc:
+            raise ValidationFailed("That Telegram bot isn't connected any more. Choose another credential.") from exc
+        if c.kind != "telegram":
+            raise ValidationFailed("That credential isn't a Telegram bot.")
+        bound = c.public.get("workspace")
+        if bound and bound != workspace:
+            raise ValidationFailed(f"This bot belongs to {WORKSPACE_NAMES.get(bound, bound)} and only that workspace's workflows may use it.")
+        paired = c.public.get("paired", [])
+        targets = [p for p in paired if str(p["id"]) == chat] if chat else paired
+        if not targets:
+            raise ValidationFailed("That chat isn't linked to the bot: send it the pairing code first." if chat else "No chat is linked to that bot yet: send it the pairing code first.")
+        sent = 0
+        for p in targets:
+            try:
+                await self._tg.send_message(c.secrets["botToken"], p["id"], clip(text, TELEGRAM_MAX))
+            except Exception as exc:  # noqa: BLE001
+                await self._logged(who, "workflow", "telegram", self._who(c, p), False, str(getattr(exc, "message", None) or exc), text[:80], workspace)
+                raise ValidationFailed(f"Telegram didn't take it: {getattr(exc, 'message', None) or exc}") from exc
+            await self._logged(who, "workflow", "telegram", self._who(c, p), True, summary=text[:80], workspace=workspace)
+            sent += 1
+        return sent
+
     async def tell(self, who: Who, workspace: str, text: str, kind: str = "message", buttons: list[list[dict[str, str]]] | None = None) -> int:
         """A plain message about a workspace to the phone it belongs to (its own bot, else the master bot). Returns how many chats it reached."""
         import html as _html

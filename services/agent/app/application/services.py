@@ -179,6 +179,8 @@ class AgentService:
     notify: Any = None
     #: Asks a question with buttons on the phone: (who, workspace, text, buttons) -> how many chats it reached. For an Ask me node.
     ask_phone: Any = None
+    #: Sends text with one named Telegram bot for a Telegram node: (who, workspace, channel id, chat id or None, text) -> how many chats it reached.
+    send_telegram: Any = None
 
     def __init__(
         self,

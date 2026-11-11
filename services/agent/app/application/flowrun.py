@@ -360,6 +360,25 @@ async def node_send(run: Run, n: FNode, inputs: list[Item]) -> list[list[Item]]:
     return [[{"json": {"sent": sent, "text": texts[0] if texts else ""}}]]
 
 
+async def node_telegram(run: Run, n: FNode, inputs: list[Item]) -> list[list[Item]]:
+    """Sends with one named Telegram bot (the node's credential), to all of its linked chats or to one. A bot limited to a workspace is only used by
+    a workflow running in that workspace, so nothing about another workspace can reach it."""
+    p = n.parameters
+    credential, chat = str(p.get("credential") or "").strip(), str(p.get("chat") or "").strip()
+    if not credential:
+        raise ValidationFailed("Choose the Telegram bot to send with.")
+    if run.svc.send_telegram is None:
+        raise ValidationFailed("Telegram isn't available here.")
+    out: list[Item] = []
+    for it in (inputs or [{"json": {}}])[: 1 if p.get("once", True) else 10]:
+        text = str(resolve(p.get("text") or "{{ $json.text }}", run.scope(inputs, it))).strip()
+        if not text:
+            raise ValidationFailed("There is nothing to send: the text is empty.")
+        sent = await run.svc.send_telegram(run.who, run.workspace, credential, chat or None, text)
+        out.append({"json": {"sent": sent, "text": text, "chat": chat or "all linked chats"}})
+    return [out]
+
+
 async def node_ask(run: Run, n: FNode, inputs: list[Item]) -> list[list[Item]]:
     """Asks on the phone and stops here. The question is kept with everything the rest of the workflow needs; the button pressed carries on from the
     matching output (see AgentService.resume_flow). Nothing waits in memory, so it survives a restart."""
@@ -452,7 +471,7 @@ NODES: dict[str, Any] = {
     "core.split_out": node_split, "core.aggregate": node_aggregate, "core.noop": node_noop, "core.stop": node_stop,
     "data.mail": node_mail, "data.mail_body": node_mail_body, "data.contacts": node_contacts,
     "data.tasks": node_records, "data.follow_ups": node_records, "data.meetings": node_records, "data.hearings": node_records, "data.cases": node_records, "data.calendar": node_records, "data.drive": node_records,
-    "core.merge": node_merge, "msg.send": node_send, "msg.ask": node_ask, "msg.mail": node_mail_draft, "ai.agent": node_agent, "respond": node_respond,
+    "core.merge": node_merge, "msg.send": node_send, "msg.ask": node_ask, "msg.telegram": node_telegram, "msg.mail": node_mail_draft, "ai.agent": node_agent, "respond": node_respond,
 }
 
 
@@ -590,7 +609,7 @@ def escape(text: str) -> str:
 
 
 #: Nodes that reach beyond the workflow (a message to your phone, a draft in your approvals): running one alone needs you to say so.
-SIDE_EFFECTS = ("msg.send", "msg.ask", "msg.mail")
+SIDE_EFFECTS = ("msg.send", "msg.ask", "msg.mail", "msg.telegram")
 
 
 async def run_one(svc: Any, who: Any, token: str, agent: Any, prepared: Any, node_id: str, items: list[dict[str, Any]] | None, confirm: bool) -> dict[str, Any]:
