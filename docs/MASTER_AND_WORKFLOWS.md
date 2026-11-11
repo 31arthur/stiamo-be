@@ -73,3 +73,7 @@ Agents can also run as workflows in the shape n8n uses: **nodes on a canvas, joi
 - **Not built yet:** the planner's "free for calls?" question and the follow-up chaser are still their own code, not Ask me nodes (rebuilding them changes what the model is given, so it needs its own testing).
 
 `./deploy.sh` runs migrations `agent 0021` (each agent's flow, and the agents you create) and `agent 0022` (questions waiting for an answer). The earlier linear graph form and its `/graph` endpoints are removed.
+
+## Rebuilding a mail-sorting agent on the canvas
+
+`POST /v1/agent/workflows/{id}/rebuild` makes a copy of an older mail-sorting agent as a workflow (named "… (canvas)"), with the same prompt (and the points it learned from corrections), labels, thresholds, safe senders, mailbox, batch size, model and what each label does. The older agent is left as it is, so both can run on the same mailbox and be compared. Differences, said to the person when it is rebuilt: mail it was unsure about used to wait in Review and now comes to Attention, read and summarised; an agent that ran when mail arrived becomes a schedule you set; a date range becomes the last days; only agents that sort a mailbox can be rebuilt (not news, record or follow-on agents). `tests/test_rebuild.py` runs the same mailbox and the same model answers through both and checks they keep the same mail out of the judging, move the same mail to Trash and leave the same mail alone.

@@ -387,6 +387,23 @@ class AgentService:
         s.selections = {**s.selections, agent_id: choice, ANY: choice}
         await self._repo.save(s)
 
+    async def rebuild_on_canvas(self, who: Who, token: str, workflow: dict[str, Any], name: str | None = None) -> dict[str, Any]:
+        """A new agent on the canvas that does what an older mail-sorting agent does (see domain/flow_rebuild.py). The older one is left alone."""
+        from app.domain.flow_rebuild import flow_from_config
+        from app.domain.workflows import WorkflowConfig
+
+        cfg = WorkflowConfig(**workflow["config"]).validated()
+        s = await self._load(who)
+        sel, _ = selection_of(s, workflow["id"])
+        raw, notes = flow_from_config(cfg, sel)
+        made = await self.create_agent(who, token, name or f"{workflow['name']} (canvas)", workflow.get("description") or "", None, flow=raw)
+        if sel and cfg.decider == "model":
+            await self.set_selection(who, made["id"], sel["providerId"], sel["modelId"], sel.get("thinking", "off"))
+        placed = s.workspaces.get(workflow["id"])
+        if placed:
+            await self.set_workspaces(who, made["id"], placed)
+        return {**made, "notes": notes}
+
     async def set_workspaces(self, who: Who, agent_id: str, workspaces: list[str]) -> None:
         """Which workspaces an agent is shown in. It can belong to several; "all workspaces" always shows every agent."""
         await self._known(who, agent_id)
