@@ -114,6 +114,26 @@ async def agent_graph(agent_id: str, agent: deps.Agent, me: deps.Me, token: deps
     return await agent.graph(me, token, agent_id)
 
 
+class GraphBody(DomainModel):
+    nodes: list[dict[str, Any]] = Field(max_length=40)
+    edges: list[dict[str, Any]] = Field(max_length=160)
+
+
+@router.put("/agents/{agent_id}/graph", summary="Save an agent's workflow (only one that can run is kept)")
+async def set_agent_graph(agent_id: str, body: GraphBody, agent: deps.Agent, me: deps.Me, token: deps.Token) -> dict[str, Any]:
+    return await agent.set_graph(me, token, agent_id, body.model_dump())
+
+
+@router.post("/agents/{agent_id}/graph/check", summary="What is wrong with a workflow, without saving it")
+async def check_agent_graph(agent_id: str, body: GraphBody, agent: deps.Agent, me: deps.Me) -> dict[str, Any]:
+    return {"problems": await agent.check_graph(me, agent_id, body.model_dump())}
+
+
+@router.delete("/agents/{agent_id}/graph", summary="Back to the default workflow")
+async def reset_agent_graph(agent_id: str, agent: deps.Agent, me: deps.Me, token: deps.Token) -> dict[str, Any]:
+    return await agent.reset_graph(me, token, agent_id)
+
+
 @router.put("/agents/{agent_id}/selection", status_code=status.HTTP_204_NO_CONTENT, summary="Choose the provider, model and thinking level for an agent")
 async def set_selection(agent_id: str, body: SelectionBody, agent: deps.Agent, me: deps.Me) -> Response:
     await agent.set_selection(me, agent_id, body.provider_id, body.model_id, body.thinking)
