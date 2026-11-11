@@ -817,3 +817,64 @@ async def test_the_mail_sorter_template_trashes_junk_on_approval_and_puts_what_m
     before = len(rig.llm_log)
     assert (await rig.client.post(f"{a}/flow/run", json={"message": "go", "scheduled": True}, headers=headers())).status_code in (200, 400, 422)
     assert len(rig.llm_log) == before and (await rig.client.get("/v1/agent/attention", headers=headers())).json()["count"] == 0
+
+
+async def test_a_node_set_to_retry_tries_again_after_a_failure_and_says_how_often(rig):
+    await planner_ready(rig)
+    nodes = [n("t", "trigger.manual"), {**n("ai", "ai.agent", tools=[], history=False), "settings": {"retryOnFail": True, "maxTries": 3, "waitBetween": 0}}, n("a", "respond", text="{{ $json.text }}")]
+    await put(rig, nodes, wire(("t", 0, "ai"), ("ai", 0, "a")))
+    rig.script += [AiError("down"), ChatResult("Second time lucky.")]
+    assert (await run(rig))["answer"] == "Second time lucky."
+    assert by_node(await last(rig))["ai"]["retries"] == 1
+    rig.script += [AiError("down"), AiError("down"), AiError("down")]
+    assert (await rig.client.post(RUN, json={"message": "hi"}, headers=headers())).status_code >= 400  # out of tries: it fails as before
+
+
+async def test_a_node_set_to_continue_on_error_lets_the_run_go_on_with_its_items(rig):
+    await planner_ready(rig)
+    nodes = [n("t", "trigger.manual"), {**n("ai", "ai.agent", tools=[], history=False), "settings": {"onError": "continue"}}, n("a", "respond", text="carried on")]
+    await put(rig, nodes, wire(("t", 0, "ai"), ("ai", 0, "a")))
+    rig.script += [AiError("down")]
+    assert (await run(rig))["answer"] == "carried on"
+    row = by_node(await last(rig))["ai"]
+    assert row["state"] == "error" and "down" in row["error"]  # it is said in the trace
+
+
+async def test_run_once_and_always_output_change_how_many_items_a_node_sees_and_gives(rig):
+    await planner_ready(rig)
+    nodes = [
+        n("t", "trigger.manual"), n("mail", "data.mail", days=400, limit=10), {**n("once", "core.set", fields=[{"name": "x", "value": "1"}]), "settings": {"executeOnce": True}},
+        {**n("none", "core.filter", conditions=[{"left": "{{ $json.subject }}", "op": "contains", "right": "no such words"}]), "settings": {"alwaysOutput": True}}, n("a", "respond", text="reached"),
+    ]
+    await put(rig, nodes, wire(("t", 0, "mail"), ("mail", 0, "once"), ("once", 0, "none"), ("none", 0, "a")))
+    assert (await run(rig))["answer"] == "reached"  # the filter kept nothing, but it was set to give one empty item
+    trace = by_node(await last(rig))
+    assert trace["once"]["itemsIn"] == 4 and trace["once"]["outputs"] == [1]  # it did its work for the first item only
+
+
+async def test_wait_pauses_briefly_and_refuses_more_than_a_minute(rig):
+    await planner_ready(rig)
+    nodes = [n("t", "trigger.manual"), n("w", "core.wait", amount=0.05, unit="seconds"), n("a", "respond", text="after the pause")]
+    await put(rig, nodes, wire(("t", 0, "w"), ("w", 0, "a")))
+    assert (await run(rig))["answer"] == "after the pause"
+    long = [n("t", "trigger.manual"), n("w", "core.wait", amount=5, unit="minutes"), n("a", "respond")]
+    await put(rig, long, wire(("t", 0, "w"), ("w", 0, "a")))
+    refused = await rig.client.post(RUN, json={"message": "hi"}, headers=headers())
+    assert refused.status_code >= 400 and "at most 60 seconds" in refused.text
+
+
+async def test_an_agent_can_call_another_and_use_its_answer_but_not_itself_or_too_deeply(rig):
+    await planner_ready(rig)
+    other = (await rig.client.post("/v1/agent/agents", json={"name": "Echo", "templateId": "blank"}, headers=headers())).json()["id"]
+    nodes = [n("t", "trigger.manual"), n("call", "core.call_agent", agent=other, message="ping"), n("a", "respond", text="{{ $json.agent }}: {{ $json.text }}")]
+    await put(rig, nodes, wire(("t", 0, "call"), ("call", 0, "a")))
+    assert (await run(rig))["answer"] == f"{other}: You said: ping"
+    assert [r["agentId"] for r in (await rig.client.get(f"/v1/agent/agents/{other}/runs", headers=headers())).json()["items"]] == [other]  # the call is kept in the other agent's own history
+    me = [n("t", "trigger.manual"), n("call", "core.call_agent", agent="daily-planner", message="x"), n("a", "respond")]
+    await put(rig, me, wire(("t", 0, "call"), ("call", 0, "a")))
+    assert "can't call itself" in (await rig.client.post(RUN, json={"message": "hi"}, headers=headers())).text
+    # A calls B and B calls A: the third hop is refused
+    await put(rig, [n("t", "trigger.manual"), n("call", "core.call_agent", agent=other, message="x"), n("a", "respond")], wire(("t", 0, "call"), ("call", 0, "a")))
+    loop = [n("t", "trigger.chat"), n("call", "core.call_agent", agent="daily-planner", message="x"), n("a", "respond")]
+    await put(rig, loop, wire(("t", 0, "call"), ("call", 0, "a")), agent=f"/v1/agent/agents/{other}")
+    assert "too deeply" in (await rig.client.post(RUN, json={"message": "hi"}, headers=headers())).text
