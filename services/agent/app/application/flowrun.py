@@ -161,6 +161,8 @@ class Run:
         self.used_history = False
         self.record: Any = None
         self.trace: list[dict[str, Any]] = []
+        #: Items "Only new items" let through, to be remembered once the run has gone well.
+        self.to_remember: list[tuple[str, str]] = []
 
     @property
     def workspace(self) -> str:
@@ -647,6 +649,51 @@ async def node_event(run: Run, n: FNode, inputs: list[Item]) -> list[list[Item]]
 
 
 
+async def node_only_new(run: Run, n: FNode, inputs: list[Item]) -> list[list[Item]]:
+    """Lets through the items this agent has not handled before. What passes is remembered once the whole run has gone well, so a run that fails
+    leaves them to be tried again. A run by hand lets everything through and remembers nothing: trying a workflow never uses it up."""
+    if run.trigger == "manual" or run.svc.ledger is None:
+        return [inputs]
+    seen = await run.svc.ledger().seen(run.agent.id)
+    fresh: list[Item] = []
+    here: set[str] = set()
+    for it in inputs:
+        key = str(it["json"].get("id") or "")
+        if not key:
+            fresh.append(it)
+        elif key not in seen and key not in here:
+            here.add(key)
+            fresh.append(it)
+            run.to_remember.append((key, str(it["json"].get("subject") or it["json"].get("title") or "")[:200]))
+    return [fresh]
+
+
+async def node_attention(run: Run, n: FNode, inputs: list[Item]) -> list[list[Item]]:
+    """Puts each email in the Attention queue with what was worked out about it. One already there (or already dealt with) is left alone, so
+    running again doesn't bring back what you have settled."""
+    from app.application.ports import LedgerEntry
+    from app.domain.workflows import clean_event
+
+    if run.svc.ledger is None:
+        raise ValidationFailed("The Attention queue isn't available here.")
+    repo = run.svc.ledger()
+    out: list[Item] = []
+    for it in inputs[:50]:
+        j = it["json"]
+        key = str(j.get("id") or "")
+        if not key:
+            continue
+        event = clean_event(j.get("event"))
+        added = await repo.entry(run.who.user_id, run.agent.id, key) is None
+        if added:
+            data = {"summary": j.get("summary") or j.get("subject"), "priority": j.get("priority") or "normal", "action": j.get("action"), "due": j.get("due"), "event": event, "note": j.get("note"), "folder": j.get("folder") or "INBOX", "account": j.get("account"), "uid": j.get("uid")}
+            excerpt = f"From: {j.get('senderName') or j.get('from') or ''} <{j.get('senderAddress') or j.get('fromAddress') or ''}>\nSubject: {j.get('subject') or ''}\n\n{str(j.get('snippet') or '')[:600]}"
+            await repo.record([LedgerEntry(str(uuid.uuid4()), run.agent.id, run.who.user_id, key, str(j.get("subject") or "(no subject)")[:200], excerpt[:1500], str(j.get("label") or "") or None, float(j.get("confidence") or 0), str(j.get("reason") or ""), "event_proposed" if event else "queued", run.record.id if run.record else "", 1, None, None, data)])
+        out.append({"json": {**j, "queued": added}})
+    return [out]
+
+
+
 async def node_merge(run: Run, n: FNode, inputs: list[Item]) -> list[list[Item]]:
     return [inputs]  # (the executor has already waited for both inputs and put their items together)
 
@@ -662,7 +709,7 @@ NODES: dict[str, Any] = {
     "core.split_out": node_split, "core.aggregate": node_aggregate, "core.noop": node_noop, "core.stop": node_stop,
     "data.mail": node_mail, "data.mail_body": node_mail_body, "data.contacts": node_contacts,
     "data.tasks": node_records, "data.follow_ups": node_records, "data.meetings": node_records, "data.hearings": node_records, "data.cases": node_records, "data.calendar": node_records, "data.drive": node_records,
-    "core.merge": node_merge, "msg.send": node_send, "msg.ask": node_ask, "msg.telegram": node_telegram, "msg.mail": node_mail_draft, "ai.classify": node_classify, "ai.read": node_read, "core.safe_senders": node_safe_senders, "msg.trash": node_trash, "msg.alert": node_alert, "msg.event": node_event, "ai.agent": node_agent, "respond": node_respond,
+    "core.merge": node_merge, "msg.send": node_send, "msg.ask": node_ask, "msg.telegram": node_telegram, "msg.mail": node_mail_draft, "ai.classify": node_classify, "ai.read": node_read, "core.safe_senders": node_safe_senders, "core.only_new": node_only_new, "msg.attention": node_attention, "msg.trash": node_trash, "msg.alert": node_alert, "msg.event": node_event, "ai.agent": node_agent, "respond": node_respond,
 }
 
 
@@ -765,6 +812,12 @@ class FlowRunner:
                         # a node with nothing arriving doesn't run, unless it is set to (so "found nobody" can still be answered)
                         if produced or (target is not None and target.parameters.get("runWhenEmpty")):
                             queue.append((t["node"], t["index"], produced))
+            if run.to_remember and svc.ledger is not None:  # the run went well: what it handled is not handled again
+                from app.application.ports import LedgerEntry
+
+                repo = svc.ledger()
+                known = await repo.seen(agent.id)
+                await repo.record([LedgerEntry(str(uuid.uuid4()), agent.id, who.user_id, k, t, "", None, 0.0, "", "seen", run.record.id if run.record else "", 1) for k, t in run.to_remember if k not in known])
         except AiError as exc:
             failure = exc
             if run.record is not None:
@@ -802,7 +855,7 @@ def escape(text: str) -> str:
 
 
 #: Nodes that reach beyond the workflow (a message to your phone, a draft in your approvals): running one alone needs you to say so.
-SIDE_EFFECTS = ("msg.send", "msg.ask", "msg.mail", "msg.telegram", "msg.trash", "msg.alert", "msg.event")
+SIDE_EFFECTS = ("msg.send", "msg.ask", "msg.mail", "msg.telegram", "msg.trash", "msg.alert", "msg.event", "msg.attention")
 
 
 async def run_one(svc: Any, who: Any, token: str, agent: Any, prepared: Any, node_id: str, items: list[dict[str, Any]] | None, confirm: bool) -> dict[str, Any]:

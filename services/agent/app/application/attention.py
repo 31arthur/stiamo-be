@@ -33,16 +33,18 @@ class AttentionService:
         out = []
         for r in await self._repo.queue(who.user_id, WAITING):
             w = agents.get(r.agent_id)
-            if w is None:
+            made = (s.custom_agents.get(r.agent_id) if s else None) or {}  # an agent made on the canvas has no workflow row, only its setup
+            if w is None and not made:
                 continue
-            where = (s.workspaces.get(w.id) if s else None) or []
+            name = w.name if w else str(made.get("name") or r.agent_id)
+            where = (s.workspaces.get(r.agent_id) if s else None) or (list(made.get("workspaces") or []) if made else [])
             if workspace and where and workspace not in where:
                 continue
             d = r.data or {}
             out.append({
-                "agentId": r.agent_id, "agentName": w.name, "itemId": r.item_id, "title": r.title, "excerpt": r.excerpt, "label": r.label, "confidence": round(r.confidence, 3),
+                "agentId": r.agent_id, "agentName": name, "itemId": r.item_id, "title": r.title, "excerpt": r.excerpt, "label": r.label, "confidence": round(r.confidence, 3),
                 "status": r.status, "summary": d.get("summary") or r.title, "priority": d.get("priority") or "normal", "action": d.get("action"), "due": d.get("due"),
-                "event": d.get("event"), "note": d.get("note"), "at": _iso(r.created_at), "folder": (w.config.get("source") or {}).get("folder") or "INBOX",
+                "event": d.get("event"), "note": d.get("note"), "at": _iso(r.created_at), "folder": (w.config.get("source") or {}).get("folder") if w else d.get("folder") or "INBOX",
                 "workspaces": where,
             })
         order = {"high": 0, "normal": 1, "low": 2}
@@ -53,8 +55,10 @@ class AttentionService:
         if action not in ACTIONS:
             raise ValidationFailed("Say what to do: done, dismiss, approve_event or skip_event.")
         w = await self._repo.get(who.user_id, agent_id)
-        entry = await self._repo.entry(who.user_id, agent_id, item_id) if w else None
-        if w is None or entry is None:
+        s0 = await self._settings.get(who.user_id)
+        known = w is not None or bool(s0 and agent_id in s0.custom_agents)  # an agent made on the canvas counts too
+        entry = await self._repo.entry(who.user_id, agent_id, item_id) if known else None
+        if not known or entry is None:
             raise NotFound("That item isn't in the queue.")
         if entry.status not in WAITING:
             raise Conflict("That one has already been dealt with.")

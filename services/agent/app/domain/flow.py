@@ -56,6 +56,8 @@ CATALOG: dict[str, tuple[str, str, str]] = {
     "msg.ask": ("Messages", "Ask me", "Asks you on your phone with buttons and waits. The button you press decides which output the workflow carries on from."),
     "ai.classify": ("AI", "Sort into labels", "Reads each item and gives it one of your labels, with how sure it is. One output for each label, and one for what it isn't sure about."),
     "ai.read": ("AI", "Read and summarise", "Opens each email in full and says what it is about, how urgent it is, what to do, and (for events) the date it names."),
+    "core.only_new": ("Mail", "Only new items", "Lets through only the items this agent has not handled in an earlier run, so a mail is judged once. When you run it by hand it lets everything through and remembers nothing."),
+    "msg.attention": ("Messages", "Add to Attention", "Puts each email, with its summary and what to do, in your Attention queue (an email that names an event is shown with it, to approve). Needs the output of Read and summarise."),
     "core.safe_senders": ("Mail", "Keep safe senders", "Lets mail from people you trust go no further: your correspondents, listed domains, addresses and phrases. The rest goes on."),
     "msg.trash": ("Mail", "Move to Trash", "Moves emails to Trash (never deletes them). By default it asks you first: you approve it in Needs me, or by saying YES."),
     "msg.alert": ("Messages", "Alert me", "Pings your phone about an email, with its summary and a few suggested replies. Once per email."),
@@ -159,7 +161,7 @@ def validate(f: Flow) -> list[str]:
     live = [n for n in f.nodes if n.type != "core.note"]
     if not any(n.type in TRIGGERS for n in live):
         problems.append("A workflow needs a trigger to start from.")
-    if not any(n.type in ("ai.agent", "ai.classify", "respond", "msg.send", "msg.telegram", "msg.trash", "msg.alert", "msg.event", "msg.mail") for n in live):
+    if not any(n.type in ("ai.agent", "ai.classify", "respond", "msg.send", "msg.telegram", "msg.trash", "msg.alert", "msg.event", "msg.attention", "msg.mail") for n in live):
         problems.append("A workflow needs an AI agent, an Answer or a Send a message node, so it does something with what it finds.")
     if sum(1 for n in f.nodes if n.type == "ai.agent") > MAX_AGENTS:
         problems.append(f"A workflow can have at most {MAX_AGENTS} AI agent nodes.")
