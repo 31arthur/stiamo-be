@@ -34,6 +34,14 @@ class DailyManager:
         self._status[user_id] = {"scheduled": True, "at": at, "timezone": zone, "nextRunAt": None, "lastRunAt": None, "runs": 0, "error": None}
         self._tasks[user_id] = asyncio.get_running_loop().create_task(self._loop(user_id, at, zone, trigger))
 
+    def stop_prefix(self, prefix: str) -> None:
+        """Stops every schedule whose key starts with this (all of one person's workflow schedules)."""
+        for key in [k for k in self._tasks if k.startswith(prefix)]:
+            self.stop(key)
+
+    def keys(self, prefix: str = "") -> list[str]:
+        return [k for k in self._tasks if k.startswith(prefix)]
+
     def stop(self, user_id: str) -> None:
         t = self._tasks.pop(user_id, None)
         if t:

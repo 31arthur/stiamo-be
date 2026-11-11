@@ -31,7 +31,7 @@ from app.infrastructure.mailevents import HttpMailEvents
 from app.infrastructure.messaging import HttpTelegramApi, HttpTwilioApi
 from app.infrastructure.security import JwtAccessTokens, SecretBox
 from app.infrastructure.voice import DeepgramVoice
-from app.presentation.deps import sync_evening, sync_listener, sync_reminders, watch_everyone
+from app.presentation.deps import apply_schedules, sync_evening, sync_listener, sync_reminders, watch_everyone
 from app.presentation.routers import (
     agent,
     alerts,
@@ -76,6 +76,21 @@ async def start_evenings(app: FastAPI) -> None:
                 sync_evening(app, Who(s.user_id, s.email), s.planner)
     except Exception:  # noqa: BLE001  a problem here must not keep the service from starting
         logging.getLogger(__name__).exception("could not start the evening plans")
+
+
+async def start_flow_schedules(app: FastAPI) -> None:
+    """After a restart, every workflow with a schedule trigger runs at its time again."""
+    try:
+        async with app.state.session_factory() as session:
+            from app.presentation.deps import build_services
+
+            agent, _ = build_services(app, session)
+            for s in await SqlSettingsRepository(session, app.state.box).everyone():
+                if s.flows:
+                    who = Who(s.user_id, s.email)
+                    apply_schedules(app, who, await agent.schedules(who))
+    except Exception:  # noqa: BLE001  a problem here must not keep the service from starting
+        logging.getLogger(__name__).exception("could not start the workflow schedules")
 
 
 async def start_reminders(app: FastAPI) -> None:
@@ -139,6 +154,7 @@ def create_app(settings: Settings | None = None, *, mail_events=None, registry=N
         await start_watches(app)
         watching = asyncio.create_task(watch_loop(app, settings.mailwatch_minutes)) if settings.mailwatch_minutes > 0 else None
         await start_evenings(app)
+        await start_flow_schedules(app)
         await start_reminders(app)
         await refresh_webhooks(app)
         yield
@@ -148,6 +164,7 @@ def create_app(settings: Settings | None = None, *, mail_events=None, registry=N
                 await watching
         await app.state.reminders.close()
         await app.state.daily.close()
+        await app.state.flowsched.close()
         await app.state.listeners.close()
         await app.state.schedules.close()
         await app.state.sweeps.close()
@@ -168,6 +185,7 @@ def create_app(settings: Settings | None = None, *, mail_events=None, registry=N
     app.state.schedules = ScheduleManager()
     #: The daily planner's evening run, once a day at the time each person chose (see application/daily.py).
     app.state.daily = DailyManager()
+    app.state.flowsched = DailyManager()  # (one loop per workflow schedule, keyed user|agent|node)
     #: Reminders about calls not marked done, checked every minute (see application/reminders.py).
     app.state.reminders = ReminderManager()
     app.state.voice = voice or DeepgramVoice(http)

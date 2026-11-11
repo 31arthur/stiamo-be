@@ -271,3 +271,72 @@ async def test_a_created_agent_can_be_chatted_with_and_its_runs_have_their_own_h
 async def test_creating_an_agent_from_a_workflow_that_cannot_run_is_refused(rig, bad):
     await connect(rig)
     assert (await rig.client.post("/v1/agent/agents", json=bad, headers=headers())).status_code == 422
+
+
+# --- schedule triggers run by themselves -----------------------------------------------------------------------------------------
+
+
+def scheduled(time="07:30"):
+    return [n("t", "trigger.schedule", time=time, timezone="Asia/Kolkata"), n("calls", "data.follow_ups"), n("agg", "core.aggregate", field="title"), n("send", "msg.send", text="📞 {{ join($json.title, ' · ') }}")], wire(("t", 0, "calls"), ("calls", 0, "agg"), ("agg", 0, "send"))
+
+
+async def test_a_schedule_trigger_runs_its_workflow_by_itself_and_stops_when_the_workflow_changes(rig):
+    import asyncio
+
+    from .test_channels import send
+    from .test_listen import until
+
+    await planner_ready(rig)
+    seed(rig)
+    c = await telegram(rig, agent="assistant")
+    await send(rig, c, f"/start {c['pairingCode']}", chat=555, update=1)
+    mgr = rig.app.state.flowsched
+    mgr.delay_for = lambda at, zone: 0.02  # a test can't wait until half past seven
+    nodes, conns = scheduled()
+    rig.telegram.sent.clear()
+    assert (await put(rig, nodes, conns)).status_code == 200
+    assert mgr.keys("u1|") == ["u1|daily-planner|t"] and mgr.status("u1|daily-planner|t")["at"] == "07:30"
+    assert await until(lambda: any("📞" in t for _, t in rig.telegram.sent), tries=200)
+    mgr.delay_for = lambda at, zone: 3600  # no further runs; let the one under way finish
+    await asyncio.sleep(0.3)
+    assert [t for chat, t in rig.telegram.sent if chat == 555 and "📞" in t][0] == "📞 SBX-call · FSX-call · PEX-call"
+    run_ = await last(rig)
+    assert run_["trigger"] == "schedule" and [x["node"] for x in run_["trace"]] == ["t", "calls", "agg", "send"] and run_["status"] == "ok"
+    # moving the time moves the schedule; removing the trigger stops it
+    nodes[0]["parameters"]["time"] = "08:15"
+    await put(rig, nodes, conns)
+    assert mgr.status("u1|daily-planner|t")["at"] == "08:15"
+    off = [n("t", "trigger.chat"), n("a", "respond", text="x")]
+    await put(rig, off, wire(("t", 0, "a")))
+    assert mgr.keys("u1|") == []
+    await put(rig, nodes, conns)
+    assert mgr.keys("u1|") == ["u1|daily-planner|t"]
+    assert (await rig.client.delete(F, headers=headers())).status_code == 200
+    assert mgr.keys("u1|") == []  # back to the default workflow: no schedule
+
+
+async def test_an_unreadable_time_or_zone_does_not_schedule_and_a_created_agents_schedule_stops_with_it(rig):
+    await connect(rig)
+    await choose(rig, agent=PLANNER)
+    mgr = rig.app.state.flowsched
+    made = (await rig.client.post("/v1/agent/agents", json={"name": "Digest", "templateId": "call-digest"}, headers=headers())).json()
+    assert mgr.keys("u1|") == [f"u1|{made['id']}|trigger"]  # the template's schedule starts as soon as the agent exists
+    base = f"/v1/agent/agents/{made['id']}"
+    flow = (await rig.client.get(f"{base}/flow", headers=headers())).json()
+    flow["nodes"][0]["parameters"]["time"] = "7pm"
+    r = await rig.client.put(f"{base}/flow", json={"nodes": flow["nodes"], "connections": {k: v for k, v in flow["connections"].items()}}, headers=headers())
+    assert r.status_code == 200 and mgr.keys("u1|") == []  # saved, but a time that can't be read doesn't run
+    assert (await rig.client.delete(base, headers=headers())).status_code == 204 and mgr.keys("u1|") == []
+
+
+async def test_after_a_restart_every_saved_schedule_runs_again(rig):
+    from app.main import start_flow_schedules
+
+    await planner_ready(rig)
+    nodes, conns = scheduled("06:45")
+    await put(rig, nodes, conns)
+    mgr = rig.app.state.flowsched
+    mgr.stop_prefix("u1|")
+    assert mgr.keys() == []  # (the service was restarted: the loops are gone, the saved workflow is not)
+    await start_flow_schedules(rig.app)
+    assert mgr.keys() == ["u1|daily-planner|t"] and mgr.status("u1|daily-planner|t")["at"] == "06:45"

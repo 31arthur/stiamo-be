@@ -173,8 +173,8 @@ class Prepared:
 
 
 class AgentService:
-    #: "graph" runs each agent as a workflow of nodes; "classic" is the original single loop. Set from the AGENT_ENGINE setting.
-    engine = "classic"
+    #: "flow" runs each agent as a workflow of nodes (see flowrun.py); "classic" is the original single loop, kept as a fallback. Set from AGENT_ENGINE.
+    engine = "flow"
     #: Sends text to the person's phone for a workflow's Send a message node: (who, workspace, text) -> how many chats it reached. Set where the channels are.
     notify: Any = None
 
@@ -466,7 +466,7 @@ class AgentService:
 
     async def chat(
         self, who: Who, token: str, agent_id: str, message: str, history: list[dict[str, Any]] | None = None, channel: str = "the web app",
-        *, trigger: str = "chat", channel_id: str | None = None, preface: str = "", workspace: str | None = None, plan_for: str | None = None,
+        *, trigger: str = "chat", channel_id: str | None = None, preface: str = "", workspace: str | None = None, plan_for: str | None = None, entry: str | None = None,
     ) -> AgentRun:
         """Asks an agent. Every question that reaches a model is kept in the run log, whether it worked or not."""
         agent = await self._def(who, agent_id)
@@ -488,11 +488,7 @@ class AgentService:
         if self.engine == "flow" or agent.id in p.settings.flows or agent.id in p.settings.custom_agents:  # the agent as an n8n-style workflow of items (flowrun.py)
             from app.application.flowrun import FlowRunner
 
-            return await FlowRunner(self).run(who, token, agent, message, past, preface, channel, trigger=trigger, channel_id=channel_id, prepared=p)
-        if self.engine == "graph":  # the agent as a workflow of nodes (see graphrun.py); the loop below is the classic fallback
-            from app.application.graphrun import GraphRunner
-
-            return await GraphRunner(self).run(who, token, agent, message, past, preface, channel, trigger=trigger, channel_id=channel_id, workspace=workspace, plan_for=plan_for, prepared=p)
+            return await FlowRunner(self).run(who, token, agent, message, past, preface, channel, trigger=trigger, channel_id=channel_id, prepared=p, entry=entry)
         asked = f"{preface}\n\nThe person's latest message:\n{message}" if preface else message
         pkg = build_package(p.config, [t.spec for t in p.tools], p.context, asked)
         client = self._llm(sel["providerId"], p.settings.keys[sel["providerId"]])
@@ -558,57 +554,6 @@ class AgentService:
             "systemPrompt": r.system_prompt, "tools": r.tools, "steps": r.steps, "usage": r.usage, "channel": r.channel, "workspace": r.workspace, "trace": r.trace,
         }
 
-    async def graph(self, who: Who, token: str, agent_id: str) -> dict[str, Any]:
-        """An agent's workflow: its nodes and edges (its own if it was changed, else the default), and what the editor needs to change it: the
-        tools the agent can call, each agent's saved prompt (which the prompt node uses unless it is given one), and what is wrong with it, if anything."""
-        from app.application.graphrun import graph_of
-        from app.domain.graph import NODE_TYPES, validate
-
-        agent = await self._def(who, agent_id)
-        s = await self._load(who)
-        p = await self._prepare(who, token, agent, "the web app")
-        g = graph_of(s.graphs, agent.id)
-        overrides = p.config.tools
-        tools = [
-            {"name": t.spec.name, "pack": p.packs.get(t.spec.name, ""), "description": (overrides[t.spec.name].description if t.spec.name in overrides and overrides[t.spec.name].description else t.spec.description), "enabled": overrides[t.spec.name].enabled if t.spec.name in overrides else True}
-            for t in p.tools
-        ]
-        return {
-            "agentId": agent.id, "name": agent.name, **g.to_json(), "custom": agent.id in s.graphs, "engine": self.engine, "problems": validate(g), "tools": tools,
-            "nodeTypes": list(NODE_TYPES), "variables": self._registry.variables(agent), "defaults": {"system": agent.system, "inputTemplate": agent.input_template},
-            "triggers": ["Chat in the app", "Telegram and WhatsApp (through the master bot)"] + (["The evening plan"] if agent.id == "daily-planner" else []),
-        }
-
-    async def check_graph(self, who: Who, agent_id: str, raw: Any) -> list[str]:
-        """What would stop a workflow from running, in words for a person. Empty: it can be saved and run."""
-        from app.domain.graph import Graph, validate
-
-        await self._def(who, agent_id)
-        try:
-            return validate(Graph.from_json(raw))
-        except ValueError as exc:
-            return [str(exc)]
-
-    async def set_graph(self, who: Who, token: str, agent_id: str, raw: Any) -> dict[str, Any]:
-        """Saves an agent's workflow. Only one that can run is kept, so an agent is never left with a workflow that stops."""
-        from app.domain.graph import Graph
-
-        problems = await self.check_graph(who, agent_id, raw)
-        if problems:
-            raise ValidationFailed(" ".join(problems[:3]))
-        g = Graph.from_json(raw)
-        s = await self._load(who)
-        s.graphs = {**s.graphs, agent_id: g.to_json()}
-        await self._repo.save(s)
-        return await self.graph(who, token, agent_id)
-
-    async def reset_graph(self, who: Who, token: str, agent_id: str) -> dict[str, Any]:
-        await self._def(who, agent_id)
-        s = await self._load(who)
-        s.graphs = {k: v for k, v in s.graphs.items() if k != agent_id}
-        await self._repo.save(s)
-        return await self.graph(who, token, agent_id)
-
     # --- workflows in the n8n form: nodes, connections, items ---------------------------------------------------------------
 
     async def flow(self, who: Who, token: str, agent_id: str) -> dict[str, Any]:
@@ -635,6 +580,32 @@ class AgentService:
         run = await self.chat(who, token, agent_id, message.strip() or "Run", [], "the web app", trigger="schedule" if scheduled else "manual")
         latest = await self._runs.recent(who.user_id, agent_id, limit=1)
         return {"answer": run.answer, "runId": latest[0].id if latest else None}
+
+    async def schedules(self, who: Who) -> list[dict[str, str]]:
+        """The schedule triggers of this person's workflows that are switched on: [{agent, node, time, timezone}], so each can run by itself at its time."""
+        from app.application.dayplans import parse_time, zone_of
+        from app.domain.flow import Flow
+
+        s = await self._load(who)
+        known = {a.id for a in self._all(s)}
+        out = []
+        for agent_id, raw in s.flows.items():
+            if agent_id not in known:
+                continue
+            try:
+                f = Flow.from_json(raw)
+            except ValueError:
+                continue
+            for n in f.nodes:
+                if n.type == "trigger.schedule" and not n.disabled:
+                    at, tz = str(n.parameters.get("time") or "07:30"), str(n.parameters.get("timezone") or "Asia/Kolkata")
+                    try:
+                        parse_time(at)
+                        zone_of(tz)
+                    except ValidationFailed:
+                        continue  # a time or zone that can't be read doesn't run (the editor says so)
+                    out.append({"agent": agent_id, "node": n.id, "time": at, "timezone": tz})
+        return out
 
     async def check_flow(self, who: Who, agent_id: str, raw: Any) -> list[str]:
         from app.domain.flow import Flow, validate

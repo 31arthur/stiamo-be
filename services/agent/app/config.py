@@ -16,8 +16,8 @@ class Settings(BaseSettings):
 
     env: str = "development"
     database_url: str = "sqlite+aiosqlite:///./agent.db"
-    #: How agents run: "graph" (each agent is a workflow of nodes, which can be edited) or "classic" (the original single loop, as a fallback).
-    engine: str = "graph"
+    #: How agents run: "flow" (each agent is a workflow of nodes you can edit) or "classic" (the original single loop, as a fallback).
+    engine: str = "flow"
 
     # Must match the identity service. HS256 uses the shared secret. The service also signs short-lived tokens with it, to read
     # the owner's cases when a Telegram or WhatsApp message arrives and there is no signed-in browser to borrow one from.

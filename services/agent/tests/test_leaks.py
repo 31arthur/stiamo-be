@@ -327,16 +327,16 @@ async def test_what_one_workspace_books_becomes_busy_time_for_the_next(rig):
 async def test_an_agent_is_shown_as_its_workflow_and_a_run_records_its_workspace(rig):
     await team_ready(rig)
     seed(rig)
-    g = (await rig.client.get("/v1/agent/agents/daily-planner/graph", headers=headers())).json()
-    assert [n["type"] for n in g["nodes"]] == ["trigger", "scope", "prompt", "agent", "output"] and g["custom"] is False
-    tools = {t["name"]: t for t in g["tools"]}
+    f = (await rig.client.get("/v1/agent/agents/daily-planner/flow", headers=headers())).json()
+    assert [n["type"] for n in f["nodes"]] == ["trigger.chat", "ai.agent", "respond"] and f["custom"] is False
+    tools = {t["name"]: t for t in f["tools"]}
     assert {"day_agenda", "propose_schedule"} <= set(tools) and tools["day_agenda"]["pack"] == "agenda" and tools["day_agenda"]["enabled"] is True
-    assert "Daily Planner" in g["defaults"]["system"] and "tomorrow" in g["variables"]
+    assert "Daily Planner" in f["defaults"]["system"] and "tomorrow" in f["variables"]
     # a tool switched off in the prompt settings shows as off: the workflow's tools are the agent's real ones
     saved = (await rig.client.get("/v1/agent/agents/daily-planner", headers=headers())).json()["prompt"]
     await rig.client.put("/v1/agent/agents/daily-planner/prompt", json={**saved, "tools": {"free_time": {"enabled": False}}}, headers=headers())
-    g = (await rig.client.get("/v1/agent/agents/daily-planner/graph", headers=headers())).json()
-    assert next(t for t in g["tools"] if t["name"] == "free_time")["enabled"] is False
+    f = (await rig.client.get("/v1/agent/agents/daily-planner/flow", headers=headers())).json()
+    assert next(t for t in f["tools"] if t["name"] == "free_time")["enabled"] is False
 
     # a run under a workspace records it, and shows it in the run detail
     sb = await connect_bot(rig, "456:def", 556, workspace="sb")
@@ -344,6 +344,8 @@ async def test_an_agent_is_shown_as_its_workflow_and_a_run_records_its_workspace
     runs = (await rig.client.get("/v1/agent/agents/daily-planner/runs", headers=headers())).json()["items"]
     detail = (await rig.client.get(f"/v1/agent/runs/{runs[0]['id']}", headers=headers())).json()
     assert detail["workspace"] == "sb"
+    if rig.app.state.settings.engine == "flow":  # (the classic fallback keeps no node trace)
+        assert [t["node"] for t in detail["trace"]] == ["trigger", "agent", "respond"]
 
 
 # --- one master bot: it works out the workspace of each message, and keeps each one's information apart ----------------------------

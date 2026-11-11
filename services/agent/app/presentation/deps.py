@@ -145,6 +145,34 @@ def reminder_check(app: FastAPI, who: Who):
     return run_once
 
 
+def flow_run(app: FastAPI, who: Who, agent_id: str, node_id: str):
+    """One scheduled run of a workflow, from its schedule trigger: its own session and a fresh token for the owner (nobody is signed in at 7am)."""
+
+    async def run_once() -> None:
+        async with app.state.session_factory() as session:
+            try:
+                agent, _ = build_services(app, session)
+                await agent.chat(who, app.state.tokens.mint(who.user_id, who.email), agent_id, "Scheduled run", [], "the schedule", trigger="schedule", entry=node_id)
+                await session.commit()
+            except Exception:
+                await session.rollback()
+                raise
+
+    return run_once
+
+
+def apply_schedules(app: FastAPI, who: Who, schedules: list[dict[str, str]]) -> None:
+    """Starts, moves or stops a person's workflow schedules to match what their workflows say."""
+    mgr = app.state.flowsched
+    prefix = f"{who.user_id}|"
+    wanted = {f"{prefix}{s['agent']}|{s['node']}": s for s in schedules}
+    for key in mgr.keys(prefix):
+        if key not in wanted:
+            mgr.stop(key)
+    for key, s in wanted.items():
+        mgr.ensure(key, s["time"], s["timezone"], flow_run(app, who, s["agent"], s["node"]))
+
+
 def sync_reminders(app: FastAPI, who: Who, enabled: bool) -> None:
     """Starts or stops the minute-by-minute check to match whether the reminders are on."""
     if enabled:
