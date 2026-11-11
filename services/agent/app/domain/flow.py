@@ -48,6 +48,7 @@ CATALOG: dict[str, tuple[str, str, str]] = {
     "data.calendar": ("Work", "Get calendar events", "Events from this workspace's Google calendars."),
     "data.drive": ("Work", "Search the Drive", "Documents in the Drive (S&B)."),
     "msg.send": ("Messages", "Send a message", "Sends text to your phone: the master bot on Telegram."),
+    "msg.telegram": ("Messages", "Telegram", "Sends a message with one of your Telegram bots: pick the bot (its credential) and, if you like, one chat. Cannot send for another workspace than the bot's."),
     "msg.mail": ("Mail", "Draft an email", "Writes an email for you to approve. Nothing is sent until you approve it (in Needs me, or by saying YES)."),
     "msg.ask": ("Messages", "Ask me", "Asks you on your phone with buttons and waits. The button you press decides which output the workflow carries on from."),
     "ai.agent": ("AI", "AI agent", "A model that reads, calls the tools you give it and answers."),
@@ -137,7 +138,7 @@ def validate(f: Flow) -> list[str]:
     live = [n for n in f.nodes if n.type != "core.note"]
     if not any(n.type in TRIGGERS for n in live):
         problems.append("A workflow needs a trigger to start from.")
-    if not any(n.type in ("ai.agent", "respond", "msg.send") for n in live):
+    if not any(n.type in ("ai.agent", "respond", "msg.send", "msg.telegram") for n in live):
         problems.append("A workflow needs an AI agent, an Answer or a Send a message node, so it does something with what it finds.")
     if sum(1 for n in f.nodes if n.type == "ai.agent") > MAX_AGENTS:
         problems.append(f"A workflow can have at most {MAX_AGENTS} AI agent nodes.")
@@ -174,6 +175,11 @@ def validate(f: Flow) -> list[str]:
                 problems.append(f"“{n.name or n.id}” needs two to four answers to offer, each with a name.")
             if not str(p.get("text") or "").strip():
                 problems.append(f"“{n.name or n.id}” needs the question to ask.")
+        if t == "msg.telegram":
+            if not str(p.get("credential") or "").strip():
+                problems.append(f"“{n.name or n.id}” needs a Telegram bot to send with (its credential).")
+            if not str(p.get("text") or "").strip():
+                problems.append(f"“{n.name or n.id}” needs the text to send.")
         if t == "msg.mail" and not str(p.get("to") or "").strip():
             problems.append(f"“{n.name or n.id}” needs who to write to.")
         if t == "core.set" and not p.get("fields"):
