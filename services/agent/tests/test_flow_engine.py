@@ -340,3 +340,98 @@ async def test_after_a_restart_every_saved_schedule_runs_again(rig):
     assert mgr.keys() == []  # (the service was restarted: the loops are gone, the saved workflow is not)
     await start_flow_schedules(rig.app)
     assert mgr.keys() == ["u1|daily-planner|t"] and mgr.status("u1|daily-planner|t")["at"] == "06:45"
+
+
+# --- Ask me: a question on the phone that the workflow waits on ---------------------------------------------------------------------
+
+
+def asking():
+    return [
+        n("t", "trigger.schedule"),
+        n("calls", "data.follow_ups"),
+        n("agg", "core.aggregate", field="title"),
+        n("ask", "msg.ask", text="You have {{ $json.count }} calls: {{ join($json.title, ', ') }}. Do them now?", options=["Call now", "Later"]),
+        n("now", "msg.send", text="📞 Great, first: {{ $node['Put them together'].first.title[0] }} ({{ $json.answer }})"),
+        n("later", "msg.send", text="⏰ OK, I'll leave {{ $json.count }} for later."),
+    ], wire(("t", 0, "calls"), ("calls", 0, "agg"), ("agg", 0, "ask"), ("ask", 0, "now"), ("ask", 1, "later"))
+
+
+async def master(rig):
+    from .test_channels import send
+
+    c = await telegram(rig, agent="assistant")
+    await send(rig, c, f"/start {c['pairingCode']}", chat=555, update=1)
+    return c
+
+
+async def test_ask_me_sends_a_question_with_buttons_and_the_workflow_waits_then_carries_on_from_the_answer(rig):
+    from .test_availability import press
+
+    await planner_ready(rig)
+    seed(rig)
+    c = await master(rig)
+    nodes, conns = asking()
+    nodes[4]["name"], nodes[2]["name"] = "Send go", "Put them together"
+    nodes[4]["parameters"]["text"] = "📞 Great ({{ $json.answer }}): {{ $json.count }} calls"
+    assert (await put(rig, nodes, conns)).status_code == 200
+    rig.telegram.sent.clear()
+    rig.telegram.keyboards.clear()
+    await run(rig, scheduled=True)
+    q = [t for chat, t in rig.telegram.sent if chat == 555]
+    assert q == ["You have 3 calls: SBX-call, FSX-call, PEX-call. Do them now?"]  # asked, and nothing else yet
+    keys = [b["callback_data"] for k in rig.telegram.keyboards if k for row in k for b in row]
+    assert [k.split(":")[1] for k in keys] == ["0", "1"] and all(k.startswith("fw:") for k in keys)
+    first = await last(rig)
+    assert [t["node"] for t in first["trace"]] == ["t", "calls", "agg", "ask"]  # it stopped at the question
+
+    rig.telegram.sent.clear()
+    await press(rig, c, keys[0], 2, chat=555)
+    assert any("📞 Great (Call now): 3 calls" in t for _, t in rig.telegram.sent)  # the "Call now" output ran, with the answer in its item
+    assert not any("later" in t for _, t in rig.telegram.sent)
+    resumed = await last(rig)
+    assert resumed["trigger"] == "reply" and [t["node"] for t in resumed["trace"]] == ["now"]
+    rig.telegram.sent.clear()
+    await press(rig, c, keys[0], 3, chat=555)  # a second tap does nothing but say so
+    assert "out of date" in rig.telegram.sent[-1][1]
+
+
+async def test_the_other_answer_takes_the_other_output(rig):
+    from .test_availability import press
+
+    await planner_ready(rig)
+    seed(rig)
+    c = await master(rig)
+    nodes, conns = asking()
+    assert (await put(rig, nodes, conns)).status_code == 200
+    rig.telegram.keyboards.clear()
+    await run(rig, scheduled=True)
+    later = next(b["callback_data"] for k in rig.telegram.keyboards if k for row in k for b in row if b["callback_data"].startswith("fw:1:"))
+    rig.telegram.sent.clear()
+    await press(rig, c, later, 2, chat=555)
+    assert any("⏰ OK, I'll leave 3 for later." in t for _, t in rig.telegram.sent)
+
+
+async def test_an_ask_with_no_phone_to_ask_fails_clearly_and_leaves_nothing_waiting(rig):
+    from app.application.ports import UserSettings
+    from app.infrastructure.db.repositories import SqlSettingsRepository
+
+    await planner_ready(rig)
+    seed(rig)
+    nodes, conns = asking()
+    assert (await put(rig, nodes, conns)).status_code == 200
+    r = await rig.client.post(RUN, json={"scheduled": True}, headers=headers())
+    assert r.status_code == 422 and "no Telegram chat is linked" in r.json()["error"]["message"]
+    async with rig.app.state.session_factory() as session:
+        s = await SqlSettingsRepository(session, rig.app.state.box).get("u1") or UserSettings("u1")
+        assert s.flow_waits == {}
+
+
+async def test_ask_me_needs_two_to_four_answers_and_a_question(rig):
+    await planner_ready(rig)
+    for bad in ({"text": "Ok?", "options": ["Only one"]}, {"text": "", "options": ["a", "b"]}, {"text": "Ok?", "options": ["a", "b", "c", "d", "e"]}, {"text": "Ok?", "options": ["a", " "]}):
+        nodes = [n("t", "trigger.chat"), n("q", "msg.ask", **bad), n("a", "respond")]
+        r = await rig.client.post(f"{F}/check", json={"nodes": nodes, "connections": wire(("t", 0, "q"), ("q", 0, "a"))}, headers=headers())
+        assert any("answers to offer" in p or "question to ask" in p for p in r.json()["problems"]), bad
+    ok = [n("t", "trigger.chat"), n("q", "msg.ask", text="Ok?", options=["a", "b", "c"]), n("a", "respond"), n("b", "respond"), n("c", "respond")]
+    good = await rig.client.post(f"{F}/check", json={"nodes": ok, "connections": wire(("t", 0, "q"), ("q", 0, "a"), ("q", 1, "b"), ("q", 2, "c"))}, headers=headers())
+    assert good.json()["problems"] == []

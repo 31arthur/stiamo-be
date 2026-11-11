@@ -48,6 +48,7 @@ CATALOG: dict[str, tuple[str, str, str]] = {
     "data.calendar": ("Work", "Get calendar events", "Events from this workspace's Google calendars."),
     "data.drive": ("Work", "Search the Drive", "Documents in the Drive (S&B)."),
     "msg.send": ("Messages", "Send a message", "Sends text to your phone: the master bot on Telegram."),
+    "msg.ask": ("Messages", "Ask me", "Asks you on your phone with buttons and waits. The button you press decides which output the workflow carries on from."),
     "ai.agent": ("AI", "AI agent", "A model that reads, calls the tools you give it and answers."),
     "respond": ("Output", "Answer", "Ends the run with the answer to give."),
 }
@@ -69,6 +70,8 @@ class FNode:
             return 2
         if self.type == "core.switch":
             return len(p.get("rules") or []) + 1
+        if self.type == "msg.ask":
+            return max(2, len(p.get("options") or []))
         if self.type in ("core.stop", "respond", "core.note"):
             return 0
         return 1
@@ -159,6 +162,12 @@ def validate(f: Flow) -> list[str]:
         for c in (p.get("conditions") or []) + (p.get("rules") or []):
             if isinstance(c, dict) and c.get("op") not in OPS:
                 problems.append(f"A condition in “{n.name or n.id}” needs a comparison.")
+        if t == "msg.ask":
+            opts = p.get("options") or []
+            if not 2 <= len(opts) <= 4 or any(not str(o).strip() for o in opts):
+                problems.append(f"“{n.name or n.id}” needs two to four answers to offer, each with a name.")
+            if not str(p.get("text") or "").strip():
+                problems.append(f"“{n.name or n.id}” needs the question to ask.")
         if t == "core.set" and not p.get("fields"):
             problems.append(f"“{n.name or n.id}” needs at least one field to set.")
         if t == "core.merge" and sum(1 for outs in f.connections.values() for o in outs for x in o if x["node"] == n.id) < 2:
