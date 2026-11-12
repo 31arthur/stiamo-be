@@ -23,7 +23,7 @@ YES = {"yes", "y", "yep", "yeah", "ok", "okay", "approve", "approved", "confirm"
 NO = {"no", "n", "nope", "cancel", "drop", "dismiss", "discard", "don't", "dont", "never mind", "nevermind"}
 #: Only these collections can be changed by approving; each is a record the practice service already accepts from the owner.
 TABLES = ("tasks", "follow-ups", "cases", "hearings", "plans", "stories")
-UPDATABLE = ("tasks", "follow-ups")
+UPDATABLE = ("tasks", "follow-ups", "stories")
 
 
 def verdict_of(message: str) -> bool | None:

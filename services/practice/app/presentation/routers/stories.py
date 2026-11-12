@@ -47,4 +47,6 @@ async def story_timeline(story_id: str, principal: deps.CurrentPrincipal, svc: W
         "cliffhangers": [{"chapterId": c.id, "number": c.number, "question": q.question} for c, q in t.cliffhangers],
         "hunches": [{"chapterId": c.id, "number": c.number, **dump(h)} for c, h in t.hunches],
         "cast": [{"character": dump(c), "part": dump(p)} for p, c in t.cast],
+        "chanceTrend": [{"chapterId": e.chapter.id, "number": e.chapter.number, "date": e.chapter.date, "chance": e.chapter.chance_after}
+                        for e in t.entries if e.chapter and e.chapter.chance_after is not None],
     }

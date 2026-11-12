@@ -58,6 +58,12 @@ PRESS_ACKS = {
     "av:c": "Noting you can take calls…",
     "av:f": "Noting you're free…",
     "av:b": "Noting you're busy…",
+    "ed:z": "Leaving it for now…",
+    "ed:sd": "Marking it done…",
+    "ed:o0": "Booking it…",
+    "ed:o1": "Booking it…",
+    "ed:o2": "Booking it…",
+    "ed:r2": "Thinking of ways to start…",
 }
 
 NOT_LINKED = "This chat isn't linked to a Stiamo account. Open AI agents → Channels in Stiamo to connect it."
@@ -102,6 +108,7 @@ class ChannelService:
         self.plan_actions: Any = None
         #: What the buttons under a question about time inside an event do: an AvailabilityService.
         self.availability_actions: Any = None
+        self.editor_actions: Any = None
         #: The app's https address, for the "Call …" buttons (Telegram only opens https links; the page there hands the number to the dialer).
         self.app_url: str = ""
         self.voice_notes: Any = None
@@ -645,6 +652,9 @@ class ChannelService:
         if kind == "av" and self.availability_actions is not None:
             await self._strip(token, chat, message)
             return availability_confirmation(await self.availability_actions.answer(who, access, action, rest))
+        if kind == "ed" and self.editor_actions is not None:
+            await self._strip(token, chat, message)
+            return await self.editor_actions.press(who, access, action, rest)
         if kind == "al" and self.alerts is not None:
             await self.alerts.on_callback(who, access, c.id, chat, int(message.get("message_id") or 0), "", data)
             return "✅ Done. The details are above."

@@ -128,8 +128,10 @@ class DayPlanService:
         announce: Callable[[Who, Callable[[Style, int], str], str, str, list[dict[str, Any]]], Awaitable[object]] | None = None,
         clock_now: Callable[[], datetime] = lambda: datetime.now(UTC),
         ask: Callable[[Who, str, str, str], Awaitable[int]] | None = None,
+        editor: Callable[[Who, str, list[str]], Awaitable[Any]] | None = None,
     ) -> None:
         self._plans, self._settings, self._agent, self._data, self._announce, self._now, self._ask = plans, settings, agent, data_factory, announce, clock_now, ask
+        self._editor = editor
 
     # --- what is set ----------------------------------------------------------------------------------------
 
@@ -207,6 +209,11 @@ class DayPlanService:
             except Exception as exc:  # noqa: BLE001
                 failed = exc
                 log.exception("the evening plan for %s failed", ws or "everything")
+        if self._editor is not None:
+            try:  # then the story editor: a quiet story's next question, and on its day the writers' room
+                await self._editor(who, token, [w for w in chosen if w])
+            except Exception:  # noqa: BLE001  the plans went out; the editor failing is not theirs
+                log.exception("the story editor failed")
         if failed is not None and not made:
             raise failed
         return made

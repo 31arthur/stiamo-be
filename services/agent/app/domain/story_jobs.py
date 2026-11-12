@@ -313,4 +313,132 @@ MARGIN_NOTES = Job(
     fallback=empty_notes,
 )
 
-JOBS: dict[str, Job] = {j.name: j for j in (FIND_STORY, MARGIN_NOTES)}
+# --- next-chapter openings ---------------------------------------------------------------------------------------
+
+OPENINGS_SYSTEM = """A person's story has gone quiet: nothing has been written about it for a while. You suggest three ways the next chapter could start, each a real move the person could make this week, so they can pick one with a tap and get going.
+
+Rules:
+1. Each opening is one sentence in the second person, present tense, like the first line of a chapter: "You walk into the old office on Wednesday." At most 20 words.
+2. Each opening comes with the one step it means: "kind" is "task" (work they do themselves) or "followUp" (reaching someone: set "channel" to call, message, email or visit). The title starts with a verb.
+3. Only use people from "People in the story" as contacts, written exactly as listed, or null. Never invent a person.
+4. Dates: take the day from the calendar given. Never count days yourself. No particular day: null.
+5. Make the three different from each other: for example one that pushes someone, one the person can do alone, one that changes the approach.
+6. Build on what the story says: its checkpoint, what it waits on, its last chapter, its open steps. Don't repeat an open step as it is.
+
+Reply with one JSON object and nothing else:
+{"openings": [{"opening": "...", "step": {"kind": "task", "title": "...", "due": null, "channel": null, "contact": null}}, ...]}"""
+
+
+def _render_openings(i: dict[str, Any]) -> str:
+    s = i["story"]
+    steps = "\n".join(f"- {x}" for x in i.get("open_steps") or []) or "(none)"
+    return (
+        f"Story: {s.get('title', '')}\nThe ending they want: {s.get('ending') or '(not written)'}\n"
+        f"Where it is: {i.get('here') or '(no checkpoints)'}\nWaiting on: {i.get('waiting') or 'nothing'}\n"
+        f"Quiet for: {i.get('quiet_days', 0)} days\nPeople in the story: {', '.join(i.get('people') or []) or '(none)'}\n"
+        f"Open steps:\n{steps}\n\nCalendar:\n{calendar(i['today'], 14)}\n\nThe latest chapter:\n<<<\n{i.get('last') or '(none yet)'}\n>>>"
+    )
+
+
+def _check_openings(out: dict[str, Any], i: dict[str, Any]) -> Checked:
+    people = list(i.get("people") or [])
+    dropped: list[str] = []
+    kept: list[dict[str, Any]] = []
+    for o in items(out.get("openings"), 5):
+        text = short(o.get("opening"), 160)
+        st = o.get("step") if isinstance(o.get("step"), dict) else {}
+        title = short(st.get("title"), 120)
+        if not text or not title:
+            dropped.append("an opening without its step")
+            continue
+        kind = {"task": "task", "followup": "followUp"}.get(str(st.get("kind") or "task").lower().replace("_", "").replace("-", ""), "task")
+        contact = st.get("contact")
+        if contact and not any(same_name(contact, p) for p in people):
+            dropped.append(f"contact “{contact}” isn't in the story")
+            contact = None
+        due = iso_day(st.get("due"))
+        if due and due < i["today"]:
+            due = None
+        step = {"kind": kind, "title": title, "due": due, "contact": next((p for p in people if contact and same_name(contact, p)), None)}
+        if kind == "followUp":
+            step["channel"] = one_of(st.get("channel"), CHANNELS, "call")
+        if any(same_name(title, k["step"]["title"]) for k in kept):
+            continue
+        kept.append({"opening": text, "step": step})
+    if not kept:
+        raise Problem("Give three openings, each with a step that has a title.")
+    return Checked({"openings": kept[:3]}, dropped)
+
+
+_EX_OPEN = {
+    "today": "2026-11-12", "quiet_days": 16, "here": "Documents in", "waiting": "Former employer's HR", "people": ["Loan agent", "Former HR"],
+    "open_steps": ["Email former HR for Form 16"], "story": {"title": "Home loan", "ending": "Disbursed before March"},
+    "last": "The bank wants Form 16 for two years. I'll write to HR on Monday.",
+}
+
+NEXT_OPENINGS = Job(
+    name="next_openings",
+    version="1",
+    purpose="When a story goes quiet, suggests three ways the next chapter could start, each with the step it books.",
+    system=OPENINGS_SYSTEM,
+    examples=((_EX_OPEN, {"openings": [
+        {"opening": "You walk into the old office on Monday and ask HR in person.", "step": {"kind": "followUp", "title": "Visit former HR for the Form 16", "due": "2026-11-16", "channel": "visit", "contact": "Former HR"}},
+        {"opening": "You ask the agent whether the bank takes a CA certificate instead.", "step": {"kind": "followUp", "title": "Ask about a CA certificate instead of Form 16", "due": None, "channel": "call", "contact": "Loan agent"}},
+        {"opening": "You download last year's ITR yourself, before anyone asks.", "step": {"kind": "task", "title": "Download last year's ITR", "due": None, "channel": None, "contact": None}},
+    ]}),),
+    render=_render_openings,
+    check=_check_openings,
+    fallback=lambda i: {"openings": []},
+)
+
+
+# --- the chance after a chapter ----------------------------------------------------------------------------------
+
+CHANCE_SYSTEM = """You help a person keep an honest estimate of the chance their story reaches the ending they want. They just wrote a new chapter. Suggest the chance after it.
+
+Rules:
+1. Start from their last estimate. Move it only as far as the chapter justifies: a small delay moves it a little (2 to 5 points), a real setback or breakthrough more (up to 20). Never move it more than 20 points.
+2. If the chapter doesn't change the odds, give the same number.
+3. "reason": at most 10 words, in plain language, about this chapter.
+
+Reply with one JSON object and nothing else: {"chance": <whole number 0-100>, "reason": "..."}"""
+
+
+def _render_chance(i: dict[str, Any]) -> str:
+    return (f"Story: {i['title']}\nThe ending they want: {i.get('ending') or '(not written)'}\nTheir last estimate: {i['chance']}%\n"
+            f"Earlier estimates, oldest first: {', '.join(str(x) for x in i.get('history') or []) or '(none)'}\n"
+            f"The chapter's beat: {i.get('beat') or 'note'}\n\nThe new chapter:\n<<<\n{i['prose'][:2500]}\n>>>")
+
+
+def _check_chance(out: dict[str, Any], i: dict[str, Any]) -> Checked:
+    raw = out.get("chance")
+    try:
+        n = int(round(float(raw)))
+    except (TypeError, ValueError):
+        raise Problem("Give the chance as a whole number from 0 to 100.") from None
+    if not 0 <= n <= 100:
+        raise Problem("The chance must be from 0 to 100.")
+    dropped = []
+    if abs(n - i["chance"]) > 20:
+        dropped.append(f"moved {n - i['chance']:+d} points, more than 20")
+        n = i["chance"] + (20 if n > i["chance"] else -20)
+    return Checked({"chance": n, "reason": short(out.get("reason"), 80) or ""}, dropped)
+
+
+SUGGEST_CHANCE = Job(
+    name="suggest_chance",
+    version="1",
+    purpose="After a chapter, suggests the chance of reaching the ending (you decide).",
+    system=CHANCE_SYSTEM,
+    examples=(
+        ({"title": "Home loan", "ending": "Disbursed before March", "chance": 70, "history": [75, 70], "beat": "setback",
+          "prose": "The bank wants Form 16 for two years now. Another week lost."}, {"chance": 65, "reason": "another document, another week"}),
+        ({"title": "Gulbarga SMPL", "ending": "Order collected, fee in", "chance": 55, "history": [60, 55], "beat": "breakthrough",
+          "prose": "The order was passed today, in our favour."}, {"chance": 75, "reason": "the order went our way"}),
+    ),
+    render=_render_chance,
+    check=_check_chance,
+    fallback=lambda i: {"chance": i["chance"], "reason": ""},
+)
+
+JOBS: dict[str, Job] = {j.name: j for j in (FIND_STORY, MARGIN_NOTES, NEXT_OPENINGS, SUGGEST_CHANCE)}

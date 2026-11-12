@@ -160,6 +160,8 @@ class UserSettings:
     custom_agents: dict[str, Any] = field(default_factory=dict)
     #: Workflows paused at an Ask me node, waiting for a button on the phone: {short id: what is needed to carry on}. See flowrun.py.
     flow_waits: dict[str, Any] = field(default_factory=dict)
+    #: The story editor: {settings, stories: {id: ladder memory}, asked: {short: question}, sent: {workspace: day}, room, log}. See application/editor.py.
+    editor: dict[str, Any] = field(default_factory=dict)
 
 
 class SettingsRepository(ABC):

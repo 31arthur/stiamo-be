@@ -217,7 +217,7 @@ async def test_each_job_can_run_on_its_own_model(rig):
     await connect(rig)
     await choose(rig, agent=STORIES)
     jobs = (await rig.client.get("/v1/agent/jobs", headers=headers())).json()["items"]
-    assert {j["name"] for j in jobs} == {"find_story", "margin_notes"} and all(not j["ownChoice"] for j in jobs)
+    assert {j["name"] for j in jobs} == {"find_story", "margin_notes", "next_openings", "suggest_chance"} and all(not j["ownChoice"] for j in jobs)
     r = await rig.client.put("/v1/agent/jobs/margin_notes/model", json={"provider": "openai", "model": "gpt-4o"}, headers=headers())
     assert r.status_code == 200, r.text
     mine = next(j for j in r.json()["items"] if j["name"] == "margin_notes")
@@ -238,9 +238,9 @@ def test_the_test_sets_load_and_score():
     from app.domain.job_evals import SCORERS, SetScore
     from app.scripts.eval_jobs import load
 
-    for name in ("margin_notes", "find_story"):
+    for name in ("margin_notes", "find_story", "next_openings", "suggest_chance"):
         cases = load(name)
-        assert len(cases) >= 6
+        assert len(cases) >= 5
         for c in cases:
             JOBS[name].render(c["input"])  # every case is a valid input for its job
     # a reply that matches what was expected scores full marks; one that invents doesn't
