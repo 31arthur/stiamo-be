@@ -207,8 +207,29 @@ class HttpDataGateway(DataGateway):
                 out[key] = None
         return out
 
+    async def chapters(self, story_id: str) -> list[dict[str, Any]]:
+        r = await self._get(f"{self._practice}/v1/stories/{story_id}/chapters")
+        if r.status_code == 404:
+            return []
+        if r.status_code != 200:
+            raise AiError(f"The practice data answered {r.status_code}.")
+        return r.json().get("items", [])
+
+    async def write_chapter(self, story_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        try:
+            r = await self._http.post(f"{self._practice}/v1/stories/{story_id}/chapters/write", headers=self._headers, json=body)
+        except httpx.HTTPError as exc:
+            raise AiError("Couldn't reach your stories. Try again in a moment.") from exc
+        if r.status_code != 200:
+            try:
+                reason = r.json()["error"]["message"]
+            except (ValueError, KeyError, TypeError):
+                reason = f"it answered {r.status_code}"
+            raise AiError(f"The chapter wasn't saved: {reason}.")
+        return r.json()
+
     async def save_record(self, table: str, record: dict[str, Any]) -> None:
-        paths = {"tasks": "/v1/tasks", "follow-ups": "/v1/follow-ups", "cases": "/v1/cases", "hearings": "/v1/hearings", "plans": "/v1/plans"}
+        paths = {"tasks": "/v1/tasks", "follow-ups": "/v1/follow-ups", "cases": "/v1/cases", "hearings": "/v1/hearings", "plans": "/v1/plans", "stories": "/v1/stories"}
         if table not in paths:
             raise AiError("That collection can't be changed.")
         draft = {k: v for k, v in record.items() if k not in ("userId", "createdAt", "updatedAt")}

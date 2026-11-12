@@ -101,6 +101,18 @@ class ScopedData(DataGateway):
     async def drive_suggest(self, terms):
         return await self._inner.drive_suggest(terms) if self.workspace == "sb" else []
 
+    # A story belongs to its workspace, and its chapters go with it.
+    async def _own_story(self, story_id: str) -> bool:
+        return any(s.get("id") == story_id for s in await self.records("stories"))
+
+    async def chapters(self, story_id):
+        return await self._inner.chapters(story_id) if await self._own_story(story_id) else []
+
+    async def write_chapter(self, story_id, body):
+        if not await self._own_story(story_id):
+            raise AiError(f"That story isn't one of {self.workspace}'s, so it can't be written from here.")
+        return await self._inner.write_chapter(story_id, body)
+
     async def save_record(self, table, record):
         if HOME.get(table, self.workspace) != self.workspace or record.get("workspace", self.workspace) != self.workspace:
             raise AiError(f"That belongs to another workspace, so it can't be changed from {self.workspace}.")

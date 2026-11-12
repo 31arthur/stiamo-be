@@ -17,6 +17,7 @@ Backend for [Stiamo](https://github.com/31arthur/stiamo), built with **FastAPI**
 | `docs/SPAM_FILTER_SETUP.md` | Setting up the mailbox Spam filter agent, step by step |
 | `docs/MAIL_SETUP.md` | Connecting mailboxes, how live updates work, safety rules, deployment |
 | `docs/AI_AGENTS.md` | How the agent service is built: agents, tool packs, prompts, channels, security, testing |
+| `docs/STORIES.md` | Stories told in chapters: per-story checkpoints and twists, margin notes read from your writing, and the small AI jobs (with test sets) behind them |
 | `docs/WORKFLOW_AGENTS.md` | Design for agents that read a source (email, tables), decide, and act on a schedule |
 | `docs/ADDING_AN_AGENT.md` | The recipe for a new agent, tool pack, provider or channel |
 | `docs/AGENT_SETUP.md` | Running the agent service: keys, Telegram, WhatsApp (Twilio) |

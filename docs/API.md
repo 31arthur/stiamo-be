@@ -23,7 +23,7 @@ and `id` is the client's UUID when given (`PUT`), otherwise generated (`POST`).
 ## Every record type (`practice`)
 
 `/v1/tasks`, `/v1/follow-ups`, `/v1/meetings`, `/v1/cases`, `/v1/hearings`, `/v1/plans`, `/v1/goals`, `/v1/counsel`,
-`/v1/clients`, `/v1/projects` all have the same five calls:
+`/v1/clients`, `/v1/projects`, `/v1/stories`, `/v1/chapters`, `/v1/arc-templates` all have the same five calls:
 
 | Call | Meaning (frontend `Repository`) |
 | --- | --- |
@@ -59,6 +59,8 @@ its sole hearings, a plan frees its steps, and so on.
 | record history | `GET /v1/activity?kind=&id=`, whole thread: `GET /v1/relations/thread/history?kind=&id=` |
 | `RelationGraph.thread` | `GET /v1/relations/thread?kind=&id=` |
 | `buildAgenda`, `AgendaUseCases` | `GET /v1/agenda?start=&end=`, `PUT /v1/agenda/schedule` (returns the prior state for undo) |
+| Stories (see [STORIES.md](STORIES.md)) | records `/v1/stories`, `/v1/chapters`, `/v1/arc-templates`; write a chapter in one step `POST /v1/stories/{id}/chapters/write`; `GET /v1/stories/{id}/chapters`; the story so far `GET /v1/stories/{id}/timeline` |
+| Writing a chapter in the app (agent) | `POST /v1/agent/stories/chapters/draft` `{prose, story?, title?, date?}` → a card to approve (`/v1/agent/proposals/{id}/apply`), or `{ask: [...]}` / `{none: true}`; AI job models `GET /v1/agent/jobs`, `PUT /v1/agent/jobs/{name}/model` |
 | `AttachmentUseCases` | `POST /v1/attachments` (multipart), `POST /v1/attachments/links`, `GET /v1/attachments?kind=&id=`, `PATCH`/`DELETE /v1/attachments/{id}` |
 | `FileStore.url` | `POST /v1/attachments/{id}/url` → short-lived `/v1/files/{token}` for `<img>`/`<iframe>`; `GET /v1/attachments/{id}/content` with the header |
 

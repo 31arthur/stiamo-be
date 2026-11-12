@@ -47,7 +47,7 @@ async def test_a_key_the_provider_rejects_is_not_kept(rig):
 
 async def test_the_registry_lists_every_agent(rig):
     view = (await rig.client.get("/v1/agent/settings", headers=headers())).json()
-    assert [a["id"] for a in view["agents"]] == ["cases", "daily-planner", "librarian"] and view["defaultAgent"] == "cases"
+    assert [a["id"] for a in view["agents"]] == ["cases", "daily-planner", "stories", "librarian"] and view["defaultAgent"] == "cases"
     assert view["agents"][0]["suggestions"] and view["agents"][0]["selection"] is None
 
 

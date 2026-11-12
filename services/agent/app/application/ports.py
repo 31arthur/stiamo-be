@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any
 
-from app.domain.llm import ChatResult, Message, ModelInfo, ToolSpec
+from app.domain.llm import AiError, ChatResult, Message, ModelInfo, ToolSpec
 
 
 class LlmClient(ABC):
@@ -103,6 +103,14 @@ class DataGateway(ABC):
         """Has Google's calendars read and Stiamo's meetings, tasks and calls sent to them now. What it did ({pulled, sent, errors}), or None when
         the calendar service couldn't be reached (nothing is lost: the background sync does it within minutes)."""
         return None
+
+    async def chapters(self, story_id: str) -> list[dict[str, Any]]:
+        """A story's chapters, in the order written."""
+        return []
+
+    async def write_chapter(self, story_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        """Writes a chapter in one step (the practice service's /chapters/write): the prose, and what it moves, adds and leaves."""
+        raise AiError("Chapters can't be written from here.")
 
     async def google_links(self) -> dict[str, dict[str, Any] | None]:
         """What is connected to Google, as the calendar service reports it: {"calendar": status, "contacts": status}. A value is None when the

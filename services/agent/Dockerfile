@@ -12,6 +12,7 @@ COPY --from=builder /opt/venv /opt/venv
 # alembic.ini + migrations are read from the working directory
 COPY services/agent/alembic.ini /srv/alembic.ini
 COPY services/agent/migrations /srv/migrations
+COPY services/agent/evals /srv/evals
 COPY services/agent/docker-entrypoint.sh /srv/docker-entrypoint.sh
 WORKDIR /srv
 RUN useradd --system --no-create-home app && chmod +x docker-entrypoint.sh

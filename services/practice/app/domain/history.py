@@ -54,4 +54,7 @@ KIND_LABEL: dict[str, str] = {
     "counsel": "Counsel",
     "client": "Client",
     "project": "Project",
+    "story": "Story",
+    "chapter": "Chapter",
+    "arcTemplate": "Arc template",
 }

@@ -19,6 +19,8 @@ def title_of(kind: str, e: Any) -> str:
         return f"{e.reference} — {e.title}"
     if kind == "hearing":
         return f"Hearing: {e.purpose}"
+    if kind == "chapter":
+        return f"Chapter {e.number}" + (f": {e.title}" if e.title else "")
     return getattr(e, "title", None) or getattr(e, "name", None) or KIND_LABEL.get(kind, kind)
 
 
@@ -27,6 +29,8 @@ def parent_of(kind: str, e: Any) -> EntityRef | None:
         return EntityRef(kind="case", id=e.case_id)
     if kind == "project":
         return EntityRef(kind="client", id=e.client_id)
+    if kind == "chapter":
+        return EntityRef(kind="story", id=e.story_id)
     return None
 
 

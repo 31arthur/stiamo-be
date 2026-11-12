@@ -13,6 +13,7 @@ from app.domain.directory import Client, Counsel, Project
 from app.domain.goals import Goal
 from app.domain.history import Activity, Link
 from app.domain.plans import ActionPlan
+from app.domain.stories import ArcTemplate, Chapter, Story
 from app.domain.work import FollowUp, Meeting, Task
 
 T = TypeVar("T", bound=Entity)
@@ -99,6 +100,9 @@ class Stores:
     hearing: Repository[Hearing]
     link: LinkRepository
     activity: ActivityRepository
+    story: Repository[Story]
+    chapter: Repository[Chapter]
+    arc_template: Repository[ArcTemplate]
 
 
 @dataclass

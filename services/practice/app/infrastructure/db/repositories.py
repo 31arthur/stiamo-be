@@ -7,17 +7,20 @@ from app.application.ports import ActivityRepository, LinkRepository, Stores
 from app.domain.common import EntityRef
 from app.domain.directory import Client, Counsel, Project
 from app.domain.history import Activity, Link
+from app.domain.stories import ArcTemplate
 from app.infrastructure.db import models
 from app.infrastructure.db.joined import Join, SqlJoinedRepository
 from app.infrastructure.db.mappers import (
     ACTIVITY,
     CASE,
+    CHAPTER,
     FOLLOW_UP,
     GOAL,
     HEARING,
     LINK,
     MEETING,
     PLAN,
+    STORY,
     TASK,
     flat_mapper,
 )
@@ -65,4 +68,7 @@ def build_stores(s: AsyncSession) -> Stores:
         hearing=SqlJoinedRepository(s, HEARING, [Join(models.HearingCaseModel, "hearing_id", "case_id", "also_case_ids")]),
         link=SqlLinkRepository(s, LINK),
         activity=SqlActivityRepository(s, ACTIVITY),
+        story=SqlRepository(s, STORY),
+        chapter=SqlRepository(s, CHAPTER),
+        arc_template=SqlRepository(s, flat_mapper(models.ArcTemplateModel, ArcTemplate)),
     )

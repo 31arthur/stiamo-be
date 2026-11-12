@@ -13,9 +13,21 @@ from app.domain.common import EntityRef, Outcome, TimeSlot, to_dt, to_iso
 from app.domain.goals import CheckIn, Goal, KeyResult
 from app.domain.history import Activity, FieldChange, Link
 from app.domain.plans import ActionPlan
+from app.domain.stories import (
+    BibleEntry,
+    CastMention,
+    Chapter,
+    Checkpoint,
+    Cliffhanger,
+    Hunch,
+    MarginNote,
+    Story,
+    Waiting,
+)
 from app.domain.work import AgendaItem, Attempt, DueDate, FollowUp, Meeting, Task
 from app.infrastructure.db.models import (
     ActivityModel,
+    ChapterModel,
     FollowUpModel,
     GoalModel,
     HearingModel,
@@ -23,6 +35,7 @@ from app.infrastructure.db.models import (
     LinkModel,
     MeetingModel,
     PlanModel,
+    StoryModel,
     TaskModel,
 )
 
@@ -273,3 +286,51 @@ FOLLOW_UP = Mapper(FollowUpModel, _follow_up_to_row, _follow_up_from_row)
 MEETING = Mapper(MeetingModel, _meeting_to_row, _meeting_from_row)
 ACTIVITY = Mapper(ActivityModel, _activity_to_row, _activity_from_row)
 LINK = Mapper(LinkModel, _link_to_row, _link_from_row)
+
+
+# --- stories ----------------------------------------------------------------------------------------------------
+
+
+def _story_to_row(s: Story) -> dict[str, Any]:
+    return {
+        **base_row(s), "title": s.title, "workspace": s.workspace, "ending": s.ending, "stakes": s.stakes,
+        "stakes_amount": s.stakes_amount, "chance": s.chance, "pacing": s.pacing, "state": s.state,
+        "waiting_on": s.waiting_on.on if s.waiting_on else None, "waiting_until": s.waiting_on.until if s.waiting_on else None,
+        "checkpoints": _dump_list(s.checkpoints), "bible": _dump_list(s.bible), "links": _dump_list(s.links),
+        "recap": s.recap, "ended_on": s.ended_on,
+    }
+
+
+def _story_from_row(m: StoryModel) -> Story:
+    return Story(
+        **base_fields(m), title=m.title, workspace=m.workspace, ending=m.ending, stakes=m.stakes,
+        stakes_amount=m.stakes_amount, chance=m.chance, pacing=m.pacing, state=m.state,
+        waiting_on=Waiting(on=m.waiting_on, until=m.waiting_until) if m.waiting_on else None,
+        checkpoints=[Checkpoint.model_validate(c) for c in m.checkpoints or []],
+        bible=[BibleEntry.model_validate(b) for b in m.bible or []],
+        links=[EntityRef.model_validate(r) for r in m.links or []], recap=m.recap, ended_on=m.ended_on,
+    )
+
+
+def _chapter_to_row(c: Chapter) -> dict[str, Any]:
+    return {
+        **base_row(c), "story_id": c.story_id, "number": c.number, "date": c.date, "title": c.title, "prose": c.prose,
+        "beat": c.beat, "source": c.source, "chance_after": c.chance_after, "notes": _dump_list(c.notes),
+        "hunches": _dump_list(c.hunches), "people": _dump_list(c.people),
+        "cliffhanger": c.cliffhanger.model_dump(by_alias=True, exclude_none=True, mode="json") if c.cliffhanger else None,
+    }
+
+
+def _chapter_from_row(m: ChapterModel) -> Chapter:
+    return Chapter(
+        **base_fields(m), story_id=m.story_id, number=m.number, date=m.date, title=m.title, prose=m.prose, beat=m.beat,
+        source=m.source, chance_after=m.chance_after,
+        notes=[MarginNote.model_validate(n) for n in m.notes or []],
+        hunches=[Hunch.model_validate(h) for h in m.hunches or []],
+        cliffhanger=Cliffhanger.model_validate(m.cliffhanger) if m.cliffhanger else None,
+        people=[CastMention.model_validate(p) for p in m.people or []],
+    )
+
+
+STORY = Mapper(StoryModel, _story_to_row, _story_from_row)
+CHAPTER = Mapper(ChapterModel, _chapter_to_row, _chapter_from_row)

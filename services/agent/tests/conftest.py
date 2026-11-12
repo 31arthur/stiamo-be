@@ -24,6 +24,7 @@ from app.application.toolpacks.cases import CasesPack
 from app.application.toolpacks.changes import ChangesPack
 from app.application.toolpacks.decisions import DecisionsPack
 from app.application.toolpacks.drive import DrivePack
+from app.application.toolpacks.stories import StoriesPack
 from app.config import Settings
 from app.domain.agents import AgentDefinition
 from app.domain.llm import AiError, ChatResult, Message, ModelInfo, ToolSpec
@@ -194,6 +195,13 @@ class FakeData(DataGateway):
     async def save_record(self, table, record):
         self.saved.append((table, record))
 
+    async def chapters(self, story_id):
+        return [c for c in self.tables.get("chapters", []) if c.get("storyId") == story_id]
+
+    async def write_chapter(self, story_id, body):
+        self.saved.append(("chapter", {"story": story_id, **body}))
+        return {"chapter": {"id": body.get("id"), "storyId": story_id}}
+
     async def drive_available(self):
         return True
 
@@ -356,7 +364,7 @@ LIBRARIAN = AgentDefinition(id="librarian", name="Librarian", description="Finds
 
 
 def test_registry() -> AgentRegistry:
-    return AgentRegistry([*AGENTS, LIBRARIAN], PackRegistry([CasesPack(), DrivePack(), DecisionsPack(), AgendaPack(), AttentionPack(), ChangesPack()]))
+    return AgentRegistry([*AGENTS, LIBRARIAN], PackRegistry([CasesPack(), DrivePack(), DecisionsPack(), AgendaPack(), AttentionPack(), ChangesPack(), StoriesPack()]))
 
 
 class Rig:

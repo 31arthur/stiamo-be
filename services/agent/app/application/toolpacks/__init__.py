@@ -31,6 +31,8 @@ class PackContext:
     interactive: bool = True
     #: The one workspace this is for (a workspace's assistant): what it proposes to add belongs to it. None: any.
     workspace: str | None = None
+    #: A runner for an AI job by its name (on that job's own model, else the one chosen last), or None when no model is usable.
+    jobs: Callable[[str], Any] | None = None
 
 
 class ToolPack(ABC):

@@ -10,15 +10,17 @@ from app.domain.directory import Client, Counsel, Project
 from app.domain.goals import Goal
 from app.domain.history import Link
 from app.domain.plans import ActionPlan
+from app.domain.stories import Chapter, Story
 from app.domain.work import FollowUp, Meeting, Task
 
 RelationKind = Literal[
-    "step", "about", "spawned", "hearing", "next_hearing", "plan", "prep", "goal", "counsel", "project", "linked"
+    "step", "about", "spawned", "hearing", "next_hearing", "plan", "prep", "goal", "counsel", "project", "linked",
+    "story", "chapter",
 ]
 Direction = Literal["parent", "child", "peer"]
 
 #: Records that other records are "about": a case, a client, a project.
-_ABOUT_KINDS = {"case", "client", "project"}
+_ABOUT_KINDS = {"case", "client", "project", "story"}
 _MAX_ANCESTOR_DEPTH = 4
 
 Key = tuple[str, str]
@@ -54,6 +56,8 @@ class GraphSources:
     clients: list[Client] = field(default_factory=list)
     projects: list[Project] = field(default_factory=list)
     links: list[Link] = field(default_factory=list)
+    stories: list[Story] = field(default_factory=list)
+    chapters: list[Chapter] = field(default_factory=list)
 
 
 @dataclass
@@ -92,7 +96,8 @@ class RelationGraph:
         self._exists: set[Key] = set()
         for kind, items in (("task", src.tasks), ("meeting", src.meetings), ("followUp", src.follow_ups),
                             ("case", src.cases), ("hearing", src.hearings), ("plan", src.plans), ("goal", src.goals),
-                            ("counsel", src.counsel), ("client", src.clients), ("project", src.projects)):
+                            ("counsel", src.counsel), ("client", src.clients), ("project", src.projects),
+                            ("story", src.stories), ("chapter", src.chapters)):
             self._exists.update((kind, e.id) for e in items)
 
         for t in src.tasks:
@@ -146,6 +151,11 @@ class RelationGraph:
         for g in src.goals:
             for pid in g.plan_ids:
                 self._add(("goal", g.id), ("plan", pid), "goal")
+        for st in src.stories:
+            for r in st.links:
+                self._add(("story", st.id), key_of(r), "story")
+        for ch in src.chapters:
+            self._add(("story", ch.story_id), ("chapter", ch.id), "chapter")
         for link in src.links:
             edge = Edge(key_of(link.a), key_of(link.b), "linked", link.id)
             self._peers[key_of(link.a)].append(edge)
