@@ -22,7 +22,7 @@ RECENT = timedelta(minutes=30)
 YES = {"yes", "y", "yep", "yeah", "ok", "okay", "approve", "approved", "confirm", "do it", "go ahead", "save", "save it", "sure"}
 NO = {"no", "n", "nope", "cancel", "drop", "dismiss", "discard", "don't", "dont", "never mind", "nevermind"}
 #: Only these collections can be changed by approving; each is a record the practice service already accepts from the owner.
-TABLES = ("tasks", "follow-ups", "cases", "hearings", "plans", "stories")
+TABLES = ("tasks", "follow-ups", "cases", "hearings", "plans", "stories", "scenes", "lenses", "evidence")
 UPDATABLE = ("tasks", "follow-ups", "stories")
 
 

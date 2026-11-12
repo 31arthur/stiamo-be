@@ -20,7 +20,7 @@ import httpx
 
 from app.application.aijobs import JobRunner
 from app.domain.job_evals import PASS_MARK, SCORERS, SetScore
-from app.domain.story_jobs import JOBS
+from app.domain.jobs import ALL_JOBS as JOBS
 from app.infrastructure.llm.gemini import GeminiClient
 from app.infrastructure.llm.openai_compat import OpenAiCompatibleClient
 
@@ -29,7 +29,14 @@ EVALS = next((p for p in (Path.cwd() / "evals", Path(__file__).resolve().parents
 
 
 def load(job: str) -> list[dict]:
+    """A job's cases: its own file, or (for the six lens coders) the shared lens_coding.jsonl, whose cases name their job."""
     path = EVALS / f"{job}.jsonl"
+    if not path.exists() and job.startswith("lens_") and (EVALS / "lens_coding.jsonl").exists():
+        return [c for c in _read(EVALS / "lens_coding.jsonl") if c.get("job") == job]
+    return _read(path) if path.exists() else []
+
+
+def _read(path: Path) -> list[dict]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip() and not line.startswith("//")]
 
 

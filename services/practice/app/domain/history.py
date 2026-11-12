@@ -60,4 +60,6 @@ KIND_LABEL: dict[str, str] = {
     "character": "Character",
     "part": "Part",
     "scene": "Scene",
+    "evidence": "Evidence",
+    "lens": "Lens",
 }

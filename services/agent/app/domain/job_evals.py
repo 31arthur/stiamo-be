@@ -122,4 +122,57 @@ def score_suggest_chance(name: str, out: dict[str, Any], expect: dict[str, Any])
     return CaseScore(name, 2, int(ok_dir) + int(ok_size), misses)
 
 
-SCORERS = {"margin_notes": score_margin_notes, "find_story": score_find_story, "next_openings": score_next_openings, "suggest_chance": score_suggest_chance}
+def score_lens(name: str, out: dict[str, Any], expect: dict[str, Any]) -> CaseScore:
+    got = out.get("label")
+    ok = got == expect.get("label")
+    return CaseScore(name, 1, int(ok), [] if ok else [f"label {got} ≠ {expect.get('label')}"])
+
+
+def score_router(name: str, out: dict[str, Any], expect: dict[str, Any]) -> CaseScore:
+    lenses = set(out.get("lenses") or [])
+    misses = [f"missed {k}" for k in expect.get("lenses", []) if k not in lenses] + [f"wrongly gave {k}" for k in expect.get("not", []) if k in lenses]
+    points = len(expect.get("lenses", [])) + len(expect.get("not", []))
+    return CaseScore(name, points or 1, (points or 1) - len(misses), misses)
+
+
+def score_reaction(name: str, out: dict[str, Any], expect: dict[str, Any]) -> CaseScore:
+    ok = out.get("reaction") in expect["any_of"]
+    return CaseScore(name, 1, int(ok), [] if ok else [f"{out.get('reaction')} not in {expect['any_of']}"])
+
+
+def score_people(name: str, out: dict[str, Any], expect: dict[str, Any]) -> CaseScore:
+    people = out.get("people") or []
+    names = sorted(p["name"] for p in people)
+    phones = sorted(x for p in people for x in p.get("phones") or [])
+    misses = []
+    if names != sorted(expect["names"]):
+        misses.append(f"names {names} ≠ {sorted(expect['names'])}")
+    if phones != sorted(expect.get("phones", [])):
+        misses.append(f"phones {phones} ≠ {sorted(expect.get('phones', []))}")
+    return CaseScore(name, 2, 2 - len(misses), misses)
+
+
+def score_construct(name: str, out: dict[str, Any], expect: dict[str, Any]) -> CaseScore:
+    """Which end is "a" is the model's choice, so a mirrored answer (both at the other ends) is just as right."""
+    flip = {"a": "b", "b": "a", "middle": "middle"}
+    got = (out.get("first_sits"), out.get("second_sits"))
+    want = (expect["first_sits"], expect["second_sits"])
+    if got == tuple(flip[x] for x in want):
+        got = want
+    misses = [f"{k} {g} ≠ {w}" for k, g, w in zip(("first_sits", "second_sits"), got, want, strict=True) if g != w]
+    return CaseScore(name, 2, 2 - len(misses), misses)
+
+
+def score_wording(name: str, out: dict[str, Any], expect: dict[str, Any]) -> CaseScore:
+    msg = (out.get("message") or "").lower()
+    misses = []
+    if not msg or len(msg) > 400:
+        misses.append("missing or longer than 400 characters")
+    if not any(w.lower() in msg for w in expect.get("mentions", [])):
+        misses.append(f"none of {expect.get('mentions')} came up")
+    return CaseScore(name, 2, 2 - len(misses), misses)
+
+
+SCORERS = {"margin_notes": score_margin_notes, "find_story": score_find_story, "next_openings": score_next_openings, "suggest_chance": score_suggest_chance,
+           "lens_router": score_router, "reaction": score_reaction, "people_in_text": score_people, "construct": score_construct, "wording": score_wording,
+           **{f"lens_{k}": score_lens for k in ("talks", "decides", "wants", "under_pressure", "trust", "moved_by")}}

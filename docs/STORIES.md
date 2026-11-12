@@ -2,7 +2,7 @@
 
 Every running thing in your life and work (an S&B case, an FSA project, a home loan) can be a **story** you write in **chapters**. Each story has its own **checkpoints** (its plot points, never a fixed list of stages), the **ending** you're writing towards, and the **work** each chapter leaves behind as ordinary tasks and calls. The full design, including the parts not built yet, is on the plan page: <https://claude.ai/artifact/Fy2G3B4RQnVc633Vkwxgrw>.
 
-Built so far: **phase 1** (stories, checkpoints, chapters and margin notes), **phase 2** (the cast: people learned once and used in every story) and **phase 3** (the editor that comes looking when a story goes quiet, the planner's "push this", and the chance after each chapter). Gauging a person (lenses, questions, "how will they take it?") is phase 4.
+All four phases are built: **1** stories, checkpoints, chapters and margin notes; **2** the cast, people learned once and used in every story; **3** the editor that comes looking when a story goes quiet, the planner's "push this", and the chance after each chapter; **4** gauging a person: lenses, the interviewer, and "how will they take it?".
 
 ```
  you write ──► find the story ──► margin notes ──► code checks ──► one card ──► YES ──► chapter + twists + tasks + calls + hunches
@@ -45,6 +45,29 @@ A person is learned once and used in every story they're part of, in any workspa
 - **Two records, one person:** `POST /v1/characters/{id}/merge {into}` moves the parts, scenes, tasks and calls across and keeps every number.
 - **Workspaces:** a workspace's assistant sees who someone is if they're in one of its stories, but only the parts and scenes of its own stories. `tests/test_cast.py` puts a canary in a personal scene and checks the S&B bot never reads it.
 
+## Gauging a person
+
+The model never decides what someone is like. Small jobs label **one scene on one lens** against a written codebook (`app/domain/lenses.py`), quoting the words they relied on; your answers to short questions are labels too. Each label is a piece of **evidence** (practice service, in its story's workspace). The **profile** is plain arithmetic over the evidence (`practice/app/domain/insight.py`), kept on the character as labels and counts only, so it travels with them while the quotes stay home.
+
+| Lens | Built on | Labels |
+| --- | --- | --- |
+| track record | your call log, counted, never labelled | answer rate by channel, best hours, promised dates kept |
+| talks | communication style | straight · diplomatic · evasive |
+| decides | stakeholder map, buying-centre roles | decider · influencer · gatekeeper · executor · champion · blocker · bystander |
+| wants | interests, not positions | money · speed · certainty · face · relationship · control · fairness · avoiding blame |
+| under pressure | conflict modes, stress responses | confronts · bargains · solves · gives in · goes quiet · agrees, doesn't deliver |
+| trust | the trust equation | ally · neutral · wary · against |
+| moved by | principles of influence | authority · others did it · a favour returned · their own word · rapport · a deadline · facts · unmoved |
+| yours | "compare two" | two ends in your own words |
+
+- **Weights:** a clear scene 1.0, an implied one 0.5, your answer about a specific moment 0.9, your general view 0.6, a check 1.0, a prediction 0 (until reality arrives, which becomes evidence of its own). Evidence fades with a half-life of six months.
+- **Confidence:** high with weight 3+ and 70% on one label; medium with 1.5+ and 55%; else low. A **conflict** is two labels each holding 30%+ of 2.5+ weight: shown, never averaged away, and asked about.
+- **Each evening** (with the editor), new scenes are read: `lens_router` says which lenses a scene speaks to, then one `lens_<lens>` coder per lens labels it or says `not_shown`. A scene is marked read only when the router answered. `POST /v1/agent/cast/code` does it now.
+- **The interviewer** (`app/domain/interviewer.py`, plain code) asks up to two questions a day per workspace, one per person, on top of the editor's one: priority = unsure × matters (stakes × sway) × now (×2 when you were just in touch) × lens weight. It picks the way of asking: settle a prediction · debrief after contact · check a conflict · character sheet for someone new · why, and why again · the moment that surprised you · what would they do (a guess, scored later) · compare two (weekly) · a quick tap, about a specific scene when there is one. Taps become evidence; free answers ("Ravi: …") become scenes through the story editor. **Skip** rests a person for a week.
+- **"How will they take it?"** (`how_will_they_take_it`): gathers the profile and the five most relevant pieces of evidence (code), asks `reaction` three times (agreement is the confidence; the decision model's probabilities when it's on), picks the approach from a **playbook** in code (reaction × what they want × what moves them, and the channel they answer), and has `wording` draft two or three sentences (no numbers that weren't in the news). The prediction is kept; when you say how it went (`how_they_took_it`, or the debrief tap) it's scored, and the profile keeps "reads: 7 of 9 right" for you and for the model.
+- **People from a news item or a mail:** `POST /v1/agent/cast/from-text {text, story?}` (or `people_in_text` in a chat) proposes everyone named, with only the numbers and addresses that are really in the text.
+- **API:** `/v1/evidence`, `/v1/lenses`, `GET /v1/characters/{id}/profile`, `POST /v1/evidence/{id}/settle {verdict}`.
+
 ## The editor: when a story goes quiet
 
 Each story has a pace: brisk (7 days), steady (14) or slow (30). With the evening plan, the editor looks at every story against its own pace since its last chapter, and climbs a ladder, one step per pace of quiet:
@@ -77,7 +100,7 @@ Your words are never rewritten. The AI writes margin notes, and only notes it ca
 
 ## The AI jobs (built to outlast the model)
 
-Four small jobs, each with a written contract in `services/agent/app/domain/story_jobs.py`: `find_story` and `margin_notes` below, `next_openings` (the editor's three ways to start) and `suggest_chance` (checked to 0–100, at most 20 points from the last figure).
+Small jobs, each with a written contract: in `app/domain/story_jobs.py`, `find_story` and `margin_notes` below, `next_openings` (the editor's three ways to start) and `suggest_chance` (checked to 0–100, at most 20 points from the last figure); in `app/domain/insight_jobs.py`, `lens_router`, the six `lens_<lens>` coders, `reaction`, `wording`, `people_in_text` and `construct`. `app/domain/jobs.py` lists them all.
 
 | Job | Sees | Returns | Checked by code |
 | --- | --- | --- | --- |
@@ -94,7 +117,7 @@ How they stay good on cheap models:
 
 ### Testing a model before switching to it
 
-The test sets are `services/agent/evals/<job>.jsonl`, one per job: chapters and messages with what an editor who agrees with you would note. Score any model on them:
+The test sets are `services/agent/evals/<job>.jsonl`, one per job (the six coders share `lens_coding.jsonl`, which holds the loan agent's scenes among others: scoring 85% there is how you know his profile rebuilds on that model): chapters and messages with what an editor who agrees with you would note. Score any model on them:
 
 ```bash
 cd services/agent
@@ -111,4 +134,4 @@ A story belongs to one workspace. A workspace's assistant sees only its own stor
 
 ## Deploying this version
 
-`./deploy.sh` runs migrations `practice 0007` (the `stories`, `chapters` and `arc_templates` tables) and `practice 0008` (the cast: `characters`, `parts`, `scenes`, and `characterId` on tasks and follow-ups), and `agent 0023` (the editor's memory). Nothing else to set up: the jobs use the model you already chose for your agents until you give them their own.
+`./deploy.sh` runs migrations `practice 0007` (the `stories`, `chapters` and `arc_templates` tables) and `practice 0008` (the cast: `characters`, `parts`, `scenes`, and `characterId` on tasks and follow-ups), `agent 0023` (the editor's memory), and `practice 0009` (evidence, lenses, the profile on each character, which scenes are read). Nothing else to set up: the jobs use the model you already chose for your agents until you give them their own.

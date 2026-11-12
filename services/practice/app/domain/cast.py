@@ -35,6 +35,8 @@ class Character(Entity):
     google_contact_id: str | None = None
     #: The workspace they were first added in. They are also seen in every workspace where they have a part.
     home: Workspace = "personal"
+    #: Worked out from the evidence (domain/insight.py): labels, confidence and counts, never quotes, so it travels with them.
+    profile: dict | None = None
 
 
 class Part(Entity):
@@ -61,6 +63,8 @@ class Scene(Entity):
     #: The owner's words it was read from.
     quote: str | None = None
     source: SceneSource = "chapter"
+    #: Whether the lens coders have read it yet (they read new scenes each evening).
+    coded: bool = False
 
 
 # --- phone numbers ---------------------------------------------------------------------------------------------

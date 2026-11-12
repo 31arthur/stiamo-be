@@ -71,3 +71,22 @@ async def editor_settings(body: EditorSettingsBody, request: Request, session: d
 @router.post("/editor/run", summary="Run the story editor now (at most one message per workspace per day still holds)")
 async def editor_run(body: RunBody, request: Request, session: deps.Session, me: deps.Me, token: deps.Token) -> dict[str, Any]:
     return {"sent": await _editor(request, session).run_now(me, token, body.workspace)}
+
+
+
+# --- the cast ----------------------------------------------------------------------------------------------------
+
+
+class TextBody(BaseModel):
+    text: str
+    story: str | None = None
+
+
+@router.post("/cast/from-text", summary="The people named in a news item or a mail, on a card to add them to the cast (nothing is saved yet)")
+async def from_text(body: TextBody, agent: deps.Agent, me: deps.Me, token: deps.Token) -> dict[str, Any]:
+    return await agent.people_from_text(me, token, body.text, body.story)
+
+
+@router.post("/cast/code", summary="Read the scenes not yet read now: which lenses each speaks to, and a label on each")
+async def code_scenes(request: Request, session: deps.Session, me: deps.Me, token: deps.Token) -> dict[str, Any]:
+    return await _editor(request, session).code_now(me, token)

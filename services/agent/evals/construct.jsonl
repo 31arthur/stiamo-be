@@ -1,0 +1,4 @@
+// Each line: a comparison of two people, and where each sits on the two ends taken from it.
+{"name": "promises", "input": {"first": "the loan agent", "second": "my counsel", "answer": "The agent promises everything and delivers late; she promises little and always delivers early."}, "expect": {"first_sits": "a", "second_sits": "b"}}
+{"name": "talkers", "input": {"first": "Priya", "second": "the MD", "answer": "The MD talks a lot and decides nothing, Priya says little but decides on the spot."}, "expect": {"first_sits": "b", "second_sits": "a"}}
+{"name": "same_on_one", "input": {"first": "the builder", "second": "the agent", "answer": "Both chase money, but the builder is blunt and the agent is all sweet talk."}, "expect": {"first_sits": "a", "second_sits": "b"}}

@@ -23,6 +23,8 @@ from app.application.ports import DataGateway, LlmClient, SettingsRepository, Us
 from app.application.scope import ScopedData
 from app.application.services import Who, local_today, selection_of
 from app.domain import editor as ed
+from app.domain import interviewer as iv
+from app.domain.lenses import REACTION_WORDS, phrase
 from app.domain.phone import Style
 from app.domain.story_jobs import NEXT_OPENINGS, same_name
 
@@ -107,17 +109,149 @@ class EditorService:
         if not editor_settings(s.editor)["enabled"] or self._announce is None:
             return []
         today = self._today(s)
+        try:  # new scenes are read for what they say about people first, so tonight's questions use them
+            await self.code_now(who, token)
+        except Exception:  # noqa: BLE001
+            log.exception("could not read the new scenes")
         everything = await self.survey(who, token)
         chosen = sorted({v["story"].get("workspace") or "personal" for v in everything})
         if workspaces and any(workspaces):
             chosen = [w for w in chosen if w in workspaces]
         sent: list[dict[str, Any]] = []
         for ws in chosen:
+            views = [v for v in everything if (v["story"].get("workspace") or "personal") == ws]
             try:
-                sent += await self._run_workspace(who, token, ws, today, [v for v in everything if (v["story"].get("workspace") or "personal") == ws])
+                sent += await self._run_workspace(who, token, ws, today, views)
             except Exception:  # noqa: BLE001  one workspace failing doesn't stop the others
                 log.exception("the editor failed for %s", ws)
+            try:
+                sent += await self._interview(who, token, ws, today, views)
+            except Exception:  # noqa: BLE001
+                log.exception("the interviewer failed for %s", ws)
         return sent
+
+    def _runners(self, s: UserSettings):
+        return lambda name: runner_for(selection_of(s, job_key(name))[0], s.keys, self._llm)
+
+    async def code_now(self, who: Who, token: str) -> dict[str, Any]:
+        """Reads the scenes not yet read: which lenses each speaks to, and a label on each, as evidence."""
+        from app.application.cast_insight import code_scenes
+
+        s = await self._load(who)
+        return await code_scenes(self._data(token), self._runners(s))
+
+    # --- the interviewer ------------------------------------------------------------------------------------------
+
+    async def _interview(self, who: Who, token: str, ws: str, today: str, views: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if not views:
+            return []
+        s = await self._load(who)
+        e = dict(s.editor or {})
+        if (e.get("interviewed") or {}).get(ws) == today:
+            return []
+        data = ScopedData(self._data(token), ws)
+        stories = {v["story"]["id"]: v["story"] for v in views}
+        quiet = {v["story"]["id"] for v in views if v["momentum"].rung >= 1}
+        parts = [p for p in await data.records("parts") if p.get("storyId") in stories]
+        evidence = await data.records("evidence")
+        scenes = await data.records("scenes")
+        calls = [f for f in await data.records("follow-ups") if f.get("characterId")]
+        people = []
+        for c in await data.records("characters"):
+            mine = [(p, stories[p["storyId"]]) for p in parts if p.get("characterId") == c["id"]]
+            if not mine:
+                continue
+            people.append(iv.Person(c, mine, [x for x in evidence if x.get("characterId") == c["id"]], [x for x in scenes if x.get("characterId") == c["id"]],
+                                    [f for f in calls if f.get("characterId") == c["id"]], {sid for _, st in mine for sid in [st["id"]] if sid in quiet}))
+        memory = dict(e.get("people") or {})
+        week = date.fromisoformat(today).isocalendar()
+        week_key = f"{week[0]}-W{week[1]:02d}"
+        questions = iv.plan(people, today, memory, (e.get("compareWeek") == week_key))
+        sent = []
+        for q in questions:
+            short = uuid.uuid4().hex[:8]
+            c = q.person.character
+            rows: list[list[dict[str, str]]] = []
+            opts = list(q.options)
+            for i in range(0, len(opts), 2):
+                rows.append([_b(label, f"iv:{i + j}:{short}") for j, (_, label) in enumerate(opts[i:i + 2])])
+            rows.append([_b("⏭ Skip them for a week", f"iv:x:{short}")])
+            lines = [f"🎭 **{c.get('name')}**" + (f" · {q.story.get('title')}" if q.story else ""), "", q.text]
+            asked = {"short": short, "kind": "interview", "method": q.method, "lens": q.lens, "character": c["id"], "name": c.get("name"),
+                     "story": (q.story or {}).get("id"), "options": [o for o, _ in opts], "specific": q.specific,
+                     "scene": (q.scene or {}).get("id"), "prediction": (q.prediction or {}).get("id"), "about": f"bad news about “{(q.story or {}).get('title', '')}”"}
+            if not await self._ask(who, ws, lines, rows, asked, today):
+                continue
+            mem = dict(memory.get(c["id"]) or {})
+            mem["on"] = today
+            if q.method in ("sheet", "why", "moment", "what_would"):
+                mem[q.method] = today
+            memory[c["id"]] = mem
+            sent.append({"workspace": ws, "person": c["id"], "method": q.method, "lens": q.lens})
+        s = await self._load(who)
+        e = dict(s.editor or {})
+        e["people"] = memory
+        e["interviewed"] = {**(e.get("interviewed") or {}), ws: today}
+        if any(x["method"] == "compare" for x in sent):
+            e["compareWeek"] = week_key
+        s.editor = e
+        await self._settings.save(s)
+        return sent
+
+    async def interview_press(self, who: Who, token: str, action: str, short: str) -> str:
+        s = await self._load(who)
+        e = dict(s.editor or {})
+        q = (e.get("asked") or {}).get(short)
+        if q is None or q.get("kind") != "interview":
+            raise ValidationFailed("That question is out of date. I'll ask again another day if it still matters.")
+        today = self._today(s)
+        data = self._data(token)
+        name = q.get("name") or "them"
+
+        async def done(text: str, rest: bool = False) -> str:
+            s2 = await self._load(who)
+            e2 = dict(s2.editor or {})
+            e2["asked"] = {k: x for k, x in (e2.get("asked") or {}).items() if k != short}
+            if rest:
+                mem = dict((e2.get("people") or {}).get(q["character"]) or {})
+                mem["rest"] = (date.fromisoformat(today) + timedelta(days=iv.REST_DAYS)).isoformat()
+                e2["people"] = {**(e2.get("people") or {}), q["character"]: mem}
+            e2["log"] = [*(e2.get("log") or []), {"person": q["character"], "day": today, "kind": q.get("method"), "answer": action}][-LOG_SIZE:]
+            s2.editor = e2
+            await self._settings.save(s2)
+            return text
+
+        if action == "x":
+            return await done(f"⏭ I'll leave {name} for a week.", rest=True)
+        if not action.isdigit() or int(action) >= len(q.get("options") or []):
+            return await done("That answer isn't one of the options any more.")
+        label = q["options"][int(action)]
+        lens = q.get("lens") or ""
+        if q["method"] == "debrief_prediction":
+            from app.application.cast_insight import settle
+
+            character = next((c for c in await data.records("characters") if c.get("id") == q["character"]), {"id": q["character"]})
+            prediction = next((x for x in await data.records("evidence") if x.get("id") == q.get("prediction")), None)
+            out = await settle(data, character, label, today, q.get("story"), prediction)
+            verdict = out["settled"]
+            tail = f" The guess (“{REACTION_WORDS.get(verdict[2] or '', verdict[2])}”) was {verdict[0]}." if verdict else ""
+            return await done(f"📝 Noted: {name} {REACTION_WORDS.get(label, label)}.{tail}")
+        if label == "depends":
+            return await done(f"OK: it depends. I'll keep watching what {name} does.")
+        record: dict[str, Any] = {"id": str(uuid.uuid4()), "characterId": q["character"], "storyId": q.get("story"), "lens": lens, "date": today,
+                                  "specific": bool(q.get("specific")), "sceneId": q.get("scene")}
+        if q["method"] == "what_would":
+            record.update(source="prediction", method="what_would", predictedBy="you", verdict="pending", about=q.get("about"),
+                          label=label if label != "takes_it_well" else "solves")
+            await data.save_record("evidence", record)
+            return await done(f"🔮 Your guess is kept: {name} {REACTION_WORDS.get(label, label)}. I'll ask how it really went, and score it.")
+        record.update(source="answer", method=q["method"] if q["method"] in ("quick_tap", "debrief", "check", "sheet") else "quick_tap", label=label)
+        await data.save_record("evidence", record)
+        character = next((c for c in await data.records("characters") if c.get("id") == q["character"]), None)
+        from app.domain.interviewer import sketch
+
+        known = f"\n\nWhat I know now: {sketch(name, (character or {}).get('profile'))}" if character else ""
+        return await done(f"📝 Noted: {name} {phrase(lens, label)}.{known}")
 
     async def _run_workspace(self, who: Who, token: str, ws: str, today: str, views: list[dict[str, Any]]) -> list[dict[str, Any]]:
         s = await self._load(who)

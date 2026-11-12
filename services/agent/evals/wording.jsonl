@@ -1,0 +1,3 @@
+// Each line: news and the playbook's moves, and words the message should carry.
+{"name": "quiet_agent", "input": {"name": "the agent", "channel": "message", "news": "The bank wants the 2023 ITR as well.", "moves": ["Send the one-line fact first, then call at their best hour", "Ask for one small, dated next step"]}, "expect": {"mentions": ["ITR", "2023"]}}
+{"name": "angry_md", "input": {"name": "the MD", "channel": "call", "news": "The order is delayed by a month because the bench is on leave.", "moves": ["Tell them in private, not in front of others", "Lead with what was decided and by whom, not with your view", "Leave them a way to save face"]}, "expect": {"mentions": ["bench", "leave", "month"]}}

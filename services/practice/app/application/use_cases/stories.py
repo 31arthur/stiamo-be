@@ -99,6 +99,8 @@ class StoryUseCases(Crud[Story]):
             await self.env.stores.part.remove(user_id, p.id)
         for sc in [x for x in await self.env.stores.scene.list(user_id) if x.story_id == id]:
             await self.env.stores.scene.remove(user_id, sc.id)
+        for ev in [x for x in await self.env.stores.evidence.list(user_id) if x.story_id == id]:
+            await self.env.stores.evidence.remove(user_id, ev.id)
         await super().remove(user_id, id)
 
 

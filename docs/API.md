@@ -23,7 +23,7 @@ and `id` is the client's UUID when given (`PUT`), otherwise generated (`POST`).
 ## Every record type (`practice`)
 
 `/v1/tasks`, `/v1/follow-ups`, `/v1/meetings`, `/v1/cases`, `/v1/hearings`, `/v1/plans`, `/v1/goals`, `/v1/counsel`,
-`/v1/clients`, `/v1/projects`, `/v1/stories`, `/v1/chapters`, `/v1/arc-templates`, `/v1/characters`, `/v1/parts`, `/v1/scenes` all have the same five calls:
+`/v1/clients`, `/v1/projects`, `/v1/stories`, `/v1/chapters`, `/v1/arc-templates`, `/v1/characters`, `/v1/parts`, `/v1/scenes`, `/v1/evidence`, `/v1/lenses` all have the same five calls:
 
 | Call | Meaning (frontend `Repository`) |
 | --- | --- |
@@ -61,6 +61,7 @@ its sole hearings, a plan frees its steps, and so on.
 | `buildAgenda`, `AgendaUseCases` | `GET /v1/agenda?start=&end=`, `PUT /v1/agenda/schedule` (returns the prior state for undo) |
 | Stories (see [STORIES.md](STORIES.md)) | records `/v1/stories`, `/v1/chapters`, `/v1/arc-templates`; write a chapter in one step `POST /v1/stories/{id}/chapters/write`; `GET /v1/stories/{id}/chapters`; the story so far `GET /v1/stories/{id}/timeline` |
 | The cast (see [STORIES.md](STORIES.md)) | join (found by id, phone or Google contact before made) `POST /v1/characters/join`; `GET /v1/characters/by-phone?phone=`; `GET /v1/characters/{id}/view`; `POST /v1/characters/{id}/merge {into}`; `GET /v1/stories/{id}/cast` |
+| Gauging a person | `/v1/evidence`, `/v1/lenses` (records); `GET /v1/characters/{id}/profile`; `POST /v1/evidence/{id}/settle {verdict}`; agent: `POST /v1/agent/cast/from-text {text, story?}` (a card), `POST /v1/agent/cast/code` (read new scenes now) |
 | The story editor (agent) | `GET /v1/agent/editor` (settings, and each story's pace, quiet days, step, push score), `PUT /v1/agent/editor/settings {enabled, roomDay}`, `POST /v1/agent/editor/run {workspace?}`; a story's chance over time: `chanceTrend` in `GET /v1/stories/{id}/timeline` |
 | Writing a chapter in the app (agent) | `POST /v1/agent/stories/chapters/draft` `{prose, story?, title?, date?}` → a card to approve (`/v1/agent/proposals/{id}/apply`), or `{ask: [...]}` / `{none: true}`; AI job models `GET /v1/agent/jobs`, `PUT /v1/agent/jobs/{name}/model` |
 | `AttachmentUseCases` | `POST /v1/attachments` (multipart), `POST /v1/attachments/links`, `GET /v1/attachments?kind=&id=`, `PATCH`/`DELETE /v1/attachments/{id}` |

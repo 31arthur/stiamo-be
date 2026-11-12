@@ -1,0 +1,6 @@
+// Each line: a scene, the lenses it must be routed to, and lenses it must not.
+{"name": "agent_call", "input": {"name": "The agent", "story": "Home loan", "scene": "called late again, apologising, with more paperwork", "quote": "The agent called at seven, sorry as always"}, "expect": {"lenses": ["under_pressure"], "not": ["decides"]}}
+{"name": "md_order", "input": {"name": "SMPL's MD", "story": "Gulbarga SMPL", "scene": "agreed once he saw the order", "quote": "He agreed the moment he saw the High Court's order"}, "expect": {"lenses": ["moved_by"], "not": ["talks"]}}
+{"name": "logo", "input": {"name": "Priya", "story": "Client website", "scene": "sent the logo", "quote": "Priya sent the logo"}, "expect": {"lenses": [], "not": ["wants", "under_pressure", "trust"]}}
+{"name": "warned", "input": {"name": "Counsel", "story": "Gulbarga SMPL", "scene": "warned us before the hearing", "quote": "She warned us the bench was in a bad mood"}, "expect": {"lenses": ["trust"], "not": ["wants"]}}
+{"name": "commission", "input": {"name": "The agent", "story": "Home loan", "scene": "only moved when the commission came up", "quote": "He only moved when I mentioned his commission"}, "expect": {"lenses": ["wants"], "not": ["trust"]}}

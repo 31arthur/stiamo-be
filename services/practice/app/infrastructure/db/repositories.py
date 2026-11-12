@@ -8,6 +8,7 @@ from app.domain.cast import Character, Part, Scene
 from app.domain.common import EntityRef
 from app.domain.directory import Client, Counsel, Project
 from app.domain.history import Activity, Link
+from app.domain.insight import Evidence, Lens
 from app.domain.stories import ArcTemplate
 from app.infrastructure.db import models
 from app.infrastructure.db.joined import Join, SqlJoinedRepository
@@ -75,4 +76,6 @@ def build_stores(s: AsyncSession) -> Stores:
         character=SqlRepository(s, flat_mapper(models.CharacterModel, Character)),
         part=SqlRepository(s, flat_mapper(models.PartModel, Part)),
         scene=SqlRepository(s, flat_mapper(models.SceneModel, Scene)),
+        evidence=SqlRepository(s, flat_mapper(models.EvidenceModel, Evidence)),
+        lens=SqlRepository(s, flat_mapper(models.LensModel, Lens)),
     )

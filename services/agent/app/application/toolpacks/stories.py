@@ -160,8 +160,11 @@ class StoriesPack(ToolPack):
             titles = {s["id"]: s.get("title", "") for s in await stories()}
             mine = [p for p in parts if p.get("characterId") == c["id"]]
             scenes = sorted((x for x in await data.records("scenes") if x.get("characterId") == c["id"]), key=lambda x: x.get("date", ""), reverse=True)
+            from app.domain.interviewer import sketch
+
             return ToolOutput({
                 "id": c["id"], "name": c.get("name"), "organisation": c.get("organisation"), "title": c.get("title"),
+                "sketch": sketch(c.get("name") or "", c.get("profile")),
                 "phones": c.get("phones") or [], "emails": c.get("emails") or [],
                 "parts": [{"story": titles.get(p.get("storyId"), ""), "part": p.get("part") or "", "calledHere": p.get("knownAs") or [],
                            "stance": p.get("stance"), "sway": p.get("sway")} for p in mine],
