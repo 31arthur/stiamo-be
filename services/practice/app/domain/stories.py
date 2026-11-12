@@ -108,6 +108,8 @@ class CastMention(DomainModel):
     """A person in a chapter. Until characters exist (phase 2) this is a name, optionally a Google contact, and the scene."""
 
     name: str
+    #: The character in the cast this is (phase 2), when they are part of it.
+    character_id: str | None = None
     contact_id: str | None = None
     scene: str | None = None
     quote: str | None = None

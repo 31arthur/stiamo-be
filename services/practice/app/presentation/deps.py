@@ -10,6 +10,7 @@ from stiamo_common.security import Principal, make_principal_dependency
 from app.application.crud import Crud
 from app.application.ports import Env
 from app.application.use_cases.cases import CaseUseCases, CounselUseCases, HearingActionUseCases, HearingUseCases
+from app.application.use_cases.cast import CastUseCases, CharacterUseCases, PartUseCases, SceneUseCases
 from app.application.use_cases.directory import ClientUseCases, project_crud
 from app.application.use_cases.history import HistoryUseCases
 from app.application.use_cases.plans import GoalUseCases, PlanUseCases
@@ -120,6 +121,22 @@ def arc_template_service(env: EnvDep) -> Crud:
 
 def story_writing(env: EnvDep) -> StoryWriting:
     return StoryWriting(env)
+
+
+def character_service(env: EnvDep) -> CharacterUseCases:
+    return CharacterUseCases(env)
+
+
+def part_service(env: EnvDep) -> PartUseCases:
+    return PartUseCases(env)
+
+
+def scene_service(env: EnvDep) -> SceneUseCases:
+    return SceneUseCases(env)
+
+
+def cast_service(env: EnvDep) -> CastUseCases:
+    return CastUseCases(env)
 
 
 current_principal = make_principal_dependency(lambda: get_settings().token_settings())

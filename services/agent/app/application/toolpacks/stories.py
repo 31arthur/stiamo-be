@@ -9,14 +9,30 @@ import uuid
 from typing import Any
 
 from app.application.runner import Tool, ToolOutput
-from app.application.stories import draft_chapter, here_of
+from app.application.stories import cast_in, draft_chapter, here_of
 from app.application.toolpacks import PackContext, ToolPack
 from app.application.toolpacks.common import text
 from app.domain import proposals as p
 from app.domain.llm import ToolSpec
+from app.domain.story_jobs import same_name
 
 S = {"type": "string"}
 PACINGS = ("brisk", "steady", "slow")
+STANCES = ("for_us", "neutral", "wary", "against")
+SWAYS = ("decides", "shapes", "informs")
+
+
+def _digits(phone: str) -> str:
+    d = "".join(ch for ch in phone if ch.isdigit())
+    return d[-10:]  # the last ten digits: enough to tell two numbers apart, whatever prefix each was written with
+
+
+def _contact_phones(c: dict[str, Any]) -> list[str]:
+    return [p.get("value") if isinstance(p, dict) else str(p) for p in c.get("phones") or [] if (p.get("value") if isinstance(p, dict) else p)]
+
+
+def _contact_emails(c: dict[str, Any]) -> list[str]:
+    return [e.get("value") if isinstance(e, dict) else str(e) for e in c.get("emails") or [] if (e.get("value") if isinstance(e, dict) else e)]
 
 
 def _props(**fields: dict[str, Any]) -> dict[str, Any]:
@@ -110,7 +126,107 @@ class StoriesPack(ToolPack):
             card = {"kind": "proposal", "id": pid, "action": "story.create", "title": f"New story: {title}", "lines": lines}
             return ToolOutput({"proposed": True, "id": pid, "note": "Nothing is saved until the person approves. Say so."}, [card])
 
+        async def find_story(key: str) -> dict[str, Any] | None:
+            k = key.strip().lower()
+            all_ = await stories()
+            return next((x for x in all_ if x["id"] == key), None) or next((x for x in all_ if k and k in str(x.get("title", "")).lower()), None)
+
+        async def story_cast(a: dict[str, Any]) -> ToolOutput:
+            s = await find_story(text(a.get("story")))
+            if s is None:
+                return ToolOutput({"error": "No story matches that. Use list_stories."})
+            cast, characters = await cast_in(data, s["id"])
+            by_id = {c["id"]: c for c in characters}
+            return ToolOutput({"story": s.get("title"), "cast": [
+                {"id": m["characterId"], "name": m["name"], "part": m["part"], "calledHere": m["knownAs"], "phones": by_id[m["characterId"]].get("phones") or []}
+                for m in cast]})
+
+        async def read_character(a: dict[str, Any]) -> ToolOutput:
+            key = text(a.get("character"))
+            characters = await data.records("characters")
+            parts = await data.records("parts")
+            c = next((x for x in characters if x["id"] == key), None)
+            if c is None:
+                hits = [x for x in characters if same_name(key, x.get("name")) or any(same_name(key, k) for p in parts if p.get("characterId") == x["id"] for k in p.get("knownAs") or [])]
+                if len(hits) > 1:
+                    return ToolOutput({"ask": [{"id": h["id"], "name": h.get("name"), "organisation": h.get("organisation")} for h in hits],
+                                       "note": "More than one person fits. Ask which one."})
+                c = hits[0] if hits else None
+            if c is None:
+                return ToolOutput({"error": "Nobody in the cast is called that. Use story_cast, or add them with add_to_cast."})
+            titles = {s["id"]: s.get("title", "") for s in await stories()}
+            mine = [p for p in parts if p.get("characterId") == c["id"]]
+            scenes = sorted((x for x in await data.records("scenes") if x.get("characterId") == c["id"]), key=lambda x: x.get("date", ""), reverse=True)
+            return ToolOutput({
+                "id": c["id"], "name": c.get("name"), "organisation": c.get("organisation"), "title": c.get("title"),
+                "phones": c.get("phones") or [], "emails": c.get("emails") or [],
+                "parts": [{"story": titles.get(p.get("storyId"), ""), "part": p.get("part") or "", "calledHere": p.get("knownAs") or [],
+                           "stance": p.get("stance"), "sway": p.get("sway")} for p in mine],
+                "scenes": [{"date": x.get("date"), "story": titles.get(x.get("storyId"), ""), "what": x.get("text"), "quote": x.get("quote")} for x in scenes[:10]],
+            })
+
+        async def add_to_cast(a: dict[str, Any]) -> ToolOutput:
+            if ctx.propose is None:
+                return ToolOutput({"error": "The cast can only be changed in a chat."})
+            name = p.words(a.get("name"), "The name", required=True)
+            body: dict[str, Any] = {"name": name, "id": str(uuid.uuid4())}
+            lines: list[str] = []
+            phones = [x for x in [text(a.get("phone"))] if x]
+            if (look := text(a.get("from_contact"))):
+                found = await data.contacts(look, 10)
+                exact = [x for x in found if same_name(look, x.get("name"))] or found
+                if len(exact) != 1:
+                    return ToolOutput({"error": f"{'No' if not exact else 'More than one'} Google contact matches “{look}”.",
+                                       "contacts": [x.get("name") for x in exact[:5]]})
+                g = exact[0]
+                phones += _contact_phones(g)
+                body.update(emails=_contact_emails(g), organisation=g.get("organisation") or None, title=g.get("title") or None, googleContactId=g.get("id"))
+                lines.append(f"From your Google contact “{g.get('name')}”")
+            if phones:
+                body["phones"] = phones
+            if (org := p.words(a.get("organisation"), "The organisation")) is not None:
+                body["organisation"] = org
+            story = None
+            if text(a.get("story")):
+                story = await find_story(text(a.get("story")))
+                if story is None:
+                    raise p.Bad("No story matches that. Use list_stories.")
+                body["storyId"] = story["id"]
+                if (part := p.words(a.get("part"), "The part", most=200)) is not None:
+                    body["part"] = part
+                if (st := p.pick(a.get("stance"), STANCES, "The stance")) is not None:
+                    body["stance"] = st
+                if (sw := p.pick(a.get("sway"), SWAYS, "The sway")) is not None:
+                    body["sway"] = sw
+            # Found before made: someone this workspace already knows by that number is reused, so nobody is entered twice.
+            wanted = {_digits(x) for x in phones if len(_digits(x)) >= 6}
+            known = next((c for c in await data.records("characters") if wanted & {_digits(x) for x in c.get("phones") or []}), None) if wanted else None
+            if known is not None:
+                body["characterId"] = known["id"]
+                lines.insert(0, f"Already in your cast as {known.get('name')} (same number)")
+            if phones:
+                lines.append("Phone: " + ", ".join(phones))
+            if body.get("organisation"):
+                lines.append(f"Organisation: {body['organisation']}")
+            if story is not None:
+                lines.append(f"Part in “{story.get('title')}”: {body.get('part') or 'not said'}" + (f" · {body['stance'].replace('_', ' ')}" if body.get("stance") else ""))
+            title = f"Cast: {known.get('name') if known else name}"
+            pid = await ctx.propose("cast.join", title, lines or ["Joins your cast"], [{"cast": body}])
+            card = {"kind": "proposal", "id": pid, "action": "cast.join", "title": title, "lines": lines or ["Joins your cast"]}
+            return ToolOutput({"proposed": True, "id": pid, "note": "Nothing is saved until the person approves. Say so in a sentence."}, [card])
+
         return [
+            Tool(ToolSpec("story_cast", "The people in one story: who each is, the part they play there, what they're called in its chapters, their numbers.",
+                          {**_props(story=S), "required": ["story"]}), lambda a: f"Read the cast of {text(a.get('story'))}", story_cast),
+            Tool(ToolSpec("read_character", "One person in the cast: their numbers and organisation, the part they play in each story, and their latest scenes.",
+                          {**_props(character={**S, "description": "Their id, name, or what a story calls them."}), "required": ["character"]}),
+                 lambda a: f"Read {text(a.get('character'))}", read_character),
+            Tool(ToolSpec("add_to_cast",
+                          "Propose bringing someone into the cast, optionally with the part they play in a story. Give a phone number, or `from_contact` "
+                          "(a Google contact's name) to take their numbers and organisation from there. Someone already known by that number is reused.",
+                          {**_props(name=S, phone=S, organisation=S, from_contact=S, story=S, part=S,
+                                    stance={"type": "string", "enum": list(STANCES)}, sway={"type": "string", "enum": list(SWAYS)}), "required": ["name"]}),
+                 lambda a: f"Proposed {text(a.get('name'))} for the cast", safe(add_to_cast)),
             Tool(ToolSpec("list_stories", "The person's stories (ongoing cases, projects, errands they write about): each with where it is, its ending, stakes and chance.",
                           _props(include_ended={"type": "boolean"})), lambda a: "Read the stories", list_stories),
             Tool(ToolSpec("read_story", "One story: its arc of checkpoints, its facts and its latest chapters.", _props(story=S)),

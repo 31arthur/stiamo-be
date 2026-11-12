@@ -32,7 +32,7 @@ def _forward(name: str):
     return call
 
 
-for _name in (*DataGateway.__abstractmethods__, "calendar_events", "calendar_sync", "google_links", "contacts", "chapters", "write_chapter"):
+for _name in (*DataGateway.__abstractmethods__, "calendar_events", "calendar_sync", "google_links", "contacts", "chapters", "write_chapter", "join_cast"):
     setattr(Delegating, _name, _forward(_name))
 update_abstractmethods(Delegating)
 

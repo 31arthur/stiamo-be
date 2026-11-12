@@ -15,6 +15,15 @@ from app.domain.aijobs import Checked, Job, Problem, calendar, find_quote, iso_d
 BEATS = ("progress", "setback", "twist", "lull", "breakthrough", "note")
 CHANNELS = ("call", "message", "email", "visit")
 _STOP = frozenset("the a an and or of to for in on at is my our with from by".split())
+#: Words a chapter uses for its own writer. They are never a character.
+NARRATOR = frozenset({"i", "me", "myself", "we", "us", "you"})
+
+
+def same_name(a: str | None, b: str | None) -> bool:
+    """Whether two ways of naming someone are the same name: case, "the" and punctuation don't matter ("The agent" = "agent")."""
+    def norm(s: str | None) -> str:
+        return " ".join(re.findall(r"[a-z0-9]+", (s or "").lower().removeprefix("the ")))
+    return bool(norm(a)) and norm(a) == norm(b)
 
 # --- which story -------------------------------------------------------------------------------------------------
 
@@ -114,7 +123,7 @@ The fields:
 - checkpoints: checkpoints from the arc that this chapter says were reached ("reached"), or are no longer needed ("skipped"). Not ones that are only hoped for.
 - twists: NEW plot points the story must now pass through, not in the arc yet. Title: 2 to 6 words, written as an outcome ("Get old Form 16"), not as a task. "before": the id of the checkpoint it must come before, or null to put it next.
 - steps: things the person says they will do or must do. "kind": "task" for work they do themselves; "followUp" for reaching someone (a call, a message, an email or a visit; say which in "channel"). Title starts with a verb. "contact": who to reach, as the chapter names them, or null.
-- people: each person who appears, named as the chapter names them ("the agent", "Ravi"), with what they did in a few words ("scene").
+- people: each person who appears, other than the writer, named as the chapter names them ("the agent", "Ravi"), with what they did in a few words ("scene"). Use the name from "People already in the story" when the chapter clearly means one of them.
 - hunches: what the person expects or suspects will happen ("something tells me…", "I bet…", "they'll probably…"). Not plans.
 - cliffhanger: the open question the chapter ends on, written as a question, with its quote. Otherwise null.
 - waiting_on: what the story is now waiting for (a person or thing), and "until" if a day is named, with its quote. Otherwise null.
@@ -204,7 +213,7 @@ def _check_notes(out: dict[str, Any], i: dict[str, Any]) -> Checked:
     for p in items(out.get("people"), 8):
         asked += 1
         name = short(p.get("name"), 80)
-        if not name:
+        if not name or name.lower() in NARRATOR:
             continue
         if (q := _quoted(p, prose, f"person {name}", dropped)) is None:
             continue
@@ -273,7 +282,7 @@ _EX_LULL = {
 
 MARGIN_NOTES = Job(
     name="margin_notes",
-    version="1",
+    version="2",
     purpose="Reads a chapter you wrote and notes what it moves, adds and leaves to do, each note pinned to your words.",
     system=NOTES_SYSTEM,
     examples=(

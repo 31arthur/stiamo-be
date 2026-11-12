@@ -2,7 +2,7 @@
 
 Every running thing in your life and work (an S&B case, an FSA project, a home loan) can be a **story** you write in **chapters**. Each story has its own **checkpoints** (its plot points, never a fixed list of stages), the **ending** you're writing towards, and the **work** each chapter leaves behind as ordinary tasks and calls. The full design, including the parts not built yet, is on the plan page: <https://claude.ai/artifact/Fy2G3B4RQnVc633Vkwxgrw>.
 
-This is **phase 1**: stories, checkpoints, chapters and margin notes. The cast (characters learned once and reused everywhere), the editor that comes looking when a story goes quiet, and the planner's "push this" are later phases.
+Built so far: **phase 1** (stories, checkpoints, chapters and margin notes) and **phase 2** (the cast: people learned once and used in every story). The editor that comes looking when a story goes quiet, the planner's "push this", and gauging a person (lenses, questions, "how will they take it?") are phases 3 and 4.
 
 ```
  you write ──► find the story ──► margin notes ──► code checks ──► one card ──► YES ──► chapter + twists + tasks + calls + hunches
@@ -27,6 +27,23 @@ This is **phase 1**: stories, checkpoints, chapters and margin notes. The cast (
 | Arc templates | Checkpoint lists saved per workspace ("Loan", "Court order") | `ArcTemplate` |
 
 A recorded hearing of a linked case shows on the story's timeline as a chapter by itself, so nothing is written twice. The work a chapter leaves is ordinary tasks (`related` → the story) and follow-ups (`subject` → the story), in the story's workspace: the planner, reminders and Google Calendar handle them as usual. Deleting a story deletes its chapters; its tasks and calls stay.
+
+## The cast
+
+A person is learned once and used in every story they're part of, in any workspace.
+
+| Record | What | Workspace |
+| --- | --- | --- |
+| `Character` | Who they are: name, numbers, emails, organisation, title, the Google contact they are | Shared. Seen in their first workspace and every workspace where they have a part |
+| `Part` | The part they play in one story ("agent", "the other side's lawyer"), what the story's chapters call them (`knownAs`), their stance (for us, neutral, wary, against) and sway (decides, shapes, informs) | The story's |
+| `Scene` | What they did, from a chapter (with its quote) or as you put it | The story's |
+
+- **Found before made.** `POST /v1/characters/join` looks for the person by id, then by **phone number**, then by Google contact, and only then makes a new character. Numbers are normalised (`098450 12345` = `+91 98450-12345` = `+919845012345`), and two characters can't share one. What's learned about someone already known is added, never overwritten.
+- **From a chapter.** The people a chapter names are matched by code: someone in the story's cast (by name, or what the story calls them: "the agent"), else the one character anywhere with exactly that name, else someone new. Each gets a part in the story if they lack one, and a scene. The card says which: "Cast: The agent (Ravi Kumar)" or "New in your cast: the bank manager".
+- **A call carries the number.** A task or call a chapter leaves for someone in the cast points at them (`characterId`), and shows "Ravi Kumar · +919845012345", so the call button works on the phone.
+- **On the phone:** "Add Priya from my contacts as the client in the website story" (`add_to_cast` with `from_contact`), "Who is in the Gulbarga story?" (`story_cast`), "Tell me about Ravi" (`read_character`).
+- **Two records, one person:** `POST /v1/characters/{id}/merge {into}` moves the parts, scenes, tasks and calls across and keeps every number.
+- **Workspaces:** a workspace's assistant sees who someone is if they're in one of its stories, but only the parts and scenes of its own stories. `tests/test_cast.py` puts a canary in a personal scene and checks the S&B bot never reads it.
 
 ## Writing a chapter
 
@@ -72,4 +89,4 @@ A story belongs to one workspace. A workspace's assistant sees only its own stor
 
 ## Deploying this version
 
-`./deploy.sh` runs migration `practice 0007` (the `stories`, `chapters` and `arc_templates` tables). Nothing else to set up: the jobs use the model you already chose for your agents until you give them their own.
+`./deploy.sh` runs migrations `practice 0007` (the `stories`, `chapters` and `arc_templates` tables) and `practice 0008` (the cast: `characters`, `parts`, `scenes`, and `characterId` on tasks and follow-ups). Nothing else to set up: the jobs use the model you already chose for your agents until you give them their own.

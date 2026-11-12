@@ -35,6 +35,8 @@ class ScopedData(DataGateway):
         return await self._inner.attachments() if self.workspace == "sb" else []
 
     async def records(self, table: str):
+        if table == "characters":
+            return await self._characters()
         rows = await self._inner.records(table)
         home = HOME.get(table)
         if home is not None:
@@ -104,6 +106,20 @@ class ScopedData(DataGateway):
     # A story belongs to its workspace, and its chapters go with it.
     async def _own_story(self, story_id: str) -> bool:
         return any(s.get("id") == story_id for s in await self.records("stories"))
+
+    # The cast: who someone is travels with them into every workspace they have a part in (or were first met in). Their parts and
+    # scenes carry their story's workspace, so the rule above keeps another workspace's parts and scenes out.
+    async def _characters(self):
+        here = {p.get("characterId") for p in await self._inner.records("parts") if p.get("workspace") == self.workspace}
+        return [c for c in await self._inner.records("characters") if c.get("home") == self.workspace or c.get("id") in here]
+
+    async def join_cast(self, body):
+        story = body.get("storyId")
+        if story and not await self._own_story(story):
+            raise AiError(f"That story isn't one of {self.workspace}'s, so its cast can't be changed from here.")
+        if body.get("characterId") and not any(c.get("id") == body["characterId"] for c in await self._characters()):
+            raise AiError(f"That person isn't in {self.workspace}'s cast.")
+        return await self._inner.join_cast({**body, "home": self.workspace})
 
     async def chapters(self, story_id):
         return await self._inner.chapters(story_id) if await self._own_story(story_id) else []

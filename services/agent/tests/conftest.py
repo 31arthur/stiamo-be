@@ -198,6 +198,10 @@ class FakeData(DataGateway):
     async def chapters(self, story_id):
         return [c for c in self.tables.get("chapters", []) if c.get("storyId") == story_id]
 
+    async def join_cast(self, body):
+        self.saved.append(("cast", body))
+        return {"character": {"id": body.get("characterId") or body.get("id")}, "matched": "new"}
+
     async def write_chapter(self, story_id, body):
         self.saved.append(("chapter", {"story": story_id, **body}))
         return {"chapter": {"id": body.get("id"), "storyId": story_id}}

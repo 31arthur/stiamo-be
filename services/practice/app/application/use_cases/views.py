@@ -27,6 +27,7 @@ class RelationUseCases:
             counsel=await s.counsel.list(user_id), clients=await s.client.list(user_id),
             projects=await s.project.list(user_id), links=await s.link.list(user_id),
             stories=await s.story.list(user_id), chapters=await s.chapter.list(user_id),
+            characters=await s.character.list(user_id), parts=await s.part.list(user_id),
         ))
 
     async def thread(self, user_id: str, ref: EntityRef) -> Thread:

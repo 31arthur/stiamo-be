@@ -228,6 +228,19 @@ class HttpDataGateway(DataGateway):
             raise AiError(f"The chapter wasn't saved: {reason}.")
         return r.json()
 
+    async def join_cast(self, body: dict[str, Any]) -> dict[str, Any]:
+        try:
+            r = await self._http.post(f"{self._practice}/v1/characters/join", headers=self._headers, json=body)
+        except httpx.HTTPError as exc:
+            raise AiError("Couldn't reach your cast. Try again in a moment.") from exc
+        if r.status_code != 200:
+            try:
+                reason = r.json()["error"]["message"]
+            except (ValueError, KeyError, TypeError):
+                reason = f"it answered {r.status_code}"
+            raise AiError(f"They weren't added to the cast: {reason}.")
+        return r.json()
+
     async def save_record(self, table: str, record: dict[str, Any]) -> None:
         paths = {"tasks": "/v1/tasks", "follow-ups": "/v1/follow-ups", "cases": "/v1/cases", "hearings": "/v1/hearings", "plans": "/v1/plans", "stories": "/v1/stories"}
         if table not in paths:

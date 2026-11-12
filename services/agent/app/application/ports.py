@@ -112,6 +112,11 @@ class DataGateway(ABC):
         """Writes a chapter in one step (the practice service's /chapters/write): the prose, and what it moves, adds and leaves."""
         raise AiError("Chapters can't be written from here.")
 
+    async def join_cast(self, body: dict[str, Any]) -> dict[str, Any]:
+        """Brings someone into the cast (the practice service's /characters/join): found by id, phone or Google contact before a new
+        character is made, with their part in a story when one is given."""
+        raise AiError("The cast can't be changed from here.")
+
     async def google_links(self) -> dict[str, dict[str, Any] | None]:
         """What is connected to Google, as the calendar service reports it: {"calendar": status, "contacts": status}. A value is None when the
         service didn't answer; an empty dict when it isn't asked at all."""

@@ -56,7 +56,7 @@ async def test_the_team_is_registered_with_the_tools_each_one_needs(rig):
     ids = [a["id"] for a in (await rig.client.get("/v1/agent/settings", headers=headers())).json()["agents"]]
     assert {"daily-planner", "cases"} <= set(ids) and not {"hearing-prep", "follow-up-chaser", "deadline-scout"} & set(ids)  # merged into these two
     out = (await rig.client.post(f"{PLANNER}/prompt/preview", json={"question": "x"}, headers=headers())).json()
-    assert [t["name"] for t in out["tools"]] == ["day_agenda", "free_time", "upcoming", "present_plan", "propose_schedule", "search_cases", "get_case", "case_documents", "waiting_in_attention", "add_task", "change_task", "add_follow_up", "change_follow_up", "add_hearing", "add_case", "add_action_plan", "list_stories", "read_story", "write_chapter", "add_story"]
+    assert [t["name"] for t in out["tools"]] == ["day_agenda", "free_time", "upcoming", "present_plan", "propose_schedule", "search_cases", "get_case", "case_documents", "waiting_in_attention", "add_task", "change_task", "add_follow_up", "change_follow_up", "add_hearing", "add_case", "add_action_plan", "story_cast", "read_character", "add_to_cast", "list_stories", "read_story", "write_chapter", "add_story"]
     assert TOMORROW in out["system"] and "21:00" in out["system"]
     prep = (await rig.client.post("/v1/agent/agents/cases/prompt/preview", json={"question": "x"}, headers=headers())).json()
     assert {"find_documents", "day_agenda", "get_case"} <= {t["name"] for t in prep["tools"]}  # the case agent also prepares you for a hearing

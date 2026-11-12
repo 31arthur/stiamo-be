@@ -109,6 +109,10 @@ class Memo(DataGateway):
         self._memo = {k: v for k, v in self._memo.items() if not k.startswith(("chapters:", "records:"))}  # what was read before is stale now
         return await self._inner.write_chapter(story_id, body)
 
+    async def join_cast(self, body):
+        self._memo = {k: v for k, v in self._memo.items() if not k.startswith("records:")}
+        return await self._inner.join_cast(body)
+
     async def mail_uids(self, account_id, folder, since, before):
         return await self._inner.mail_uids(account_id, folder, since, before)
 
