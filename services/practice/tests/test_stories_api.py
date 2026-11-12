@@ -174,3 +174,12 @@ async def test_arc_templates(client, alice):
                                                        "checkpoints": ["Pick a lender", " ", "Documents in", "Pick a lender"]}, headers=alice)
     assert r.status_code == 200, r.text
     assert r.json()["checkpoints"] == ["Pick a lender", "Documents in"]
+
+
+async def test_the_timeline_shows_how_the_chance_moved(client, alice):
+    await story(client, alice)
+    await client.post("/v1/stories/s1/chapters/write", json={"prose": "a", "date": "2026-11-01", "chanceAfter": 65}, headers=alice)
+    await client.post("/v1/stories/s1/chapters/write", json={"prose": "b", "date": "2026-11-05"}, headers=alice)
+    await client.post("/v1/stories/s1/chapters/write", json={"prose": "c", "date": "2026-11-09", "chanceAfter": 55}, headers=alice)
+    tl = (await client.get("/v1/stories/s1/timeline", headers=alice)).json()
+    assert [(t["number"], t["chance"]) for t in tl["chanceTrend"]] == [(1, 65), (3, 55)]

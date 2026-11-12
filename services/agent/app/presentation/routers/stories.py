@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
 from app.presentation import deps
@@ -39,3 +39,35 @@ async def jobs(agent: deps.Agent, me: deps.Me) -> dict[str, Any]:
 async def set_job(name: str, body: JobModelBody, agent: deps.Agent, me: deps.Me) -> dict[str, Any]:
     await agent.set_job_model(me, name, body.provider, body.model, body.thinking)
     return {"items": await agent.job_models(me)}
+
+
+# --- the story editor -------------------------------------------------------------------------------------------
+
+
+def _editor(request: Request, session: deps.Session):
+    return deps.build_services(request.app, session)[1].editor_actions
+
+
+class EditorSettingsBody(BaseModel):
+    enabled: bool = True
+    roomDay: str = "sun"
+
+
+class RunBody(BaseModel):
+    workspace: str | None = None
+
+
+@router.get("/editor", summary="The story editor: its settings, and every story's pace, quiet and push score")
+async def editor(request: Request, session: deps.Session, me: deps.Me, token: deps.Token) -> dict[str, Any]:
+    e = _editor(request, session)
+    return {"settings": await e.settings(me), "stories": await e.overview(me, token)}
+
+
+@router.put("/editor/settings", summary="Switch the story editor on or off, and choose the writers' room day")
+async def editor_settings(body: EditorSettingsBody, request: Request, session: deps.Session, me: deps.Me) -> dict[str, Any]:
+    return await _editor(request, session).set_settings(me, body.enabled, body.roomDay)
+
+
+@router.post("/editor/run", summary="Run the story editor now (at most one message per workspace per day still holds)")
+async def editor_run(body: RunBody, request: Request, session: deps.Session, me: deps.Me, token: deps.Token) -> dict[str, Any]:
+    return {"sent": await _editor(request, session).run_now(me, token, body.workspace)}

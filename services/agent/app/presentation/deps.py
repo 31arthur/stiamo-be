@@ -19,6 +19,7 @@ from app.application.availability import AvailabilityService
 from app.application.channels import ChannelService
 from app.application.conversations import ConversationService
 from app.application.dayplans import DayPlanService, plan_buttons, planner_settings
+from app.application.editor import EditorService
 from app.application.health import HealthService
 from app.application.insights import InsightService
 from app.application.mailwatch import MailWatchService
@@ -87,6 +88,7 @@ def build_services(app: FastAPI, session: AsyncSession) -> tuple[AgentService, C
     plans = DayPlanService(SqlDayPlanRepository(session), SqlSettingsRepository(session, s.box), agent, s.data_factory, lambda who, text, workspace, plan_id, calls=(): channels.announce_plan(who, text, workspace, plan_buttons(plan_id) + call_rows(s.settings.app_url, list(calls))))
     channels.plan_actions = plans
     channels.availability_actions = AvailabilityService(SqlSettingsRepository(session, s.box), s.data_factory, lambda who, text, workspace, buttons: channels.announce_plan(who, text, workspace, buttons), plans)
+    channels.editor_actions = EditorService(SqlSettingsRepository(session, s.box), s.data_factory, s.llm_factory, lambda who, text, workspace, buttons: channels.announce_plan(who, text, workspace, buttons), lambda: s.clock())
     channels.voice_notes = VoiceNotes(SqlSettingsRepository(session, s.box), s.voice)
     channels.alerts = AlertService(SqlAlertRepository(session), SqlSettingsRepository(session, s.box), s.llm_factory, s.data_factory, s.tokens, channels, app_url=s.settings.app_url, clock_now=lambda: s.clock(), caller=s.caller, calls=s.alert_calls, deliveries=s.deliveries)
     return agent, channels
@@ -103,7 +105,7 @@ def build_proposals(app: FastAPI, session: AsyncSession) -> ProposalService:
 
 def build_day_plans(app: FastAPI, session: AsyncSession) -> DayPlanService:
     agent, channels = build_services(app, session)
-    return DayPlanService(SqlDayPlanRepository(session), SqlSettingsRepository(session, app.state.box), agent, app.state.data_factory, lambda who, text, workspace, plan_id, calls=(): channels.announce_plan(who, text, workspace, plan_buttons(plan_id) + call_rows(app.state.settings.app_url, list(calls))), ask=channels.availability_actions.ask)
+    return DayPlanService(SqlDayPlanRepository(session), SqlSettingsRepository(session, app.state.box), agent, app.state.data_factory, lambda who, text, workspace, plan_id, calls=(): channels.announce_plan(who, text, workspace, plan_buttons(plan_id) + call_rows(app.state.settings.app_url, list(calls))), ask=channels.availability_actions.ask, editor=channels.editor_actions.evening)
 
 
 def evening_run(app: FastAPI, who: Who):

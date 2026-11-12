@@ -177,7 +177,7 @@ def check_blocks(blocks: list[dict[str, Any]], busy: list[tuple[int, int, str]],
     return problems
 
 
-SECTION_TITLES = {"fixed": "Fixed", "prepare": "Prepare", "calls": "Calls to make", "work": "Work to do", "attention": "Needs your attention", "later": "Coming up"}
+SECTION_TITLES = {"fixed": "Fixed", "prepare": "Prepare", "calls": "Calls to make", "work": "Work to do", "push": "Push this", "attention": "Needs your attention", "later": "Coming up"}
 
 
 def briefing_text(card: dict[str, Any]) -> str:

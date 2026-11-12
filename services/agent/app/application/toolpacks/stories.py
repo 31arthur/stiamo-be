@@ -12,6 +12,7 @@ from app.application.runner import Tool, ToolOutput
 from app.application.stories import cast_in, draft_chapter, here_of
 from app.application.toolpacks import PackContext, ToolPack
 from app.application.toolpacks.common import text
+from app.domain import editor as ed
 from app.domain import proposals as p
 from app.domain.llm import ToolSpec
 from app.domain.story_jobs import same_name
@@ -82,8 +83,10 @@ class StoriesPack(ToolPack):
             chapters = await data.chapters(s["id"])
             recent = [{"number": c.get("number"), "date": c.get("date"), "title": c.get("title", ""), "beat": c.get("beat"),
                        "prose": (c.get("prose") or "")[:600]} for c in chapters[-3:]]
+            trend = [{"chapter": c.get("number"), "date": c.get("date"), "chance": c.get("chanceAfter")} for c in chapters if c.get("chanceAfter") is not None]
             return ToolOutput({**_summary(s), "checkpoints": [{"title": c.get("title"), "status": c.get("status", "ahead")} for c in s.get("checkpoints") or []],
-                               "bible": s.get("bible") or [], "chapters": len(chapters), "latest": recent})
+                               "bible": s.get("bible") or [], "chapters": len(chapters), "latest": recent, "chanceTrend": trend,
+                               "previously": ed.previously(s, chapters)})
 
         async def write_chapter(a: dict[str, Any]) -> ToolOutput:
             if ctx.propose is None:
@@ -215,7 +218,66 @@ class StoriesPack(ToolPack):
             card = {"kind": "proposal", "id": pid, "action": "cast.join", "title": title, "lines": lines or ["Joins your cast"]}
             return ToolOutput({"proposed": True, "id": pid, "note": "Nothing is saved until the person approves. Say so in a sentence."}, [card])
 
+        async def stories_to_push(a: dict[str, Any]) -> ToolOutput:
+            from app.application.editor import survey_of
+
+            views = [v for v in await survey_of(data, ctx.today) if v["score"] > 0][:3]
+            if not views:
+                return ToolOutput({"stories": [], "note": "No story to push."})
+            return ToolOutput({"stories": [{
+                "id": v["story"]["id"], "title": v["story"].get("title"), "score": v["score"], "why": ed.why(v["story"], v["momentum"], v["steps"]),
+                "state": v["momentum"].state, "quietDays": v["momentum"].quiet_days,
+                "where": (ed.here_of(v["story"]) or {}).get("title"),
+                "openSteps": [{"type": "task" if s.get("_table") == "tasks" else "followUp", "id": s["id"], "title": s.get("title"), "due": ed.step_due(s)} for s in v["steps"][:4]],
+            } for v in views], "note": "Highest first. Put the first in a 'push' section: a note item saying the story and why, then its open step by id if it has one."})
+
+        async def change_story(a: dict[str, Any]) -> ToolOutput:
+            if ctx.propose is None:
+                return ToolOutput({"error": "Stories can only be changed in a chat."})
+            s = await find_story(text(a.get("story")))
+            if s is None:
+                return ToolOutput({"error": "No story matches that. Use list_stories."})
+            patch: dict[str, Any] = {}
+            lines: list[str] = []
+            if (ending := p.long_text(a.get("ending"), "The ending")) is not None and ending:
+                patch["ending"] = ending
+                lines.append(f"Ending: {ending}")
+            for key, lo, hi, label in (("chance", 0, 100, "Chance"), ("stakes", 1, 5, "Stakes")):
+                v = a.get(key)
+                if v not in (None, ""):
+                    if not (isinstance(v, int) and lo <= v <= hi):
+                        raise p.Bad(f"{label} runs from {lo} to {hi}.")
+                    patch[key] = v
+                    lines.append(f"{label}: {s.get(key, '–')} → {v}" + ("%" if key == "chance" else ""))
+            if (pace := p.pick(a.get("pacing"), PACINGS, "The pacing")) is not None:
+                patch["pacing"] = pace
+                lines.append(f"Pace: {pace}")
+            if (state := p.pick(a.get("state"), ("writing", "resting", "ended"), "The state")) is not None:
+                patch["state"] = state
+                if state == "ended":
+                    patch["endedOn"] = ctx.today
+                lines.append({"writing": "Back to writing it", "resting": "Rest it (no questions until you write in it)", "ended": "The End"}[state])
+            if a.get("clear_waiting"):
+                patch["waitingOn"] = None
+                lines.append("No longer waiting")
+            elif text(a.get("waiting_on")):
+                patch["waitingOn"] = {"on": text(a.get("waiting_on")), **({"until": p.day(a.get("until"), "The date")} if a.get("until") else {})}
+                lines.append(f"Waiting on {patch['waitingOn']['on']}" + (f" until {p.day_label(patch['waitingOn']['until'])}" if patch["waitingOn"].get("until") else ""))
+            if not patch:
+                raise p.Bad("Say what to change: the ending, chance, stakes, pace, state or what it waits on.")
+            title = f"Change “{s.get('title')}”"
+            pid = await ctx.propose("story.update", title, lines, [{"table": "stories", "id": s["id"], "patch": patch}])
+            card = {"kind": "proposal", "id": pid, "action": "story.update", "title": title, "lines": lines}
+            return ToolOutput({"proposed": True, "id": pid, "note": "Nothing is saved until the person approves. Say so."}, [card])
+
         return [
+            Tool(ToolSpec("stories_to_push", "The stories most worth the person's time now, by chance × stakes × whether a step can be taken × how soon × how quiet, "
+                          "each with why and its open steps. For the evening plan's 'push' section.", _props()), lambda a: "Ranked the stories", stories_to_push),
+            Tool(ToolSpec("change_story", "Propose a change to a story: its ending, chance (0-100), stakes (1-5), pacing, state (writing, resting, ended), or what it waits on.",
+                          {**_props(story=S, ending=S, chance={"type": "integer"}, stakes={"type": "integer"}, pacing={"type": "string", "enum": list(PACINGS)},
+                                    state={"type": "string", "enum": ["writing", "resting", "ended"]}, waiting_on=S, until={**S, "description": "YYYY-MM-DD"},
+                                    clear_waiting={"type": "boolean"}), "required": ["story"]}),
+                 lambda a: f"Proposed a change to {text(a.get('story'))}", safe(change_story)),
             Tool(ToolSpec("story_cast", "The people in one story: who each is, the part they play there, what they're called in its chapters, their numbers.",
                           {**_props(story=S), "required": ["story"]}), lambda a: f"Read the cast of {text(a.get('story'))}", story_cast),
             Tool(ToolSpec("read_character", "One person in the cast: their numbers and organisation, the part they play in each story, and their latest scenes.",

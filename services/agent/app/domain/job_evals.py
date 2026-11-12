@@ -85,4 +85,41 @@ def score_find_story(name: str, out: dict[str, Any], expect: dict[str, Any]) -> 
     return CaseScore(name, 1, int(ok), [] if ok else [f"story {out.get('story')} / unsure {out.get('unsure_between')} ≠ {want_story} / {want_unsure}"])
 
 
-SCORERS = {"margin_notes": score_margin_notes, "find_story": score_find_story}
+def score_next_openings(name: str, out: dict[str, Any], expect: dict[str, Any]) -> CaseScore:
+    openings = out.get("openings") or []
+    points, got, misses = 0, 0, []
+
+    def check(ok: bool, what: str) -> None:
+        nonlocal points, got
+        points += 1
+        got += int(ok)
+        if not ok:
+            misses.append(what)
+
+    check(len(openings) == 3, f"{len(openings)} openings, expected 3")
+    if expect.get("a_follow_up"):
+        check(any(o["step"]["kind"] == "followUp" for o in openings), "no opening reaches out to anyone")
+    if expect.get("mentions"):
+        words = " ".join(f"{o['opening']} {o['step']['title']}" for o in openings).lower()
+        hit = [w for w in expect["mentions"] if w.lower() in words]
+        check(bool(hit), f"none of {expect['mentions']} came up")
+    if "dues" in expect:
+        dues = sorted(d for d in (o["step"].get("due") for o in openings) if d)
+        check(all(d in expect["dues"] for d in dues), f"due dates {dues} not among {expect['dues']}")
+    return CaseScore(name, points, got, misses)
+
+
+def score_suggest_chance(name: str, out: dict[str, Any], expect: dict[str, Any]) -> CaseScore:
+    move = int(out.get("chance", 0)) - int(expect["from"])
+    direction = "up" if move > 0 else "down" if move < 0 else "same"
+    misses = []
+    ok_dir = direction == expect["direction"] or (expect["direction"] == "same" and abs(move) <= 2)
+    if not ok_dir:
+        misses.append(f"moved {move:+d}, expected {expect['direction']}")
+    ok_size = abs(move) <= expect.get("most", 20)
+    if not ok_size:
+        misses.append(f"moved {move:+d}, at most {expect.get('most', 20)} expected")
+    return CaseScore(name, 2, int(ok_dir) + int(ok_size), misses)
+
+
+SCORERS = {"margin_notes": score_margin_notes, "find_story": score_find_story, "next_openings": score_next_openings, "suggest_chance": score_suggest_chance}

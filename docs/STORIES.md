@@ -2,7 +2,7 @@
 
 Every running thing in your life and work (an S&B case, an FSA project, a home loan) can be a **story** you write in **chapters**. Each story has its own **checkpoints** (its plot points, never a fixed list of stages), the **ending** you're writing towards, and the **work** each chapter leaves behind as ordinary tasks and calls. The full design, including the parts not built yet, is on the plan page: <https://claude.ai/artifact/Fy2G3B4RQnVc633Vkwxgrw>.
 
-Built so far: **phase 1** (stories, checkpoints, chapters and margin notes) and **phase 2** (the cast: people learned once and used in every story). The editor that comes looking when a story goes quiet, the planner's "push this", and gauging a person (lenses, questions, "how will they take it?") are phases 3 and 4.
+Built so far: **phase 1** (stories, checkpoints, chapters and margin notes), **phase 2** (the cast: people learned once and used in every story) and **phase 3** (the editor that comes looking when a story goes quiet, the planner's "push this", and the chance after each chapter). Gauging a person (lenses, questions, "how will they take it?") is phase 4.
 
 ```
  you write ──► find the story ──► margin notes ──► code checks ──► one card ──► YES ──► chapter + twists + tasks + calls + hunches
@@ -45,6 +45,28 @@ A person is learned once and used in every story they're part of, in any workspa
 - **Two records, one person:** `POST /v1/characters/{id}/merge {into}` moves the parts, scenes, tasks and calls across and keeps every number.
 - **Workspaces:** a workspace's assistant sees who someone is if they're in one of its stories, but only the parts and scenes of its own stories. `tests/test_cast.py` puts a canary in a personal scene and checks the S&B bot never reads it.
 
+## The editor: when a story goes quiet
+
+Each story has a pace: brisk (7 days), steady (14) or slow (30). With the evening plan, the editor looks at every story against its own pace since its last chapter, and climbs a ladder, one step per pace of quiet:
+
+| Quiet for | It sends | A tap does |
+| --- | --- | --- |
+| 1× its pace | "Previously…" (the last chapter in a line, where it is, what it waits on) and one question: a hunch whose moment has come, else an open step ("Did this happen?"), else "What's happened since?" | settles the hunch · marks the step done or drops it · asks for the chapter |
+| 2× | Three ways the next chapter could start, each a real move | **books its step** at once (a call to someone in the cast carries their number) |
+| 3× | "Imagine it's a month from now and the ending didn't happen. What went wrong?" | they didn't deliver → books a chase · I didn't push → books the next push · the answer was no → plan B as a twist |
+| 4× | "Is this still the ending you want?" | keep it · rewrite it · rest the story · The End |
+
+- **Kept polite.** At most one ladder message a day per workspace, on that workspace's planner bot (or your general bot). Each step is sent once; a new chapter starts the ladder again. **Not now** leaves a story for its pace. A story **waiting** on someone until a date has its clock paused until then. A resting or ended story never asks.
+- **The writers' room.** Once a week (Sunday by default), one message per workspace: what moved, what went quiet, hunches waiting, and the story that deserves your next hour, with a button for ways to start it.
+- **Rules in code, words from you.** How quiet a story is, which step is due, the question asked and the push score are plain code (`app/domain/editor.py`). "Previously…" is built from your own last chapter. The only AI job here is `next_openings`, and if it fails the editor uses its own three openings (ask the last person in the story, list what the next checkpoint needs, set a day to look again).
+- **Settings:** `GET /v1/agent/editor` (each story's pace, quiet days, step and push score), `PUT /v1/agent/editor/settings {enabled, roomDay}`, `POST /v1/agent/editor/run` to run it now. It runs with the evening plan, so the evening plan must be on.
+
+## Which story to push, and the chance
+
+- **Push score** = chance × stakes × ready (0.2 while waiting) × soon (1.5 with a checkpoint date or step due within 7 days) × quiet (1.3 once behind its pace). The evening plan gets a **Push this** section with the top story, why, and its next step. Ask any time: "Which story should I push?"
+- **The chance after a chapter.** When a story has a chance and a chapter moves it, the `suggest_chance` job proposes the new figure on the chapter's card ("60% → 52%, another document. Say if you see it differently."). It never moves it more than 20 points. The timeline keeps the trend (`chanceTrend`).
+- **Changing a story** (its ending, chance, stakes, pace, rest it, end it, what it waits on) is a card too: "Home loan: the new ending is disbursed by April".
+
 ## Writing a chapter
 
 - **On Telegram or in a chat:** tell the assistant what happened, e.g. "Home loan: the agent called, the bank wants Form 16 for two years. I'll write to HR on Monday." The **Story editor** agent (or the daily planner, which has the same tools) passes your words untouched to `write_chapter`. You get a card with the margin notes; **YES** writes it all. A voice note works the same way.
@@ -55,7 +77,7 @@ Your words are never rewritten. The AI writes margin notes, and only notes it ca
 
 ## The AI jobs (built to outlast the model)
 
-Two small jobs, each with a written contract in `services/agent/app/domain/story_jobs.py`:
+Four small jobs, each with a written contract in `services/agent/app/domain/story_jobs.py`: `find_story` and `margin_notes` below, `next_openings` (the editor's three ways to start) and `suggest_chance` (checked to 0–100, at most 20 points from the last figure).
 
 | Job | Sees | Returns | Checked by code |
 | --- | --- | --- | --- |
@@ -72,7 +94,7 @@ How they stay good on cheap models:
 
 ### Testing a model before switching to it
 
-The test sets are `services/agent/evals/margin_notes.jsonl` and `find_story.jsonl`: chapters and messages with what an editor who agrees with you would note. Score any model on them:
+The test sets are `services/agent/evals/<job>.jsonl`, one per job: chapters and messages with what an editor who agrees with you would note. Score any model on them:
 
 ```bash
 cd services/agent
@@ -89,4 +111,4 @@ A story belongs to one workspace. A workspace's assistant sees only its own stor
 
 ## Deploying this version
 
-`./deploy.sh` runs migrations `practice 0007` (the `stories`, `chapters` and `arc_templates` tables) and `practice 0008` (the cast: `characters`, `parts`, `scenes`, and `characterId` on tasks and follow-ups). Nothing else to set up: the jobs use the model you already chose for your agents until you give them their own.
+`./deploy.sh` runs migrations `practice 0007` (the `stories`, `chapters` and `arc_templates` tables) and `practice 0008` (the cast: `characters`, `parts`, `scenes`, and `characterId` on tasks and follow-ups), and `agent 0023` (the editor's memory). Nothing else to set up: the jobs use the model you already chose for your agents until you give them their own.

@@ -16,7 +16,7 @@ from app.application.aijobs import JobRunner
 from app.application.ports import DataGateway
 from app.domain import proposals as p
 from app.domain.aijobs import JobResult
-from app.domain.story_jobs import FIND_STORY, MARGIN_NOTES, empty_notes, same_name, story_named
+from app.domain.story_jobs import FIND_STORY, MARGIN_NOTES, SUGGEST_CHANCE, empty_notes, same_name, story_named
 
 Offer = Callable[[str, str, list[str], list[dict[str, Any]]], Awaitable[str]]
 Runners = Callable[[str], JobRunner | None]
@@ -187,10 +187,23 @@ def card_lines(story: dict[str, Any], body: dict[str, Any], result: JobResult, p
     return lines
 
 
+async def suggest_chance(runner: JobRunner | None, story: dict[str, Any], chapters: list[dict[str, Any]], prose: str, beat: str) -> dict[str, Any] | None:
+    """The chance of the ending after this chapter, when the story has one and the chapter moved it. The person decides on the card."""
+    if runner is None or not isinstance(story.get("chance"), int) or beat in ("note", "lull"):
+        return None
+    history = [c["chanceAfter"] for c in chapters if isinstance(c.get("chanceAfter"), int)][-6:]
+    result = await runner.run(SUGGEST_CHANCE, {"title": story.get("title", ""), "ending": story.get("ending", ""), "chance": story["chance"],
+                                              "history": history, "beat": beat, "prose": prose})
+    return result.output if result.ok and result.output["chance"] != story["chance"] else None
+
+
 async def propose_chapter(offer: Offer, story: dict[str, Any], body: dict[str, Any], result: JobResult,
-                          people: list[dict[str, Any]] | None = None) -> tuple[str, str, list[str]]:
+                          people: list[dict[str, Any]] | None = None, chance: dict[str, Any] | None = None) -> tuple[str, str, list[str]]:
     title = f"Chapter for “{story.get('title', '')}”" + (f": {body['title']}" if body.get("title") else "")
     lines = card_lines(story, body, result, people)
+    if chance:
+        lines.insert(len(lines) - 1 - (0 if result.ok and not result.dropped else 1), f"Chance of the ending: {story['chance']}% → {chance['chance']}%"
+                     + (f" ({chance['reason']})" if chance.get("reason") else "") + ". Say if you see it differently.")
     pid = await offer("chapter.write", title, lines, [{"chapter": {"story": story["id"], "body": body}}])
     return pid, title, lines
 
@@ -213,6 +226,9 @@ async def draft_chapter(data: DataGateway, runners: Runners, offer: Offer, *, pr
     result = await read_notes(runners(MARGIN_NOTES.name), story, chapters, prose, today, day, cast)
     people = resolve_people(result.output.get("people", []), cast, characters, lambda: str(uuid.uuid4()))
     body = to_body(result.output, prose, title=title, day=day, source=source, people=people)
-    pid, card_title, lines = await propose_chapter(offer, story, body, result, people)
+    chance = await suggest_chance(runners(SUGGEST_CHANCE.name), story, chapters, prose, body["beat"])
+    if chance:
+        body["chanceAfter"] = chance["chance"]
+    pid, card_title, lines = await propose_chapter(offer, story, body, result, people, chance)
     return {"proposed": True, "id": pid, "story": {"id": story["id"], "title": story.get("title", "")}, "title": card_title, "lines": lines,
             "notes": result.output, "dropped": result.dropped, "notesOk": result.ok, "model": result.model}
