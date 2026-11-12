@@ -67,7 +67,7 @@ Uploaded files live in the `stiamo-files` Docker volume; include it in your back
 | --- | --- |
 | `/v1/auth/*`, `/v1/users/*` | identity |
 | `/v1/collections/*` | records |
-| `/v1/tasks`, `/v1/follow-ups`, `/v1/meetings`, `/v1/cases`, `/v1/hearings`, `/v1/plans`, `/v1/goals`, `/v1/counsel`, `/v1/clients`, `/v1/projects`, `/v1/links`, `/v1/activity`, `/v1/outcomes`, `/v1/agenda`, `/v1/relations`, `/v1/steps` | practice |
+| `/v1/tasks`, `/v1/follow-ups`, `/v1/meetings`, `/v1/cases`, `/v1/hearings`, `/v1/plans`, `/v1/goals`, `/v1/counsel`, `/v1/clients`, `/v1/projects`, `/v1/links`, `/v1/activity`, `/v1/outcomes`, `/v1/agenda`, `/v1/relations`, `/v1/steps`, `/v1/stories`, `/v1/chapters`, `/v1/arc-templates`, `/v1/characters`, `/v1/parts`, `/v1/scenes`, `/v1/evidence`, `/v1/lenses` | practice |
 | `/v1/attachments/*`, `/v1/files/*` | files |
 
 The frontend uses `https://stiamo-be.fullstackarthur.com` as its single API base URL, and its origin goes in `CORS_ORIGINS`.
