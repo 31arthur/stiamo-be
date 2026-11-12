@@ -14,7 +14,9 @@ Minutes = Annotated[int, Field(ge=0, le=1439)]
 Duration = Annotated[int, Field(gt=0, le=60 * 24 * 7)]
 
 Workspace = Literal["personal", "sb", "fsa", "media"]
-EntityKind = Literal["task", "meeting", "followUp", "case", "hearing", "plan", "goal", "counsel", "client", "project"]
+EntityKind = Literal[
+    "task", "meeting", "followUp", "case", "hearing", "plan", "goal", "counsel", "client", "project", "story", "chapter", "arcTemplate"
+]
 CaseType = Literal["pow", "public_interest", "industrial_dispute", "minimum_wages", "workmen_compensation", "other"]
 OutcomeStatus = Literal["open", "done", "partial", "not_done", "cancelled"]
 

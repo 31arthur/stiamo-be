@@ -22,7 +22,7 @@ RECENT = timedelta(minutes=30)
 YES = {"yes", "y", "yep", "yeah", "ok", "okay", "approve", "approved", "confirm", "do it", "go ahead", "save", "save it", "sure"}
 NO = {"no", "n", "nope", "cancel", "drop", "dismiss", "discard", "don't", "dont", "never mind", "nevermind"}
 #: Only these collections can be changed by approving; each is a record the practice service already accepts from the owner.
-TABLES = ("tasks", "follow-ups", "cases", "hearings", "plans")
+TABLES = ("tasks", "follow-ups", "cases", "hearings", "plans", "stories")
 UPDATABLE = ("tasks", "follow-ups")
 
 
@@ -69,6 +69,9 @@ class ProposalService:
                 if "meeting" in op:  # an event found in an email: approving it puts it in the calendar
                     await data.create_meeting(dict(op["meeting"]))
                     continue
+                if "chapter" in op:  # a chapter of a story, with what was read from it: approving writes it all in one step (by id, so a retry never doubles)
+                    await data.write_chapter(str(op["chapter"]["story"]), dict(op["chapter"]["body"]))
+                    continue
                 if "mail" in op:  # an email drafted by a workflow: approving it is what sends it
                     await data.mail_send(str(op["mail"]["account"]), dict(op["mail"]["message"]))
                     continue
@@ -92,7 +95,7 @@ class ProposalService:
             raise ValidationFailed(str(exc)) from exc
         p.status, p.decided_at = "applied", self._now()
         await self._repo.save(p)
-        if any(op.get("table") in ("tasks", "follow-ups", "hearings") for op in p.ops):
+        if any(op.get("table") in ("tasks", "follow-ups", "hearings") or (op.get("chapter") or {}).get("body", {}).get("steps") for op in p.ops):
             await data.calendar_sync()  # what was just saved reaches Google now, not at the next background sync (a failure is not this one's)
         return self.view(p)
 

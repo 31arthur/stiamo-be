@@ -337,3 +337,55 @@ class HearingCaseModel(Base):
         ForeignKeyConstraint(["user_id", "case_id"], ["legal_cases.user_id", "legal_cases.id"], ondelete="CASCADE"),
         Index("ix_hearing_cases_case", "user_id", "case_id"),
     )
+
+
+class StoryModel(Owned, Base):
+    """A story the owner writes. Its checkpoints, bible and links are small ordered lists kept with it."""
+
+    __tablename__ = "stories"
+    title: Mapped[str] = mapped_column(String(300))
+    workspace: Mapped[str] = mapped_column(String(10))
+    ending: Mapped[str] = mapped_column(Text, default="")
+    stakes: Mapped[int] = mapped_column(Integer, default=3)
+    stakes_amount: Mapped[str | None] = mapped_column(String(200))
+    chance: Mapped[int | None] = mapped_column(Integer)
+    pacing: Mapped[str] = mapped_column(String(10))
+    state: Mapped[str] = mapped_column(String(10))
+    waiting_on: Mapped[str | None] = mapped_column(Text)
+    waiting_until: Mapped[str | None] = mapped_column(String(10))
+    checkpoints: Mapped[list[dict[str, Any]]] = mapped_column(Json)
+    bible: Mapped[list[dict[str, Any]]] = mapped_column(Json)
+    links: Mapped[list[dict[str, Any]]] = mapped_column(Json)
+    recap: Mapped[str] = mapped_column(Text, default="")
+    ended_on: Mapped[str | None] = mapped_column(String(10))
+    __table_args__ = (Index("ix_stories_workspace", "user_id", "workspace"), sync_index("stories"))
+
+
+class ChapterModel(Owned, Base):
+    __tablename__ = "chapters"
+    story_id: Mapped[str] = mapped_column(String(64))
+    number: Mapped[int] = mapped_column(Integer)
+    date: Mapped[str] = mapped_column(String(10))
+    title: Mapped[str] = mapped_column(String(300), default="")
+    prose: Mapped[str] = mapped_column(Text)
+    beat: Mapped[str] = mapped_column(String(14))
+    source: Mapped[str] = mapped_column(String(10))
+    chance_after: Mapped[int | None] = mapped_column(Integer)
+    notes: Mapped[list[dict[str, Any]]] = mapped_column(Json)
+    hunches: Mapped[list[dict[str, Any]]] = mapped_column(Json)
+    cliffhanger: Mapped[dict[str, Any] | None] = mapped_column(Json)
+    people: Mapped[list[dict[str, Any]]] = mapped_column(Json)
+    __table_args__ = (
+        ForeignKeyConstraint(["user_id", "story_id"], ["stories.user_id", "stories.id"], ondelete="CASCADE"),
+        Index("ix_chapters_story", "user_id", "story_id", "number"),
+        sync_index("chapters"),
+    )
+
+
+class ArcTemplateModel(Owned, Base):
+    __tablename__ = "arc_templates"
+    name: Mapped[str] = mapped_column(String(200))
+    workspace: Mapped[str] = mapped_column(String(10))
+    checkpoints: Mapped[list[str]] = mapped_column(Json)
+    ending: Mapped[str] = mapped_column(Text, default="")
+    __table_args__ = (sync_index("arc_templates"),)

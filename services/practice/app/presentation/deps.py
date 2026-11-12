@@ -13,6 +13,7 @@ from app.application.use_cases.cases import CaseUseCases, CounselUseCases, Heari
 from app.application.use_cases.directory import ClientUseCases, project_crud
 from app.application.use_cases.history import HistoryUseCases
 from app.application.use_cases.plans import GoalUseCases, PlanUseCases
+from app.application.use_cases.stories import ChapterUseCases, StoryUseCases, StoryWriting, arc_template_crud
 from app.application.use_cases.views import AgendaUseCases, RelationUseCases
 from app.application.use_cases.work import FollowUpUseCases, MeetingUseCases, RecordOutcome, task_crud
 from app.config import get_settings
@@ -103,6 +104,22 @@ def agenda_service(env: EnvDep) -> AgendaUseCases:
 
 def history_service(env: EnvDep) -> HistoryUseCases:
     return HistoryUseCases(env)
+
+
+def story_service(env: EnvDep) -> StoryUseCases:
+    return StoryUseCases(env)
+
+
+def chapter_service(env: EnvDep) -> ChapterUseCases:
+    return ChapterUseCases(env)
+
+
+def arc_template_service(env: EnvDep) -> Crud:
+    return arc_template_crud(env)
+
+
+def story_writing(env: EnvDep) -> StoryWriting:
+    return StoryWriting(env)
 
 
 current_principal = make_principal_dependency(lambda: get_settings().token_settings())

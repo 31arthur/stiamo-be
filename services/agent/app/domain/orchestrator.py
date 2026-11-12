@@ -30,6 +30,7 @@ _STOP = frozenset("the a an and or of to for in on at is are was be it this that
 #: What each agent is known for, in the words people use. An agent not listed here is still matched on its own description and suggestions.
 KEYWORDS: dict[str, tuple[str, ...]] = {
     "daily-planner": ("plan", "schedule", "tomorrow", "today", "day", "free", "busy", "agenda", "arrange", "reschedule", "task", "add a task", "move", "morning", "afternoon", "evening", "call", "ring", "phone", "follow-up", "followup", "follow up", "chase", "callback", "call back", "who should i call", "no answer", "promised", "due", "deadline", "this week", "coming up", "attention", "upcoming", "missed", "overdue", "clash"),
+    "stories": ("story", "stories", "chapter", "checkpoint", "twist", "plot", "ending", "hunch", "cliffhanger", "what happened", "update on", "previously"),
     "cases": ("case", "cases", "find", "search", "document", "documents", "drive", "letter", "reference", "petition", "party", "client", "prepare", "prep", "hearing", "last order", "carry", "bring", "bench", "court", "arguments", "brief"),
 }
 

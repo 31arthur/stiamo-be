@@ -24,6 +24,7 @@ TABLES: dict[str, str] = {
     "meetings": "/v1/meetings",
     "clients": "/v1/clients",
     "projects": "/v1/projects",
+    "stories": "/v1/stories",
 }
 
 MAX_ITEMS = 500

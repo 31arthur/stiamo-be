@@ -48,6 +48,7 @@ from app.presentation.routers import (
     proposals,
     reminders,
     secrets,
+    stories,
     themes,
     usage,
     webhooks,
@@ -219,6 +220,7 @@ def create_app(settings: Settings | None = None, *, mail_events=None, registry=N
     app.include_router(dayplans.router)
     app.include_router(availability.router)
     app.include_router(proposals.router)
+    app.include_router(stories.router)
     app.include_router(reminders.router)
     app.include_router(secrets.router)
     app.include_router(themes.router)

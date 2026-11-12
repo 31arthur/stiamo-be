@@ -102,6 +102,13 @@ class Memo(DataGateway):
     async def records(self, table):
         return await self._once(f"records:{table}", lambda: self._inner.records(table))
 
+    async def chapters(self, story_id):
+        return await self._once(f"chapters:{story_id}", lambda: self._inner.chapters(story_id))
+
+    async def write_chapter(self, story_id, body):
+        self._memo = {k: v for k, v in self._memo.items() if not k.startswith(("chapters:", "records:"))}  # what was read before is stale now
+        return await self._inner.write_chapter(story_id, body)
+
     async def mail_uids(self, account_id, folder, since, before):
         return await self._inner.mail_uids(account_id, folder, since, before)
 
@@ -437,7 +444,8 @@ class AgentService:
             data = PlannerData(data, scope)  # an agent that plans a workspace's day chooses from its own work, around everything else on the day
         elif scope:
             data = ScopedData(data, scope)  # a workspace's assistant sees that workspace's data only
-        ctx = PackContext(data, today, decisions, decision.get("modelId") or DECISION_MODELS[0]["id"], lambda: self._waiting(who, scope), self._proposer(who, agent.id, channel_id), channel != "the evening plan", scope)
+        ctx = PackContext(data, today, decisions, decision.get("modelId") or DECISION_MODELS[0]["id"], lambda: self._waiting(who, scope), self._proposer(who, agent.id, channel_id), channel != "the evening plan", scope,
+                          jobs=self.job_runners(s))
         tools: list[Tool] = []
         tool_packs: dict[str, str] = {}
         context: dict[str, Any] = {"today": today, "user": who.name, "channel": channel}
@@ -451,6 +459,63 @@ class AgentService:
         if len(names) != len(set(names)):
             raise RuntimeError(f"Agent {agent.id!r} gets the same tool name from two packs: {sorted({n for n in names if names.count(n) > 1})}")
         return Prepared(s, prompt or self._prompt(agent, s), tools, context, tool_packs, scope or "", data)
+
+    def job_runners(self, s: UserSettings):
+        """Runners for AI jobs: each on its own model when one was chosen for it (selection `job:<name>`), else the one chosen last."""
+        from app.application.aijobs import job_key, runner_for
+
+        return lambda name: runner_for(selection_of(s, job_key(name))[0], s.keys, self._llm)
+
+    async def draft_chapter(self, who: Who, token: str, *, prose: str, story: str | None, title: str | None = None, day: str | None = None, source: str = "app") -> dict[str, Any]:
+        """The app's writing view: the same path as a chapter told on the phone, ending in a card to approve."""
+        from app.application.stories import draft_chapter
+        from app.domain import proposals as pr
+
+        s = await self._load(who)
+        offer = self._proposer(who, "stories", None)
+        if offer is None:
+            raise ValidationFailed("Chapters can't be proposed here.")
+        try:
+            return await draft_chapter(self._data(token), self.job_runners(s), offer, prose=prose, today=local_today(s).isoformat(),
+                                       story_key=story, title=title, day=day, source=source)
+        except pr.Bad as exc:
+            raise ValidationFailed(str(exc)) from exc
+        except AiError as exc:
+            raise ValidationFailed(str(exc)) from exc
+
+    async def job_models(self, who: Who) -> list[dict[str, Any]]:
+        """Every AI job, what it does, and the model it runs on (its own, or the one chosen last)."""
+        from app.application.aijobs import job_key
+        from app.domain.story_jobs import JOBS
+
+        s = await self._load(who)
+        out = []
+        for job in JOBS.values():
+            sel, shared = selection_of(s, job_key(job))
+            out.append({"name": job.name, "version": job.version, "purpose": job.purpose, "selection": sel, "ownChoice": not shared})
+        return out
+
+    async def set_job_model(self, who: Who, job_name: str, provider: str | None, model_id: str | None, thinking: str = "off") -> None:
+        """Puts one AI job on its own model (a cheap one is usually enough). No provider: it goes back to the model chosen last."""
+        from app.application.aijobs import job_key
+        from app.domain.story_jobs import JOBS
+
+        if job_name not in JOBS:
+            raise NotFound("No such AI job.")
+        s = await self._load(who)
+        if not provider:
+            s.selections = {k: v for k, v in s.selections.items() if k != job_key(job_name)}
+            await self._repo.save(s)
+            return
+        self._provider(provider)
+        if provider not in s.keys:
+            raise ValidationFailed("Add a key for that provider first.")
+        if thinking not in THINKING_LEVELS:
+            raise ValidationFailed("Unknown thinking level.")
+        if not (model_id or "").strip():
+            raise ValidationFailed("Choose a model.")
+        s.selections = {**s.selections, job_key(job_name): {"providerId": provider, "modelId": model_id.strip(), "thinking": thinking}}
+        await self._repo.save(s)
 
     def _proposer(self, who: Who, agent_id: str, channel_id: str | None):
         """What an agent's propose tools call to keep a proposal for the person to approve. None when proposals aren't kept here."""

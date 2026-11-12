@@ -9,7 +9,7 @@ from stiamo_common.errors import install_error_handlers
 from app.application.ports import FilesClient, NoFiles
 from app.config import Settings, get_settings
 from app.infrastructure.files_client import HttpFilesClient
-from app.presentation.routers import directory, history, legal, plans, views, work
+from app.presentation.routers import directory, history, legal, plans, stories, views, work
 
 
 def create_app(settings: Settings | None = None, *, files_factory: Callable[[str], FilesClient] | None = None) -> FastAPI:
@@ -34,7 +34,8 @@ def create_app(settings: Settings | None = None, *, files_factory: Callable[[str
 
     for router in (legal.views, views.router, legal.cases, legal.hearings, legal.extra, directory.counsel, directory.clients, directory.extra, directory.projects, history.router,
                    work.tasks, work.follow_ups, work.meetings, work.extra,
-                   plans.plans, plans.goals, plans.extra):
+                   plans.plans, plans.goals, plans.extra,
+                   stories.extra, stories.stories, stories.chapters, stories.arc_templates):
         app.include_router(router)
 
     @app.get("/health", tags=["ops"])
