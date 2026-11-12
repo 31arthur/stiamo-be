@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from app.domain.cases import Hearing, LegalCase, hearing_case_ids
+from app.domain.cast import Character, Part
 from app.domain.common import EntityRef
 from app.domain.directory import Client, Counsel, Project
 from app.domain.goals import Goal
@@ -15,7 +16,7 @@ from app.domain.work import FollowUp, Meeting, Task
 
 RelationKind = Literal[
     "step", "about", "spawned", "hearing", "next_hearing", "plan", "prep", "goal", "counsel", "project", "linked",
-    "story", "chapter",
+    "story", "chapter", "cast",
 ]
 Direction = Literal["parent", "child", "peer"]
 
@@ -58,6 +59,8 @@ class GraphSources:
     links: list[Link] = field(default_factory=list)
     stories: list[Story] = field(default_factory=list)
     chapters: list[Chapter] = field(default_factory=list)
+    characters: list[Character] = field(default_factory=list)
+    parts: list[Part] = field(default_factory=list)
 
 
 @dataclass
@@ -97,7 +100,7 @@ class RelationGraph:
         for kind, items in (("task", src.tasks), ("meeting", src.meetings), ("followUp", src.follow_ups),
                             ("case", src.cases), ("hearing", src.hearings), ("plan", src.plans), ("goal", src.goals),
                             ("counsel", src.counsel), ("client", src.clients), ("project", src.projects),
-                            ("story", src.stories), ("chapter", src.chapters)):
+                            ("story", src.stories), ("chapter", src.chapters), ("character", src.characters)):
             self._exists.update((kind, e.id) for e in items)
 
         for t in src.tasks:
@@ -156,6 +159,14 @@ class RelationGraph:
                 self._add(("story", st.id), key_of(r), "story")
         for ch in src.chapters:
             self._add(("story", ch.story_id), ("chapter", ch.id), "chapter")
+        for pt in src.parts:
+            self._add(("story", pt.story_id), ("character", pt.character_id), "cast")
+        for t in src.tasks:
+            if t.character_id:
+                self._add(("character", t.character_id), ("task", t.id), "about")
+        for f in src.follow_ups:
+            if f.character_id:
+                self._add(("character", f.character_id), ("followUp", f.id), "about")
         for link in src.links:
             edge = Edge(key_of(link.a), key_of(link.b), "linked", link.id)
             self._peers[key_of(link.a)].append(edge)

@@ -127,6 +127,7 @@ class TaskModel(Owned, OutcomeCols, Base):
     related_id: Mapped[str | None] = mapped_column(String(64))
     contact: Mapped[str | None] = mapped_column(String(300))
     contact_id: Mapped[str | None] = mapped_column(String(80))
+    character_id: Mapped[str | None] = mapped_column(String(64))
     __table_args__ = (
         Index("ix_tasks_due", "user_id", "due_date"),
         Index("ix_tasks_slot", "user_id", "slot_date"),
@@ -144,6 +145,7 @@ class FollowUpModel(Owned, OutcomeCols, Base):
     workspace: Mapped[str] = mapped_column(String(10))
     contact: Mapped[str | None] = mapped_column(String(300))
     contact_id: Mapped[str | None] = mapped_column(String(80))
+    character_id: Mapped[str | None] = mapped_column(String(64))
     due_date: Mapped[str | None] = mapped_column(String(10))
     due_time: Mapped[int | None] = mapped_column(Integer)
     duration: Mapped[int] = mapped_column(Integer)
@@ -389,3 +391,58 @@ class ArcTemplateModel(Owned, Base):
     checkpoints: Mapped[list[str]] = mapped_column(Json)
     ending: Mapped[str] = mapped_column(Text, default="")
     __table_args__ = (sync_index("arc_templates"),)
+
+
+class CharacterModel(Owned, Base):
+    """A person in the cast, shared by every story they are part of."""
+
+    __tablename__ = "characters"
+    name: Mapped[str] = mapped_column(String(200))
+    organisation: Mapped[str | None] = mapped_column(String(300))
+    title: Mapped[str | None] = mapped_column(String(200))
+    phones: Mapped[list[str]] = mapped_column(Json)
+    emails: Mapped[list[str]] = mapped_column(Json)
+    google_contact_id: Mapped[str | None] = mapped_column(String(80))
+    home: Mapped[str] = mapped_column(String(10))
+    __table_args__ = (sync_index("characters"),)
+
+
+class PartModel(Owned, Base):
+    """The part a character plays in one story; it belongs to the story's workspace."""
+
+    __tablename__ = "parts"
+    character_id: Mapped[str] = mapped_column(String(64))
+    story_id: Mapped[str] = mapped_column(String(64))
+    workspace: Mapped[str] = mapped_column(String(10))
+    part: Mapped[str] = mapped_column(String(200), default="")
+    known_as: Mapped[list[str]] = mapped_column(Json)
+    stance: Mapped[str | None] = mapped_column(String(10))
+    sway: Mapped[str | None] = mapped_column(String(10))
+    __table_args__ = (
+        ForeignKeyConstraint(["user_id", "character_id"], ["characters.user_id", "characters.id"], ondelete="CASCADE"),
+        ForeignKeyConstraint(["user_id", "story_id"], ["stories.user_id", "stories.id"], ondelete="CASCADE"),
+        UniqueConstraint("user_id", "character_id", "story_id", name="uq_parts_character_story"),
+        Index("ix_parts_story", "user_id", "story_id"),
+        sync_index("parts"),
+    )
+
+
+class SceneModel(Owned, Base):
+    """What a character did in a story, kept in the story's workspace."""
+
+    __tablename__ = "scenes"
+    character_id: Mapped[str] = mapped_column(String(64))
+    story_id: Mapped[str] = mapped_column(String(64))
+    workspace: Mapped[str] = mapped_column(String(10))
+    chapter_id: Mapped[str | None] = mapped_column(String(64))
+    date: Mapped[str] = mapped_column(String(10))
+    text: Mapped[str] = mapped_column(Text)
+    quote: Mapped[str | None] = mapped_column(Text)
+    source: Mapped[str] = mapped_column(String(10))
+    __table_args__ = (
+        ForeignKeyConstraint(["user_id", "character_id"], ["characters.user_id", "characters.id"], ondelete="CASCADE"),
+        ForeignKeyConstraint(["user_id", "story_id"], ["stories.user_id", "stories.id"], ondelete="CASCADE"),
+        Index("ix_scenes_character", "user_id", "character_id", "date"),
+        Index("ix_scenes_story", "user_id", "story_id"),
+        sync_index("scenes"),
+    )

@@ -40,6 +40,8 @@ class Task(Entity):
     contact: str | None = None
     #: The Google contact it points at (see the contacts page), so a person's calls can be found together. The line above stays what is shown.
     contact_id: str | None = None
+    #: The character in the cast it is about (see domain/cast.py), so their number and their stories are a tap away.
+    character_id: str | None = None
     outcome: Outcome = Field(default_factory=Outcome)
 
 
@@ -74,6 +76,7 @@ class FollowUp(Entity):
     workspace: Workspace = "personal"
     contact: str | None = None
     contact_id: str | None = None
+    character_id: str | None = None
     #: Optional: a follow-up can simply be pending, or due on a day, or at a specific time.
     due: DueDate | None = None
     duration: Duration = 15

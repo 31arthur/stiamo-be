@@ -146,7 +146,7 @@ def _task_to_row(t: Task) -> dict[str, Any]:
     return {
         **base_row(t), "title": t.title, "notes": t.notes, "workspace": t.workspace, "priority": t.priority,
         "due_date": t.due_date, **slot_to_cols(t.slot), "estimate": t.estimate, "plan_id": t.plan_id,
-        "step_order": t.order, **ref_to_cols(t.related, "related"), "contact": t.contact, "contact_id": t.contact_id, **outcome_to_cols(t.outcome),
+        "step_order": t.order, **ref_to_cols(t.related, "related"), "contact": t.contact, "contact_id": t.contact_id, "character_id": t.character_id, **outcome_to_cols(t.outcome),
     }
 
 
@@ -154,13 +154,13 @@ def _task_from_row(m: TaskModel) -> Task:
     return Task(
         **base_fields(m), title=m.title, notes=m.notes, workspace=m.workspace, priority=m.priority,
         due_date=m.due_date, slot=slot_from_cols(m), estimate=m.estimate, plan_id=m.plan_id, order=m.step_order,
-        related=ref_from_cols(m, "related"), contact=m.contact, contact_id=m.contact_id, outcome=outcome_from_cols(m),
+        related=ref_from_cols(m, "related"), contact=m.contact, contact_id=m.contact_id, character_id=m.character_id, outcome=outcome_from_cols(m),
     )
 
 
 def _follow_up_to_row(f: FollowUp) -> dict[str, Any]:
     return {
-        **base_row(f), "title": f.title, "channel": f.channel, "workspace": f.workspace, "contact": f.contact, "contact_id": f.contact_id,
+        **base_row(f), "title": f.title, "channel": f.channel, "workspace": f.workspace, "contact": f.contact, "contact_id": f.contact_id, "character_id": f.character_id,
         "due_date": f.due.date if f.due else None, "due_time": f.due.time if f.due else None,
         "duration": f.duration, **ref_to_cols(f.subject, "subject"), "trigger": f.trigger, "notes": f.notes,
         "attempts": _dump_list(f.attempts), "plan_id": f.plan_id, "step_order": f.order,
@@ -170,7 +170,7 @@ def _follow_up_to_row(f: FollowUp) -> dict[str, Any]:
 
 def _follow_up_from_row(m: FollowUpModel) -> FollowUp:
     return FollowUp(
-        **base_fields(m), title=m.title, channel=m.channel, workspace=m.workspace, contact=m.contact, contact_id=m.contact_id,
+        **base_fields(m), title=m.title, channel=m.channel, workspace=m.workspace, contact=m.contact, contact_id=m.contact_id, character_id=m.character_id,
         due=DueDate(date=m.due_date, time=m.due_time) if m.due_date else None, duration=m.duration,
         subject=ref_from_cols(m, "subject"), trigger=m.trigger, notes=m.notes,
         attempts=[Attempt.model_validate(a) for a in m.attempts] if m.attempts else None,

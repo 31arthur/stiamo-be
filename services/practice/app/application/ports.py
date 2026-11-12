@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import Generic, TypeVar
 
 from app.domain.cases import Hearing, LegalCase
+from app.domain.cast import Character, Part, Scene
 from app.domain.common import Entity, EntityRef, to_iso
 from app.domain.directory import Client, Counsel, Project
 from app.domain.goals import Goal
@@ -103,6 +104,9 @@ class Stores:
     story: Repository[Story]
     chapter: Repository[Chapter]
     arc_template: Repository[ArcTemplate]
+    character: Repository[Character]
+    part: Repository[Part]
+    scene: Repository[Scene]
 
 
 @dataclass

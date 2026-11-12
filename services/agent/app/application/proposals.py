@@ -69,6 +69,9 @@ class ProposalService:
                 if "meeting" in op:  # an event found in an email: approving it puts it in the calendar
                     await data.create_meeting(dict(op["meeting"]))
                     continue
+                if "cast" in op:  # someone joining the cast (found by phone before a new character is made), with their part in a story
+                    await data.join_cast(dict(op["cast"]))
+                    continue
                 if "chapter" in op:  # a chapter of a story, with what was read from it: approving writes it all in one step (by id, so a retry never doubles)
                     await data.write_chapter(str(op["chapter"]["story"]), dict(op["chapter"]["body"]))
                     continue

@@ -15,8 +15,10 @@ from stiamo_common.errors import ValidationFailed
 
 from app.application.crud import Crud
 from app.application.ports import Env
+from app.application.use_cases.cast import CastUseCases, JoinCast, SceneIn
 from app.application.use_cases.work import FollowUpUseCases, task_crud
 from app.domain.cases import Hearing, hearing_case_ids, is_diary_entry
+from app.domain.cast import Character, Part, dial_line, same_name
 from app.domain.common import DomainModel, Duration, EntityRef, ISODate, draft_of
 from app.domain.rules import blank_to_none, required, unique
 from app.domain.stories import (
@@ -92,6 +94,11 @@ class StoryUseCases(Crud[Story]):
         chapters = ChapterUseCases(self.env)
         for c in await self.chapters_of(user_id, id):
             await chapters.repo.remove(user_id, c.id)
+        # The characters stay in the cast; only their part in this story, and its scenes, go with it.
+        for p in [p for p in await self.env.stores.part.list(user_id) if p.story_id == id]:
+            await self.env.stores.part.remove(user_id, p.id)
+        for sc in [x for x in await self.env.stores.scene.list(user_id) if x.story_id == id]:
+            await self.env.stores.scene.remove(user_id, sc.id)
         await super().remove(user_id, id)
 
 
@@ -143,7 +150,25 @@ class Step(DomainModel):
     channel: FollowUpChannel = "call"
     contact: str | None = None
     contact_id: str | None = None
+    #: The character it is about. Without it, a step whose contact names someone in the chapter's people points at them.
+    character_id: str | None = None
     quote: str | None = None
+
+
+class PersonIn(DomainModel):
+    """Someone in the chapter. With `character_id` (or `create`) they are part of the cast: they get a part in this story (if they lack
+    one) and a scene. Without either, they are only named in the chapter."""
+
+    name: str
+    character_id: str | None = None
+    create: bool = False
+    #: The id for a new character, fixed by the caller so a retry never makes two.
+    new_id: str | None = None
+    phones: list[str] = Field(default_factory=list)
+    part: str | None = None
+    scene: str | None = None
+    quote: str | None = None
+    contact_id: str | None = None
 
 
 class HunchIn(DomainModel):
@@ -165,7 +190,7 @@ class WriteChapter(DomainModel):
     twists: list[Twist] = Field(default_factory=list)
     steps: list[Step] = Field(default_factory=list)
     hunches: list[HunchIn] = Field(default_factory=list)
-    people: list[CastMention] = Field(default_factory=list)
+    people: list[PersonIn] = Field(default_factory=list)
     cliffhanger: str | None = None
     #: Earlier chapters whose cliffhanger this one answers.
     answers: list[str] = Field(default_factory=list)
@@ -199,6 +224,7 @@ class Timeline:
     open_follow_ups: list[FollowUp]
     cliffhangers: list[tuple[Chapter, Cliffhanger]]
     hunches: list[tuple[Chapter, Hunch]]
+    cast: list[tuple[Part, Character]] = field(default_factory=list)
 
 
 class StoryWriting:
@@ -208,6 +234,7 @@ class StoryWriting:
         self.chapters = ChapterUseCases(env)
         self.tasks = task_crud(env)
         self.follow_ups = FollowUpUseCases(env)
+        self.cast = CastUseCases(env)
 
     async def write(self, user_id: str, story_id: str, w: WriteChapter) -> Written:
         story = await self.stories.require(user_id, story_id, "Story")
@@ -237,33 +264,62 @@ class StoryWriting:
             checkpoints = insert_checkpoint(checkpoints, Checkpoint(id=cid, title=title, target_date=t.target_date, added_by="twist", chapter_id=chapter_id), t.before)
             notes.append(MarginNote(kind="twist", text=title, quote=t.quote, checkpoint_id=cid))
 
+        # The people in it: found in the cast (or brought into it), each with a part in this story and a scene.
+        day = w.date or (existing.date if existing else today)
+        mentions: list[CastMention] = []
+        named: list[tuple[str, Character]] = []
+        for n, person in enumerate(w.people):
+            name = required(person.name, "A person's name")
+            character = None
+            if person.character_id or person.create:
+                joined = await self.cast.join(user_id, JoinCast(name=name, character_id=person.character_id, id=person.new_id,
+                                                                phones=person.phones, story_id=story.id, part=person.part, known_as=[name]))
+                character = joined.character
+                if person.scene or person.quote:
+                    await self.cast.add_scene(user_id, f"{chapter_id[:56]}-p{n}", story, character, SceneIn(
+                        text=person.scene or "Appears in a chapter", date=day, quote=person.quote, chapter_id=chapter_id))
+                named.append((name, character))
+            mentions.append(CastMention(name=name, character_id=character.id if character else None, contact_id=person.contact_id,
+                                        scene=person.scene, quote=person.quote))
+
+        async def reach(s: Step) -> tuple[Character | None, str | None]:
+            """Who a step is about, and how it shows them: "Name · +91…" when the cast has their number, so the call is a tap away."""
+            c = await self.cast.characters.get(user_id, s.character_id) if s.character_id else None
+            if c is None and s.contact:
+                c = next((ch for nm, ch in named if same_name(nm, s.contact) or same_name(ch.name, s.contact)), None)
+            if c is None:
+                return None, blank_to_none(s.contact)
+            return c, dial_line(c) if c.phones else (blank_to_none(s.contact) or c.name)
+
         # The work it leaves: ordinary tasks and calls pointing at the story, in the story's workspace.
         tasks: list[Task] = []
         follow_ups: list[FollowUp] = []
         for s in w.steps:
             title = required(s.title, "A step's title")
             sid = s.id or self.env.ids.next()
+            who, contact = await reach(s)
             if s.kind == "task":
                 made = await self.tasks.get(user_id, sid)
                 if made is None:
                     made = await self.tasks.save(user_id, sid, TaskDraft(
                         title=title, workspace=story.workspace, due_date=s.due, estimate=s.minutes or 30, related=ref,
-                        contact=blank_to_none(s.contact), contact_id=s.contact_id, notes=f"From “{story.title}”"))
+                        contact=contact, contact_id=s.contact_id, character_id=who.id if who else None, notes=f"From “{story.title}”"))
                 tasks.append(made)
                 notes.append(MarginNote(kind="step", text=title, quote=s.quote, ref=EntityRef(kind="task", id=made.id)))
             else:
                 made_f = await self.follow_ups.get(user_id, sid)
                 if made_f is None:
                     made_f = await self.follow_ups.save(user_id, sid, FollowUpDraft(
-                        title=title, channel=s.channel, workspace=story.workspace, contact=blank_to_none(s.contact),
-                        contact_id=s.contact_id, due={"date": s.due} if s.due else None, duration=s.minutes or 15,
+                        title=title, channel=s.channel, workspace=story.workspace, contact=contact,
+                        contact_id=s.contact_id, character_id=who.id if who else None, due={"date": s.due} if s.due else None, duration=s.minutes or 15,
                         subject=ref, notes=f"From “{story.title}”"))
                 follow_ups.append(made_f)
                 notes.append(MarginNote(kind="step", text=title, quote=s.quote, ref=EntityRef(kind="followUp", id=made_f.id)))
 
         hunches = [Hunch(id=h.id or self.env.ids.next(), text=required(h.text, "A hunch"), quote=h.quote, check_on=h.check_on) for h in w.hunches]
         notes += [MarginNote(kind="hunch", text=h.text, quote=h.quote) for h in hunches]
-        notes += [MarginNote(kind="person", text=p.name + (f": {p.scene}" if p.scene else ""), quote=p.quote) for p in w.people]
+        notes += [MarginNote(kind="person", text=m.name + (f": {m.scene}" if m.scene else ""), quote=m.quote,
+                             ref=EntityRef(kind="character", id=m.character_id) if m.character_id else None) for m in mentions]
         if w.chance_after is not None:
             notes.append(MarginNote(kind="chance", text=f"{story.chance if story.chance is not None else '–'} → {w.chance_after}%"))
         cliff = blank_to_none(w.cliffhanger)
@@ -271,9 +327,9 @@ class StoryWriting:
             notes.append(MarginNote(kind="cliffhanger", text=cliff))
 
         chapter = await self.chapters.save(user_id, chapter_id, ChapterDraft(
-            story_id=story.id, date=w.date or (existing.date if existing else today), title=w.title, prose=prose, beat=w.beat,
+            story_id=story.id, date=day, title=w.title, prose=prose, beat=w.beat,
             source=w.source, chance_after=w.chance_after, notes=notes, hunches=hunches,
-            cliffhanger=Cliffhanger(question=cliff) if cliff else None, people=w.people,
+            cliffhanger=Cliffhanger(question=cliff) if cliff else None, people=mentions,
         ))
 
         # Earlier cliffhangers this chapter answers.
@@ -307,4 +363,5 @@ class StoryWriting:
         tasks = [t for t in await self.env.stores.task.list(user_id) if ref.same_as(t.related) and t.outcome.status == "open"]
         follow_ups = [f for f in await self.env.stores.follow_up.list(user_id) if ref.same_as(f.subject) and f.outcome.status == "open"]
         hunches = [(c, h) for c in chapters for h in c.hunches if h.came_true is None]
-        return Timeline(story, entries, current_checkpoint(story), tasks, follow_ups, open_cliffhangers(chapters), hunches)
+        return Timeline(story, entries, current_checkpoint(story), tasks, follow_ups, open_cliffhangers(chapters), hunches,
+                        await self.cast.cast_of(user_id, story.id))

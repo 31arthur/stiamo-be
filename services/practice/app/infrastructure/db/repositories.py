@@ -4,6 +4,7 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.ports import ActivityRepository, LinkRepository, Stores
+from app.domain.cast import Character, Part, Scene
 from app.domain.common import EntityRef
 from app.domain.directory import Client, Counsel, Project
 from app.domain.history import Activity, Link
@@ -71,4 +72,7 @@ def build_stores(s: AsyncSession) -> Stores:
         story=SqlRepository(s, STORY),
         chapter=SqlRepository(s, CHAPTER),
         arc_template=SqlRepository(s, flat_mapper(models.ArcTemplateModel, ArcTemplate)),
+        character=SqlRepository(s, flat_mapper(models.CharacterModel, Character)),
+        part=SqlRepository(s, flat_mapper(models.PartModel, Part)),
+        scene=SqlRepository(s, flat_mapper(models.SceneModel, Scene)),
     )

@@ -16,7 +16,7 @@ from app.application.aijobs import JobRunner
 from app.application.ports import DataGateway
 from app.domain import proposals as p
 from app.domain.aijobs import JobResult
-from app.domain.story_jobs import FIND_STORY, MARGIN_NOTES, empty_notes, story_named
+from app.domain.story_jobs import FIND_STORY, MARGIN_NOTES, empty_notes, same_name, story_named
 
 Offer = Callable[[str, str, list[str], list[dict[str, Any]]], Awaitable[str]]
 Runners = Callable[[str], JobRunner | None]
@@ -37,14 +37,45 @@ def cast_of(chapters: list[dict[str, Any]]) -> list[str]:
     return list(seen)
 
 
-def brief(story: dict[str, Any], chapters: list[dict[str, Any]]) -> dict[str, Any]:
-    """The story as a job sees it: small, with ids to choose from."""
+def brief(story: dict[str, Any], chapters: list[dict[str, Any]], cast: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """The story as a job sees it: small, with ids to choose from. Its people are the cast with what they're called here, else the names
+    its chapters used."""
     here = here_of(story)
+    people = [m["name"] + (f" (called: {', '.join(m['knownAs'])})" if m.get("knownAs") else "") for m in cast or []] or cast_of(chapters)
     return {
         "id": story["id"], "title": story.get("title", ""), "ending": story.get("ending", ""), "here": here["id"] if here else None,
         "checkpoints": [{"id": c["id"], "title": c.get("title", ""), "status": c.get("status", "ahead")} for c in story.get("checkpoints") or []],
-        "people": cast_of(chapters),
+        "people": people,
     }
+
+
+async def cast_in(data: DataGateway, story_id: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """The story's cast ({characterId, name, knownAs, part}) and every character this workspace can see."""
+    characters = await data.records("characters")
+    by_id = {c["id"]: c for c in characters}
+    cast = [{"characterId": p["characterId"], "name": by_id[p["characterId"]].get("name", ""), "knownAs": p.get("knownAs") or [], "part": p.get("part") or ""}
+            for p in await data.records("parts") if p.get("storyId") == story_id and p.get("characterId") in by_id]
+    return cast, characters
+
+
+def resolve_people(people: list[dict[str, Any]], cast: list[dict[str, Any]], characters: list[dict[str, Any]],
+                   new_id: Callable[[], str]) -> list[dict[str, Any]]:
+    """Who each person a chapter names is, worked out by code: someone in this story's cast (by name or what they're called here), else
+    the one character anywhere with exactly that name, else someone new. Each comes back as the write-chapter request wants them, with
+    `known` saying which it was, for the card."""
+    out = []
+    for x in people:
+        name = x["name"]
+        in_story = [m for m in cast if same_name(name, m["name"]) or any(same_name(name, k) for k in m["knownAs"])]
+        elsewhere = [c for c in characters if same_name(name, c.get("name"))]
+        base = {"name": name, "scene": x.get("scene"), "quote": x.get("quote")}
+        if len(in_story) == 1:
+            out.append({**base, "characterId": in_story[0]["characterId"], "known": "story", "as": in_story[0]["name"]})
+        elif len(elsewhere) == 1:
+            out.append({**base, "characterId": elsewhere[0]["id"], "known": "cast", "as": elsewhere[0].get("name", "")})
+        else:
+            out.append({**base, "create": True, "newId": new_id(), "known": "new"})
+    return out
 
 
 @dataclass
@@ -83,13 +114,15 @@ async def find_story(message: str, stories: list[dict[str, Any]], runner: JobRun
     return Found("ask", choices=unsure, by="model") if unsure else Found("none", by="model")
 
 
-async def read_notes(runner: JobRunner | None, story: dict[str, Any], chapters: list[dict[str, Any]], prose: str, today: str, day: str | None) -> JobResult:
+async def read_notes(runner: JobRunner | None, story: dict[str, Any], chapters: list[dict[str, Any]], prose: str, today: str, day: str | None,
+                     cast: list[dict[str, Any]] | None = None) -> JobResult:
     if runner is None:
         return JobResult(empty_notes(), False, 0, [], ["no model is chosen for margin notes"])
-    return await runner.run(MARGIN_NOTES, {"story": brief(story, chapters), "prose": prose, "today": today, "date": day or today})
+    return await runner.run(MARGIN_NOTES, {"story": brief(story, chapters, cast), "prose": prose, "today": today, "date": day or today})
 
 
-def to_body(notes: dict[str, Any], prose: str, *, title: str | None, day: str | None, source: str, new_id: Callable[[], str] = lambda: str(uuid.uuid4())) -> dict[str, Any]:
+def to_body(notes: dict[str, Any], prose: str, *, title: str | None, day: str | None, source: str, new_id: Callable[[], str] = lambda: str(uuid.uuid4()),
+            people: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     """The practice service's write-chapter request: the prose as written and the checked notes, each new record with its id fixed now so
     approving twice (or retrying after a failure) never makes anything twice."""
     body: dict[str, Any] = {
@@ -100,7 +133,8 @@ def to_body(notes: dict[str, Any], prose: str, *, title: str | None, day: str | 
         "steps": [{"id": new_id(), "kind": s["kind"], "title": s["title"], "due": s.get("due"), "contact": s.get("contact"), "quote": s.get("quote"),
                    **({"channel": s.get("channel") or "call"} if s["kind"] == "followUp" else {})} for s in notes.get("steps", [])],
         "hunches": [{"id": new_id(), "text": h["text"], "quote": h.get("quote")} for h in notes.get("hunches", [])],
-        "people": [{"name": x["name"], "scene": x.get("scene"), "quote": x.get("quote")} for x in notes.get("people", [])],
+        "people": [{k: v for k, v in x.items() if k not in ("known", "as")} for x in people] if people is not None
+                  else [{"name": x["name"], "scene": x.get("scene"), "quote": x.get("quote")} for x in notes.get("people", [])],
     }
     if day:
         body["date"] = day
@@ -114,7 +148,7 @@ def to_body(notes: dict[str, Any], prose: str, *, title: str | None, day: str | 
 _CHANNEL = {"call": "Call", "message": "Message", "email": "Email", "visit": "Visit"}
 
 
-def card_lines(story: dict[str, Any], body: dict[str, Any], result: JobResult) -> list[str]:
+def card_lines(story: dict[str, Any], body: dict[str, Any], result: JobResult, people: list[dict[str, Any]] | None = None) -> list[str]:
     """What the card says: the margin notes in plain words, then what wasn't noted and why."""
     titles = {c["id"]: c.get("title", "") for c in story.get("checkpoints") or []}
     lines: list[str] = []
@@ -130,8 +164,14 @@ def card_lines(story: dict[str, Any], body: dict[str, Any], result: JobResult) -
         due = f" · {p.day_label(s['due'])}" if s.get("due") else ""
         who = f" · {s['contact']}" if s.get("contact") else ""
         lines.append(f"{what}: {s['title']}{who}{due}")
-    for x in body["people"]:
-        lines.append(f"Cast: {x['name']}" + (f", {x['scene']}" if x.get("scene") else ""))
+    for x in people if people is not None else body["people"]:
+        scene = f": {x['scene']}" if x.get("scene") else ""
+        if x.get("known") == "new":
+            lines.append(f"New in your cast: {x['name']}{scene}")
+        elif x.get("known") and not same_name(x["name"], x.get("as")):
+            lines.append(f"Cast: {x['name']} ({x['as']}){scene}")
+        else:
+            lines.append(f"Cast: {x['name']}{scene}")
     for h in body["hunches"]:
         lines.append(f"Hunch: {h['text']}")
     if body.get("waitingOn"):
@@ -147,9 +187,10 @@ def card_lines(story: dict[str, Any], body: dict[str, Any], result: JobResult) -
     return lines
 
 
-async def propose_chapter(offer: Offer, story: dict[str, Any], body: dict[str, Any], result: JobResult) -> tuple[str, str, list[str]]:
+async def propose_chapter(offer: Offer, story: dict[str, Any], body: dict[str, Any], result: JobResult,
+                          people: list[dict[str, Any]] | None = None) -> tuple[str, str, list[str]]:
     title = f"Chapter for “{story.get('title', '')}”" + (f": {body['title']}" if body.get("title") else "")
-    lines = card_lines(story, body, result)
+    lines = card_lines(story, body, result, people)
     pid = await offer("chapter.write", title, lines, [{"chapter": {"story": story["id"], "body": body}}])
     return pid, title, lines
 
@@ -168,8 +209,10 @@ async def draft_chapter(data: DataGateway, runners: Runners, offer: Offer, *, pr
         return {"none": True, "stories": [{"id": s["id"], "title": s.get("title", "")} for s in stories[:20]]}
     story = found.story
     chapters = await data.chapters(story["id"])
-    result = await read_notes(runners(MARGIN_NOTES.name), story, chapters, prose, today, day)
-    body = to_body(result.output, prose, title=title, day=day, source=source)
-    pid, card_title, lines = await propose_chapter(offer, story, body, result)
+    cast, characters = await cast_in(data, story["id"])
+    result = await read_notes(runners(MARGIN_NOTES.name), story, chapters, prose, today, day, cast)
+    people = resolve_people(result.output.get("people", []), cast, characters, lambda: str(uuid.uuid4()))
+    body = to_body(result.output, prose, title=title, day=day, source=source, people=people)
+    pid, card_title, lines = await propose_chapter(offer, story, body, result, people)
     return {"proposed": True, "id": pid, "story": {"id": story["id"], "title": story.get("title", "")}, "title": card_title, "lines": lines,
             "notes": result.output, "dropped": result.dropped, "notesOk": result.ok, "model": result.model}
