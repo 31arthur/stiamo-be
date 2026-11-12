@@ -37,6 +37,8 @@ class ScopedData(DataGateway):
     async def records(self, table: str):
         if table == "characters":
             return await self._characters()
+        if table == "lenses":  # the person's own ways of seeing people: theirs everywhere
+            return await self._inner.records(table)
         rows = await self._inner.records(table)
         home = HOME.get(table)
         if home is not None:
@@ -130,6 +132,10 @@ class ScopedData(DataGateway):
         return await self._inner.write_chapter(story_id, body)
 
     async def save_record(self, table, record):
+        if record.get("storyId") and not await self._own_story(record["storyId"]):
+            raise AiError(f"That story isn't one of {self.workspace}'s, so it can't be changed from here.")
+        if table == "evidence" and not any(c.get("id") == record.get("characterId") for c in await self._characters()):
+            raise AiError(f"That person isn't in {self.workspace}'s cast.")
         if HOME.get(table, self.workspace) != self.workspace or record.get("workspace", self.workspace) != self.workspace:
             raise AiError(f"That belongs to another workspace, so it can't be changed from {self.workspace}.")
         return await self._inner.save_record(table, record)

@@ -28,6 +28,8 @@ TABLES: dict[str, str] = {
     "characters": "/v1/characters",
     "parts": "/v1/parts",
     "scenes": "/v1/scenes",
+    "evidence": "/v1/evidence",
+    "lenses": "/v1/lenses",
 }
 
 MAX_ITEMS = 500

@@ -652,6 +652,9 @@ class ChannelService:
         if kind == "av" and self.availability_actions is not None:
             await self._strip(token, chat, message)
             return availability_confirmation(await self.availability_actions.answer(who, access, action, rest))
+        if kind == "iv" and self.editor_actions is not None:
+            await self._strip(token, chat, message)
+            return await self.editor_actions.interview_press(who, access, action, rest)
         if kind == "ed" and self.editor_actions is not None:
             await self._strip(token, chat, message)
             return await self.editor_actions.press(who, access, action, rest)

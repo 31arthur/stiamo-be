@@ -25,6 +25,8 @@ def title_of(kind: str, e: Any) -> str:
         return f"Part: {e.part}" if e.part else "Part in a story"
     if kind == "scene":
         return f"Scene: {e.text}"
+    if kind == "evidence":
+        return f"{e.lens}: {e.label}"
     return getattr(e, "title", None) or getattr(e, "name", None) or KIND_LABEL.get(kind, kind)
 
 

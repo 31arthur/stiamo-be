@@ -217,7 +217,8 @@ async def test_each_job_can_run_on_its_own_model(rig):
     await connect(rig)
     await choose(rig, agent=STORIES)
     jobs = (await rig.client.get("/v1/agent/jobs", headers=headers())).json()["items"]
-    assert {j["name"] for j in jobs} == {"find_story", "margin_notes", "next_openings", "suggest_chance"} and all(not j["ownChoice"] for j in jobs)
+    assert {"find_story", "margin_notes", "next_openings", "suggest_chance", "lens_router", "lens_under_pressure", "reaction", "wording"} <= {j["name"] for j in jobs}
+    assert all(not j["ownChoice"] for j in jobs)
     r = await rig.client.put("/v1/agent/jobs/margin_notes/model", json={"provider": "openai", "model": "gpt-4o"}, headers=headers())
     assert r.status_code == 200, r.text
     mine = next(j for j in r.json()["items"] if j["name"] == "margin_notes")

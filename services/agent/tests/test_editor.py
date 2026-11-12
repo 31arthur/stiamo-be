@@ -127,11 +127,11 @@ async def test_a_quiet_story_gets_three_openings_and_a_tap_books_its_step(rig):
         {"opening": "You visit the second lender.", "step": {"kind": "followUp", "title": "Visit the second lender", "channel": "visit"}},
     ]}))]
     sent = await run(rig)
-    assert sent == [{"workspace": "personal", "story": "s1", "rung": 2}]
-    text = rig.telegram.sent[-1][1]
+    assert [x for x in sent if "rung" in x] == [{"workspace": "personal", "story": "s1", "rung": 2}]
+    text = next(t for _, t in rig.telegram.sent if "Three ways" in t)
     assert "Home loan" in text and "16 days without a chapter" in text and "Three ways the next chapter could start" in text
     assert "Previously:" in text and "1. You call the agent and ask for a date." in text
-    job = rig.llm_log[-1]
+    job = next(x for x in rig.llm_log if "People in the story:" in x["last"])
     assert "People in the story: The agent" in job["last"] and job["tools"] == []
 
     assert await run(rig) == []  # one message per workspace per day

@@ -487,10 +487,24 @@ class AgentService:
         except AiError as exc:
             raise ValidationFailed(str(exc)) from exc
 
+    async def people_from_text(self, who: Who, token: str, text: str, story: str | None = None) -> dict[str, Any]:
+        """The news page's and the mail's "add the people in it": the people named, on one card to approve."""
+        from app.application.runner import ToolOutput
+        from app.application.toolpacks.insight import InsightPack
+
+        s = await self._load(who)
+        offer = self._proposer(who, "stories", None)
+        ctx = PackContext(self._data(token), local_today(s).isoformat(), propose=offer, jobs=self.job_runners(s))
+        tool = next(t for t in await InsightPack().tools(ctx) if t.spec.name == "people_in_text")
+        out: ToolOutput = await tool.run({"text": text, **({"story": story} if story else {})})
+        if out.result.get("error"):
+            raise ValidationFailed(str(out.result["error"]))
+        return {**out.result, "cards": out.found}
+
     async def job_models(self, who: Who) -> list[dict[str, Any]]:
         """Every AI job, what it does, and the model it runs on (its own, or the one chosen last)."""
         from app.application.aijobs import job_key
-        from app.domain.story_jobs import JOBS
+        from app.domain.jobs import ALL_JOBS as JOBS
 
         s = await self._load(who)
         out = []
@@ -502,7 +516,7 @@ class AgentService:
     async def set_job_model(self, who: Who, job_name: str, provider: str | None, model_id: str | None, thinking: str = "off") -> None:
         """Puts one AI job on its own model (a cheap one is usually enough). No provider: it goes back to the model chosen last."""
         from app.application.aijobs import job_key
-        from app.domain.story_jobs import JOBS
+        from app.domain.jobs import ALL_JOBS as JOBS
 
         if job_name not in JOBS:
             raise NotFound("No such AI job.")

@@ -13,6 +13,7 @@ from app.domain.common import Entity, EntityRef, to_iso
 from app.domain.directory import Client, Counsel, Project
 from app.domain.goals import Goal
 from app.domain.history import Activity, Link
+from app.domain.insight import Evidence, Lens
 from app.domain.plans import ActionPlan
 from app.domain.stories import ArcTemplate, Chapter, Story
 from app.domain.work import FollowUp, Meeting, Task
@@ -107,6 +108,8 @@ class Stores:
     character: Repository[Character]
     part: Repository[Part]
     scene: Repository[Scene]
+    evidence: Repository[Evidence]
+    lens: Repository[Lens]
 
 
 @dataclass

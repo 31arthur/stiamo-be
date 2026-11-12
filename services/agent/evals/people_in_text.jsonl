@@ -1,0 +1,5 @@
+// Each line: a news item or a mail, and the people (and numbers) really in it.
+{"name": "labour_commissioner", "input": {"text": "Kalaburagi: Assistant Labour Commissioner R. Nayak said the inspection of the SMPL site would resume on Monday. For queries, call the office on 08472-263401."}, "expect": {"names": ["R. Nayak"], "phones": ["08472-263401"]}}
+{"name": "two_people_no_numbers", "input": {"text": "The petition, argued by senior advocate Meera Rao, was opposed by the company's counsel, Vikram Shetty, who sought more time."}, "expect": {"names": ["Meera Rao", "Vikram Shetty"], "phones": []}}
+{"name": "mail_signature", "input": {"text": "Hi, please find the sanction terms attached.\nRegards,\nAnita Desai\nRelationship Manager, HomeFirst Finance\nMobile: +91 98860 22113"}, "expect": {"names": ["Anita Desai"], "phones": ["+91 98860 22113"]}}
+{"name": "organisation_only", "input": {"text": "The Labour Department announced new inspection rules for construction sites across the state."}, "expect": {"names": [], "phones": []}}

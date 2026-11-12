@@ -404,6 +404,7 @@ class CharacterModel(Owned, Base):
     emails: Mapped[list[str]] = mapped_column(Json)
     google_contact_id: Mapped[str | None] = mapped_column(String(80))
     home: Mapped[str] = mapped_column(String(10))
+    profile: Mapped[dict[str, Any] | None] = mapped_column(Json)
     __table_args__ = (sync_index("characters"),)
 
 
@@ -439,6 +440,7 @@ class SceneModel(Owned, Base):
     text: Mapped[str] = mapped_column(Text)
     quote: Mapped[str | None] = mapped_column(Text)
     source: Mapped[str] = mapped_column(String(10))
+    coded: Mapped[bool] = mapped_column(Boolean, default=False)
     __table_args__ = (
         ForeignKeyConstraint(["user_id", "character_id"], ["characters.user_id", "characters.id"], ondelete="CASCADE"),
         ForeignKeyConstraint(["user_id", "story_id"], ["stories.user_id", "stories.id"], ondelete="CASCADE"),
@@ -446,3 +448,39 @@ class SceneModel(Owned, Base):
         Index("ix_scenes_story", "user_id", "story_id"),
         sync_index("scenes"),
     )
+
+
+class EvidenceModel(Owned, Base):
+    """One label about a person, from a scene or an answer, with where it came from. In its story's workspace."""
+
+    __tablename__ = "evidence"
+    character_id: Mapped[str] = mapped_column(String(64))
+    story_id: Mapped[str | None] = mapped_column(String(64))
+    workspace: Mapped[str] = mapped_column(String(10))
+    lens: Mapped[str] = mapped_column(String(80))
+    label: Mapped[str] = mapped_column(String(40))
+    source: Mapped[str] = mapped_column(String(12))
+    method: Mapped[str] = mapped_column(String(12))
+    strength: Mapped[str] = mapped_column(String(6))
+    specific: Mapped[bool] = mapped_column(Boolean, default=False)
+    date: Mapped[str] = mapped_column(String(10))
+    quote: Mapped[str | None] = mapped_column(Text)
+    scene_id: Mapped[str | None] = mapped_column(String(64))
+    predicted_by: Mapped[str | None] = mapped_column(String(6))
+    verdict: Mapped[str | None] = mapped_column(String(8))
+    about: Mapped[str | None] = mapped_column(Text)
+    __table_args__ = (
+        ForeignKeyConstraint(["user_id", "character_id"], ["characters.user_id", "characters.id"], ondelete="CASCADE"),
+        Index("ix_evidence_character", "user_id", "character_id"),
+        sync_index("evidence"),
+    )
+
+
+class LensModel(Owned, Base):
+    """A lens of the owner's own, from comparing two people."""
+
+    __tablename__ = "lenses"
+    name: Mapped[str] = mapped_column(String(200))
+    pole_a: Mapped[str] = mapped_column(String(120))
+    pole_b: Mapped[str] = mapped_column(String(120))
+    __table_args__ = (sync_index("lenses"),)

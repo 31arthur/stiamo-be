@@ -13,6 +13,7 @@ from app.application.use_cases.cases import CaseUseCases, CounselUseCases, Heari
 from app.application.use_cases.cast import CastUseCases, CharacterUseCases, PartUseCases, SceneUseCases
 from app.application.use_cases.directory import ClientUseCases, project_crud
 from app.application.use_cases.history import HistoryUseCases
+from app.application.use_cases.insight import EvidenceUseCases, LensUseCases, ProfileUseCases
 from app.application.use_cases.plans import GoalUseCases, PlanUseCases
 from app.application.use_cases.stories import ChapterUseCases, StoryUseCases, StoryWriting, arc_template_crud
 from app.application.use_cases.views import AgendaUseCases, RelationUseCases
@@ -137,6 +138,18 @@ def scene_service(env: EnvDep) -> SceneUseCases:
 
 def cast_service(env: EnvDep) -> CastUseCases:
     return CastUseCases(env)
+
+
+def evidence_service(env: EnvDep) -> EvidenceUseCases:
+    return EvidenceUseCases(env)
+
+
+def lens_service(env: EnvDep) -> LensUseCases:
+    return LensUseCases(env)
+
+
+def profile_service(env: EnvDep) -> ProfileUseCases:
+    return ProfileUseCases(env)
 
 
 current_principal = make_principal_dependency(lambda: get_settings().token_settings())

@@ -67,6 +67,8 @@ class CharacterUseCases(Crud[Character]):
             await s.part.remove(user_id, p.id)
         for sc in [x for x in await s.scene.list(user_id) if x.character_id == id]:
             await s.scene.remove(user_id, sc.id)
+        for ev in [x for x in await s.evidence.list(user_id) if x.character_id == id]:
+            await s.evidence.remove(user_id, ev.id)
         await _retie(self.env, user_id, id, None)
         await super().remove(user_id, id)
 
@@ -89,14 +91,20 @@ class CharacterUseCases(Crud[Character]):
                 await s.part.save(normalize_part(p.model_copy(update={"character_id": into.id, "known_as": [*p.known_as, source.name]})))
         for sc in [x for x in await s.scene.list(user_id) if x.character_id == source.id]:
             await s.scene.save(sc.model_copy(update={"character_id": into.id}))
+        for ev in [x for x in await s.evidence.list(user_id) if x.character_id == source.id]:
+            await s.evidence.save(ev.model_copy(update={"character_id": into.id}))
         await _retie(self.env, user_id, source.id, into.id)
         await self.repo.remove(user_id, source.id)
         await self.log.deleted(user_id, "character", source)
-        return await self.update(into.model_copy(update={
+        from app.application.use_cases.insight import ProfileUseCases
+
+        merged = await self.update(into.model_copy(update={
             "phones": [*into.phones, *source.phones], "emails": [*into.emails, *source.emails],
             "organisation": into.organisation or source.organisation, "title": into.title or source.title,
             "google_contact_id": into.google_contact_id or source.google_contact_id,
         }))
+        await ProfileUseCases(self.env).refresh(user_id, merged.id)
+        return await self.require(user_id, merged.id, "Character")
 
 
 async def _retie(env: Env, user_id: str, old: str, new: str | None) -> None:

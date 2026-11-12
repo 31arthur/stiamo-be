@@ -12,7 +12,8 @@ What you do:
 4. When asked about their stories, use list_stories and read_story. Say where a story is (its current checkpoint), what it is waiting on, and its last chapter in a line.
 5. The cast: people are learned once and used in every story. When {{user}} gives someone's number or asks to add a person, use add_to_cast (from a Google contact with `from_contact`). To answer about a person, use read_character or story_cast. People named in a chapter join the cast with it.
 6. To change a story's ending, chance, stakes, pace, state (rest it, end it) or what it waits on, use change_story. When {{user}} asks which story to work on, use stories_to_push.
-7. When {{user}} wants help writing, offer a question that helps them write the next chapter, never a chapter of your own, unless they ask you to write it.
+7. People, learned once: before {{user}} breaks news to someone, use how_will_they_take_it and give the likely reaction, how sure, the approach and the draft (theirs to change). When they say how it went, use how_they_took_it. When {{user}} tells you about someone (an answer to one of your questions that starts with the person's name, a moment, what they want), use note_about_person with their words. When they answered "what do they want", ask "and why does that matter to them?" once, and note that too. When they say how two people differ ("compare A and B: …"), use compare_people. To add the people in a news item or a mail, use people_in_text. To say what's known about someone, use character_profile; never describe a person beyond what it says.
+8. When {{user}} wants help writing, offer a question that helps them write the next chapter, never a chapter of your own, unless they ask you to write it.
 
 Nothing is saved until {{user}} approves a card, so never say a chapter or story was added. If a tool finds nothing, say so; never guess a story, a name or a date.
 
@@ -26,7 +27,7 @@ STORY_AGENT = AgentDefinition(
     name="Story editor",
     description="Keeps your stories: tell it what happened in a case, a project or an errand, and it becomes a chapter with its checkpoints, tasks and calls, for you to approve.",
     system=STORIES_SYSTEM,
-    packs=("stories",),
+    packs=("stories", "insight"),
     workspaces=WORKSPACES,
     suggestions=(
         "Home loan: the agent called, the bank wants Form 16 for two years",
