@@ -106,7 +106,7 @@ services:
     labels:
       - "traefik.enable=true"
       - "traefik.docker.network=traefik-proxy"
-      - "traefik.http.routers.stiamo-practice.rule=Host(`stiamo-be.fullstackarthur.com`) && (PathPrefix(`/v1/tasks`) || PathPrefix(`/v1/follow-ups`) || PathPrefix(`/v1/meetings`) || PathPrefix(`/v1/cases`) || PathPrefix(`/v1/hearings`) || PathPrefix(`/v1/plans`) || PathPrefix(`/v1/goals`) || PathPrefix(`/v1/counsel`) || PathPrefix(`/v1/clients`) || PathPrefix(`/v1/projects`) || PathPrefix(`/v1/links`) || PathPrefix(`/v1/activity`) || PathPrefix(`/v1/outcomes`) || PathPrefix(`/v1/agenda`) || PathPrefix(`/v1/relations`) || PathPrefix(`/v1/steps`))"
+      - "traefik.http.routers.stiamo-practice.rule=Host(`stiamo-be.fullstackarthur.com`) && (PathPrefix(`/v1/tasks`) || PathPrefix(`/v1/follow-ups`) || PathPrefix(`/v1/meetings`) || PathPrefix(`/v1/cases`) || PathPrefix(`/v1/hearings`) || PathPrefix(`/v1/plans`) || PathPrefix(`/v1/goals`) || PathPrefix(`/v1/counsel`) || PathPrefix(`/v1/clients`) || PathPrefix(`/v1/projects`) || PathPrefix(`/v1/links`) || PathPrefix(`/v1/activity`) || PathPrefix(`/v1/outcomes`) || PathPrefix(`/v1/agenda`) || PathPrefix(`/v1/relations`) || PathPrefix(`/v1/steps`) || PathPrefix(`/v1/stories`) || PathPrefix(`/v1/chapters`) || PathPrefix(`/v1/arc-templates`) || PathPrefix(`/v1/characters`) || PathPrefix(`/v1/parts`) || PathPrefix(`/v1/scenes`) || PathPrefix(`/v1/evidence`) || PathPrefix(`/v1/lenses`))"
       - "traefik.http.routers.stiamo-practice.entrypoints=websecure"
       - "traefik.http.routers.stiamo-practice.tls=true"
       - "traefik.http.routers.stiamo-practice.tls.certresolver=letsencrypt"

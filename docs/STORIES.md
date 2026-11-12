@@ -134,4 +134,6 @@ A story belongs to one workspace. A workspace's assistant sees only its own stor
 
 ## Deploying this version
 
+The new practice paths (`/v1/stories`, `/v1/chapters`, `/v1/arc-templates`, `/v1/characters`, `/v1/parts`, `/v1/scenes`, `/v1/evidence`, `/v1/lenses`) must be in the practice router of the VPS's `docker-compose.yml` (Traefik only forwards the paths it lists; anything else gets a 404 with no CORS headers, which the browser reports as a CORS error). Copy the new `deploy/docker-compose.prod.yml`, or add them to that rule by hand. Then:
+
 `./deploy.sh` runs migrations `practice 0007` (the `stories`, `chapters` and `arc_templates` tables) and `practice 0008` (the cast: `characters`, `parts`, `scenes`, and `characterId` on tasks and follow-ups), `agent 0023` (the editor's memory), and `practice 0009` (evidence, lenses, the profile on each character, which scenes are read). Nothing else to set up: the jobs use the model you already chose for your agents until you give them their own.
