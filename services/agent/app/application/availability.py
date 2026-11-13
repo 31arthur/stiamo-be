@@ -81,26 +81,23 @@ def buttons(short: str) -> list[list[dict[str, str]]]:
 
 
 def confirmation(r: dict[str, Any]) -> str:
-    """What was understood and what happens next, in full: this is the message the person relies on."""
-    e = f"{event_emoji(r['title'])} {r['title']} · {day_label(r['day'])} · {clock(r['start'])}–{clock(r['end'])}"
+    """What was understood and what happens next, in three or four short lines."""
     meaning = {
-        "calls": "📞 During it I'll line up your calls and follow-ups, the ones promised for that day first. No heavy tasks go in that window.",
-        "free": "💻 I'll treat that time as free: calls, follow-ups and tasks can all be planned inside it.",
-        "busy": "🙅 I'll keep that time clear and plan around it, as before.",
+        "calls": "📞 Calls and follow-ups go inside it; no heavy tasks.",
+        "free": "💻 Counts as free time for everything.",
+        "busy": "🙅 Kept clear, as before.",
     }[r["mode"]]
-    lines = ["✅ Got it, noted.", "", e, meaning, "", f"🧠 I'll remember this for “{r['title']}”, so I won't ask again. You can change it any time in Developer → Daily planner → Remembered answers."]
+    lines = [f"✅ Noted · {event_emoji(r['title'])} {r['title']} · {day_label(r['day'])} {clock(r['start'])}–{clock(r['end'])}", meaning, f"🧠 Remembered for “{r['title']}”."]
     if r.get("remaining"):
-        lines += ["", f"⏳ {r['remaining']} more question{'s' if r['remaining'] != 1 else ''} first, then I'll update the plan for {day_label(r['day'])}."]
+        lines.append(f"⏳ {r['remaining']} more question{'s' if r['remaining'] != 1 else ''}, then I'll update {day_label(r['day'])}'s plan.")
     elif r.get("applied"):
-        lines += ["", f"ℹ️ The plan for {day_label(r['day'])} is already approved, so I left it as it is. Ask me to “plan tomorrow” again if you want it redone with this."]
+        lines.append(f"ℹ️ {day_label(r['day'])}'s plan is already approved, so it stays. Say “plan tomorrow” to redo it.")
     elif r.get("plan") is not None:
         plan = r["plan"]
         inside = [b for b in plan["blocks"] if b["kind"] == "followUp" and b["start"] < r["end"] and r["start"] < b["start"] + b["duration"]]
-        lines += ["", f"🔁 I've re-planned {day_label(r['day'])} with your answer: the new plan is below, waiting for your OK."]
-        if r["mode"] == "calls":
-            lines.append(f"📞 {len(inside)} call{'s' if len(inside) != 1 else ''} now sit{'s' if len(inside) == 1 else ''} inside the window." if inside else "📞 No calls were waiting for that day, so the window stays free.")
+        lines.append(f"🔁 Re-planned {day_label(r['day'])}: the new plan is below." + (f" {len(inside)} call{'s' if len(inside) != 1 else ''} inside the window." if r["mode"] == "calls" and inside else ""))
     elif r.get("replan_failed"):
-        lines += ["", f"⚠️ I couldn't re-plan just now ({r['replan_failed']}). Your answer is saved: say “plan tomorrow” and I'll use it."]
+        lines.append(f"⚠️ Couldn't re-plan ({r['replan_failed']}). Say “plan tomorrow” and I'll use it.")
     return "\n".join(lines)
 
 

@@ -114,12 +114,12 @@ async def test_the_evening_run_plans_tomorrow_and_tells_the_phone(rig):
     plan_script(rig)
     rig.app.state.daily.delay_for = lambda at, zone: 0.02
     await rig.client.put(f"{PLANS}/settings", json={"enabled": True, "time": "21:00", "timezone": "Asia/Kolkata", "channels": True, "workspaces": []}, headers=headers())
-    assert await until(lambda: any("Proposed schedule" in t for _, t in rig.telegram.sent), tries=200)
+    assert await until(lambda: any("Proposed times" in t for _, t in rig.telegram.sent), tries=200)
     rig.app.state.daily.delay_for = lambda at, zone: 3600  # no further runs; let the one that is under way finish before the loop is stopped
     await asyncio.sleep(0.3)
     rig.app.state.daily.stop("u1")
-    text = strip_markup(next(t for _, t in rig.telegram.sent if "Proposed schedule" in t))
-    assert "Plan for" in text and "09:30 Call the advocate" in text and "Tap Approve below" in text
+    text = strip_markup(next(t for _, t in rig.telegram.sent if "Proposed times" in t))
+    assert "Plan ·" in text and "09:30 Call the advocate" in text and "Tap Approve to book them" in text
     plans = (await rig.client.get(PLANS, headers=headers())).json()["plans"]
     assert plans and plans[0]["status"] == "proposed"
     runs = (await rig.client.get("/v1/agent/agents/daily-planner/runs", headers=headers())).json()["items"]

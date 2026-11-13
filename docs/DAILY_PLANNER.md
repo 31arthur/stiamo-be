@@ -20,6 +20,14 @@ Each workspace's bot is that workspace's assistant, so you can also plan with it
 
 It only sees and saves that workspace's things, but it plans around the other workspaces' commitments so nothing lands on top of them. A voice note works too if the Deepgram key is set.
 
+### Which bot gets the plan
+
+A workspace's plan goes to the first of these it has: its bot set to **The daily plan**; else its bot set to **Everything**; else your master bot (all workspaces). A bot set to **Mail alerts** never gets a plan. So with a mail bot and a master bot, set the workspace's mail bot to **Mail alerts** (Assistant → On your phone → the workspace → *For*): its plan then comes to the master bot. A workspace bot left on *Everything* takes the plan, the alerts and the chat all together.
+
+### How a plan reads on the phone
+
+Short, so it can be read at a glance: a heading, a one-line summary, then a line for each thing with a small icon, and only the one fact that matters under it (the number to ring, where a hearing is). Each thing appears once (a hearing that is both fixed and needs preparing is one line), a few things per section with the rest counted, only the two longest free windows, and no signature on the planner's own bot. Confirmations ("Saved", "Plan approved") are a few lines, and the same thing proposed several times is one line with a count.
+
 ### Attach the bots you already made
 
 Telegram bot tokens are secrets, so they are entered in the app, not here: Assistant → Workspace assistants → pick the workspace → paste that bot's token from @BotFather → choose what it is for → Connect. Then open the bot in Telegram and press Start (or send the pairing code shown). Do it once per bot. A workspace can have several: one for everything, one for mail alerts, one for the daily plan (each purpose once per workspace).

@@ -55,33 +55,30 @@ def plan_buttons(plan_id: str) -> list[list[dict[str, str]]]:
 
 
 def approval_text(out: dict[str, Any]) -> str:
-    """What happened when a plan was approved, in full: what is on the planner, what reached Google, what was left out and what to do next."""
+    """What happened when a plan was approved, in a few lines: what is on the planner, what was left out, and whether Google got it."""
     p = out["plan"]
     ws = NAMES.get(p.get("workspace") or "", "")
     n = out["booked"]
-    lines = [f"✅ Plan approved{' · ' + ws if ws else ''} · {day_label(p['day'])}", ""]
+    lines = [f"✅ Plan approved{' · ' + ws if ws else ''} · {day_label(p['day'])}"]
     if n:
-        lines.append(f"🗓️ {n} item{'s are' if n != 1 else ' is'} now on your planner:")
-        lines += [f"• {b['from']}–{b['to']}  {'📞' if b['kind'] == 'followUp' else '📝'} {b['title']}" + (f" · {phone_text(b.get('contact'))}" if phone_text(b.get("contact")) else "") for b in sorted(p["blocks"], key=lambda b: b["start"])]
+        lines += [f"• {b['from']}–{b['to']} {'📞' if b['kind'] == 'followUp' else '📝'} {b['title']}" + (f" · {phone_text(b.get('contact'))}" if phone_text(b.get("contact")) else "") for b in sorted(p["blocks"], key=lambda b: b["start"])]
     else:
-        lines.append("🗓️ Nothing was booked: everything in it was finished or removed since the plan was made.")
+        lines.append("Nothing booked: all of it was already done or removed.")
     if out.get("skipped") and n:
-        k = out["skipped"]
-        lines += ["", f"ℹ️ {k} item{'s were' if k != 1 else ' was'} left out: finished or removed since the plan was made."]
-    cal = out.get("calendar")
+        lines.append(f"ℹ️ {out['skipped']} left out: already done or removed.")
     if n:
+        cal = out.get("calendar")
         sent = (cal or {}).get("sent") or {}
         errors = (cal or {}).get("errors") or []
-        lines.append("")
+        done = ", ".join(f"{sent[k]} {k}" for k in ("added", "changed") if sent.get(k))
         if cal is None:
-            lines.append("⚠️ Google Calendar didn't answer just now. Your times are saved here and will reach Google by themselves within a few minutes.")
-        elif sent.get("added") or sent.get("changed"):
-            lines.append(f"📆 Google Calendar updated: {sent.get('added', 0)} added, {sent.get('changed', 0)} changed.")
+            lines.append("⚠️ Google didn't answer; your times are saved and will reach it within minutes.")
+        elif done:
+            lines.append(f"📆 Google Calendar updated: {done}")
         elif not errors:
-            lines.append("📆 Google Calendar was already up to date, or this workspace has no calendar set to receive its schedule (Calendar → “Send my schedule here”).")
+            lines.append("📆 Google Calendar: already up to date.")
         if errors:
-            lines.append(f"⚠️ Google said: {str(errors[0])[:140]}")
-    lines += ["", "👉 Nothing more to do. Mark things done as you go, here or in Stiamo, and say “plan tomorrow” whenever you want a fresh plan."]
+            lines.append(f"⚠️ Google said: {str(errors[0])[:100]}")
     return "\n".join(lines)
 
 
@@ -235,7 +232,7 @@ class DayPlanService:
         found: list[dict[str, Any]] = [p.card] if p.card else [{"kind": "briefing", "date": p.day, "headline": "", "sections": [], "free": []}]
         if p.blocks:
             found.append({"kind": "schedule", "buttons": True, "blocks": [{"from": clock(b["start"]), "title": b["title"], "phone": phone_text(b.get("contact"))} for b in sorted(p.blocks, key=lambda b: b["start"])]})
-        title = f"{NAMES.get(p.workspace, p.workspace)} plan for" if p.workspace else "Plan for"
+        title = f"{NAMES.get(p.workspace, p.workspace)} plan ·" if p.workspace else "Plan ·"
         return lambda style, limit: render(p.briefing, found, limit, "Daily planner", style, title=title)
 
     # --- deciding ------------------------------------------------------------------------------------------

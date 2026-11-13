@@ -129,8 +129,8 @@ async def test_a_quiet_story_gets_three_openings_and_a_tap_books_its_step(rig):
     sent = await run(rig)
     assert [x for x in sent if "rung" in x] == [{"workspace": "personal", "story": "s1", "rung": 2}]
     text = next(t for _, t in rig.telegram.sent if "Three ways" in t)
-    assert "Home loan" in text and "16 days without a chapter" in text and "Three ways the next chapter could start" in text
-    assert "Previously:" in text and "1. You call the agent and ask for a date." in text
+    assert "Home loan" in text and "16 days quiet" in text and "Three ways the next chapter could start" in text
+    assert "Last:" in text and "1. You call the agent and ask for a date." in text
     job = next(x for x in rig.llm_log if "People in the story:" in x["last"])
     assert "People in the story: The agent" in job["last"] and job["tools"] == []
 
@@ -251,4 +251,4 @@ async def test_the_evening_run_brings_the_editor_along(rig):
 
     await ready(rig, {"stories": [story()], "chapters": [chapter("c1", "s1", 9)]})
     await evening(rig)  # nothing to plan, but a story has gone quiet
-    assert any("Previously:" in t and "Home loan" in t for _, t in rig.telegram.sent)
+    assert any("Last:" in t and "Home loan" in t for _, t in rig.telegram.sent)

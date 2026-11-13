@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -24,6 +25,18 @@ NO = {"no", "n", "nope", "cancel", "drop", "dismiss", "discard", "don't", "dont"
 #: Only these collections can be changed by approving; each is a record the practice service already accepts from the owner.
 TABLES = ("tasks", "follow-ups", "cases", "hearings", "plans", "stories", "scenes", "lenses", "evidence")
 UPDATABLE = ("tasks", "follow-ups", "stories")
+
+
+_PREFIX = re.compile(r"^(?:New|Change|Add|Open)\b[^:]{0,30}:\s*")
+
+
+def _line(titles: list[str], mark: str) -> str:
+    """The titles once each, with a count when the same thing came up several times ("Change follow-up: Call Hemla" ×3 is one line)."""
+    counts: dict[str, int] = {}
+    for t in titles:
+        label = _PREFIX.sub("", t).strip() or t
+        counts[label] = counts.get(label, 0) + 1
+    return "\n".join(f"{mark} {label}" + (f" ×{n}" if n > 1 else "") for label, n in counts.items())
 
 
 def verdict_of(message: str) -> bool | None:
@@ -128,7 +141,7 @@ class ProposalService:
                 log.info("could not settle proposal %s", p.id)
         out = []
         if done:
-            out.append(("Saved:\n" if approve else "Dropped:\n") + "\n".join(f"• {t}" for t in done))
+            out.append(f"{'✅ Saved' if approve else '🗑 Dropped'} {len(done)}\n" + _line(done, "•"))
         if failed:
-            out.append("Couldn't save:\n" + "\n".join(f"• {t}" for t in failed))
+            out.append(f"⚠️ Couldn't save {len(failed)}\n" + _line(failed, "•"))
         return "\n\n".join(out)

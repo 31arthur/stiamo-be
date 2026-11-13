@@ -25,7 +25,7 @@ from app.application.services import Who, local_today, selection_of
 from app.domain import editor as ed
 from app.domain import interviewer as iv
 from app.domain.lenses import REACTION_WORDS, phrase
-from app.domain.phone import Style
+from app.domain.phone import Style, clip
 from app.domain.story_jobs import NEXT_OPENINGS, same_name
 
 log = logging.getLogger(__name__)
@@ -303,7 +303,7 @@ class EditorService:
     async def _send_rung(self, who: Who, token: str, s: UserSettings, ws: str, rung: int, v: dict[str, Any], today: str) -> bool:
         story, chapters, m = v["story"], v["chapters"], v["momentum"]
         title, short = story.get("title", ""), uuid.uuid4().hex[:8]
-        head = [f"📖 **{title}** · {m.quiet_days} days without a chapter", f"Previously: {ed.previously(story, chapters)}", ""]
+        head = [f"📖 **{title}** · {m.quiet_days} days quiet", f"Last: {clip(ed.previously(story, chapters), 100)}", ""]
         later = _b("💤 Not now", f"ed:z:{short}")
         q: dict[str, Any] = {"short": short, "story": story["id"], "title": title, "rung": rung}
         if rung == 1:

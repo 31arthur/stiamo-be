@@ -130,15 +130,15 @@ async def test_a_yes_on_the_phone_saves_what_was_just_proposed_without_asking_th
     rig.script += [ChatResult("", [ToolCall("a", "add_task", {"title": "Call Hemla"})]), ChatResult("Proposed.")]
     await send(rig, c, "add a task to call Hemla", chat=555, update=2)
     reply = strip_markup(rig.telegram.sent[-1][1])
-    assert "New task: Call Hemla" in reply and "Reply YES" in reply and rig.data.saved == []
+    assert "New task: Call Hemla" in reply and "YES to save" in reply and rig.data.saved == []
     asked = len(rig.llm_log)
     await send(rig, c, "yes", chat=555, update=3)
-    assert rig.telegram.sent[-1][1].startswith("Saved:") and "Call Hemla" in rig.telegram.sent[-1][1]
+    assert rig.telegram.sent[-1][1].startswith("✅ Saved") and "Call Hemla" in rig.telegram.sent[-1][1]
     assert len(rig.llm_log) == asked and [t for t, _ in rig.data.saved] == ["tasks"]
     rig.script += [ChatResult("", [ToolCall("b", "add_task", {"title": "Never mind this"})]), ChatResult("Proposed.")]
     await send(rig, c, "add another", chat=555, update=4)
     await send(rig, c, "no", chat=555, update=5)
-    assert rig.telegram.sent[-1][1].startswith("Dropped:") and len(rig.data.saved) == 1
+    assert rig.telegram.sent[-1][1].startswith("🗑 Dropped") and len(rig.data.saved) == 1
     rig.script += [ChatResult("Nothing waiting, so this reached me.")]
     await send(rig, c, "yes", chat=555, update=6)
     assert rig.telegram.sent[-1][1] == "Nothing waiting, so this reached me."  # with nothing proposed, a yes is just a message
@@ -161,3 +161,11 @@ async def test_everything_still_waiting_can_be_listed_newest_first_and_not_after
     out = (await rig.client.get("/v1/agent/proposals", headers=headers())).json()["items"]
     assert [p["id"] for p in out] == ["p1"] and out[0]["title"] == "New task: Call Hemla" and out[0]["agentId"] == "daily-planner" and out[0]["createdAt"].endswith("Z")
     assert (await rig.client.get("/v1/agent/proposals")).status_code == 401
+
+
+def test_saved_says_each_thing_once_with_a_count():
+    """Seven proposals in a row, three of them the same call: one line each, not seven lines of "Change follow-up: …"."""
+    from app.application.proposals import _line
+
+    titles = ["Change follow-up: Followup with Hemla Pawar"] * 3 + ["Change follow-up: Call Advocate Ravindra"] * 2 + ["New task: Pay the court fee"]
+    assert _line(titles, "•") == "• Followup with Hemla Pawar ×3\n• Call Advocate Ravindra ×2\n• Pay the court fee"

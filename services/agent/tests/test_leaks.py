@@ -170,7 +170,7 @@ async def test_each_workspaces_evening_plan_reaches_only_its_own_bot(rig):
         said.setdefault(chat, []).append(text)
     for n, ws in enumerate(("sb", "fsa", "personal")):
         mine = "\n".join(said.get(600 + n, []))
-        assert CANARY[ws] in mine and "plan for" in mine, f"{ws}'s bot should have its plan"
+        assert CANARY[ws] in mine and "plan · " in mine, f"{ws}'s bot should have its plan"
         assert_clean(mine, ws, f"the {ws} bot's plan message")
     assert 555 not in said  # nothing went to the general bot: every workspace has its own
     # and while planning, each workspace's model saw only its own work, with the rest of the day as bare busy time
@@ -190,7 +190,7 @@ async def test_a_plan_goes_to_the_workspaces_plan_bot_not_its_mail_bot_and_never
     plan(rig, "t-sb", 1030)
     rig.telegram.sent.clear()
     await evening(rig)
-    assert [chat for chat, text in rig.telegram.sent if "plan for" in text] == [602]  # only the S&B plan bot
+    assert [chat for chat, text in rig.telegram.sent if "plan · " in text] == [602]  # only the S&B plan bot
     assert mail and planner and other
     # with no plan bot, the S&B everything-bot carries it; with neither, the general bot does
     await rig.client.delete(f"{CH}/{planner['id']}", headers=headers())
@@ -199,7 +199,7 @@ async def test_a_plan_goes_to_the_workspaces_plan_bot_not_its_mail_bot_and_never
     plan(rig, "t-sb", 1030)
     rig.telegram.sent.clear()
     await evening(rig)
-    assert [chat for chat, text in rig.telegram.sent if "plan for" in text] == [604] and everything
+    assert [chat for chat, text in rig.telegram.sent if "plan · " in text] == [604] and everything
 
 
 async def test_other_workspaces_commitments_are_only_ever_bare_busy_time(rig):

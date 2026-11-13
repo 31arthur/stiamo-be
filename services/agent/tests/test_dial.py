@@ -53,7 +53,7 @@ async def test_a_plan_shows_the_number_and_has_a_call_button_and_the_approval_ke
     rig.telegram.sent.clear()
     rig.telegram.keyboards.clear()
     await evening(rig)
-    text = next(t for _, t in rig.telegram.sent if "plan for" in t)
+    text = next(t for _, t in rig.telegram.sent if "plan · " in t)
     assert "10:00" in text and "📞 +91 98100 22114" in text  # the number is in the message, so Telegram makes it tappable too
     keys = [b for k in rig.telegram.keyboards if k for row in k for b in row]
     assert any(b.get("callback_data", "").startswith("pl:a:") for b in keys)
@@ -65,5 +65,5 @@ async def test_a_plan_shows_the_number_and_has_a_call_button_and_the_approval_ke
     rig.telegram.edits.clear()
     rig.telegram.edit_buttons_shown.clear()
     await press(rig, bot, f"pl:a:{new['id']}", 2)
-    assert "10:00–10:15  📞 Call Hemla · +91 98100 22114" in rig.telegram.edits[-1][2]
+    assert "10:00–10:15 📞 Call Hemla · +91 98100 22114" in rig.telegram.edits[-1][2]
     assert rig.telegram.edit_buttons_shown[-1] == [[call]]
