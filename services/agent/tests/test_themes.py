@@ -54,7 +54,7 @@ def test_a_reply_is_dressed_in_the_letterhead_with_the_greeting_signoff_and_sign
 def test_the_alert_looks_unlike_the_quiet_messages_and_offers_the_buttons():
     a = {"id": "abc123def456", "subject": "Register <now>", "sender_name": "Registrar", "sender_address": "r@x.org", "summary": "Confirm by Friday.", "action": "Confirm attendance", "due": "2026-11-13", "replies": clean_replies([{"label": "Confirm", "intent": "Say yes."}, {"label": "", "intent": "x"}, "junk"])}
     text = alert_text(a, clean_theme(LABOUR), "S&B")
-    assert text.startswith("🚨🚨 <b>URGENT · S&amp;B</b> 🚨🚨") and "Register &lt;now&gt;" in text and "🏛️ Labour Dept" in text and "⚡ <b>Do:</b> Confirm attendance" in text and "<code>r@x.org</code>" in text
+    assert text.startswith("🚨 <b>URGENT · S&amp;B</b>") and "Register &lt;now&gt;" in text and "🏛️ Labour Dept" in text and "⚡ <b>Confirm attendance</b>" in text and "<code>r@x.org</code>" in text
     rows = alert_buttons(a, "https://app.example.com/sb/mail?a=1&f=INBOX&m=4")
     assert rows[0] == [{"text": "🔗 Open the email in Stiamo", "url": "https://app.example.com/sb/mail?a=1&f=INBOX&m=4"}]
     assert rows[1] == [{"text": "1️⃣ Confirm", "callback_data": "al:abc123def456:r0"}] and [b["callback_data"] for b in rows[-1]] == ["al:abc123def456:own", "al:abc123def456:done"]

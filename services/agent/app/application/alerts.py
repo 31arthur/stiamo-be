@@ -213,7 +213,7 @@ class AlertService:
             elif code == "own":
                 a.awaiting = {"chat": chat, "at": self._now().isoformat()}
                 await self._alerts.save(a)
-                await self._phone.say(channel_id, chat, "✍️ <b>Tell me what to say.</b> Just type it here, as roughly as you like, and I'll write it up properly. Send <i>cancel</i> to drop it.")
+                await self._phone.say(channel_id, chat, "✍️ <b>Type what to say</b>, as roughly as you like, and I'll write it up. <i>cancel</i> to stop.")
             elif code == "redo":
                 d = a.draft or {}
                 await self._draft(who, token, a, channel_id, chat, intent=d.get("intent") or "", instruction=d.get("instruction"))
@@ -222,7 +222,7 @@ class AlertService:
             elif code == "x":
                 a.draft = None
                 await self._alerts.save(a)
-                await self._phone.say(channel_id, chat, "Draft dropped. The email is still open: pick another reply, or open it.")
+                await self._phone.say(channel_id, chat, "Draft dropped.")
             elif code == "done":
                 a.status, a.draft, a.awaiting = "handled", None, None
                 await self._alerts.save(a)

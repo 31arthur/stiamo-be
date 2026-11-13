@@ -102,7 +102,7 @@ def _similar(a: str, b: str) -> bool:
 
 _CASE_NOTE = re.compile(r"\s*\([^()]*[A-Z]{2,6}-\d{4}-\d{3}[^()]*\)")
 _NUMBER = re.compile(r"\+?\d[\d ()-]{7,}\d")
-_AT_TIME = re.compile(r"at \d{1,2}:\d{2}")
+_AT_TIME = re.compile(r"\bat \d{1,2}:\d{2}\b")
 _BECAUSE = re.compile(r"\s+(?:so|because)\s+", re.I)
 #: A headline that begins with the day ("Fri 13 Nov (S&B): …") when the heading already says it.
 _LEAD_DAY = re.compile(r"^\s*(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\w*,?\s+\d{1,2}\s+[A-Za-z]{3,9}\s*(?:\([^)]*\))?\s*[:—–-]\s*(?=\S)")
@@ -220,11 +220,32 @@ def _free(card: dict[str, Any], w: Writer) -> str:
     return f"🟢 {w.bold('Free')} {w.raw(shown)}"
 
 
+_APPROVE = re.compile(r"\b(approve|propose[ds]?|reply yes|save it)\b", re.I)
+
+
+def _just_says_approve(answer: str) -> bool:
+    """"I've proposed it. Approve to save." under a card that says exactly that: the card is enough."""
+    return len((answer or "").strip()) <= 120 and bool(_APPROVE.search(answer or ""))
+
+
+def _card_lines(lines: list[Any], w: Writer) -> list[str]:
+    """What a proposal would save, line by line, as it is: short facts share a line, a list (steps) keeps its lines, and nothing is left out
+    until there are a dozen."""
+    text = [clip(str(x), 100) for x in lines]
+    if 1 < len(text) <= 3 and all(len(x) <= 40 for x in text) and not any(re.match(r"\d+\.", x) for x in text):
+        text = [" · ".join(text)]
+    out = [f"   ↳ {w.raw(x)}" for x in text[:12]]
+    if len(text) > 12:
+        out.append(f"   ↳ {w.raw(f'+{len(text) - 12} more in Stiamo')}")
+    return out
+
+
 def render(answer: str, found: list[dict[str, Any]], limit: int, agent: str | None = None, style: Style = "plain", title: str | None = None) -> str:
     """An answer and the cards it found, written for a chat and signed with the agent that gave it. `title` heads a briefing ("Plan for")."""
     w = Writer(style)
     say = w.text(answer) if answer and answer.strip() else ""
     blocks: list[tuple[str, bool]] = []  # (text, may be left out when the message is too long)
+    found_proposals = [f for f in found if f.get("kind") == "proposal"]
     briefing = next((f for f in found if f.get("kind") == "briefing"), None)
     reminder = next((f for f in found if f.get("kind") == "reminder"), None)
     if briefing:
@@ -246,11 +267,11 @@ def render(answer: str, found: list[dict[str, Any]], limit: int, agent: str | No
             blocks.append((_free(briefing, w), False))
     elif reminder:
         day = str(reminder.get("date") or "")
-        blocks.append((f"🔔 {w.bold(w.raw(str(reminder.get('headline') or 'Pending')))}", False))
-        blocks.append(("\n".join(line for it in reminder.get("items", []) for line in _item(it, w, day)), False))
+        rows = [line for it in reminder.get("items", []) for line in _item(it, w, day)]
+        blocks.append(("\n".join([f"🔔 {w.bold(w.raw(str(reminder.get('headline') or 'Pending')))}", *rows]), False))
         if reminder.get("footer"):
             blocks.append((w.italic(w.raw(str(reminder["footer"]))), False))
-    else:
+    elif not (found_proposals and _just_says_approve(answer)):
         blocks.append((say or w.raw("I found nothing to say about that."), False))
     cases = [f for f in found if f.get("kind") == "case"]
     if cases:
@@ -268,7 +289,7 @@ def render(answer: str, found: list[dict[str, Any]], limit: int, agent: str | No
         blocks.append(("\n".join(lines), True))
     proposals = [f for f in found if f.get("kind") == "proposal"]
     if proposals:
-        cards = ["\n".join([f"📝 {w.bold(w.raw(clip(str(x['title']), 80)))}", *(f"   ↳ {w.raw(clip(str(ln), 90))}" for ln in x.get("lines", [])[:3])]) for x in proposals[:6]]
+        cards = ["\n".join([f"📝 {w.bold(w.raw(clip(str(x['title']), 80)))}", *_card_lines(x.get("lines", []), w)]) for x in proposals[:6]]
         blocks.append(("\n\n".join(cards) + f"\n\n👉 {w.bold('YES')} to save · {w.bold('NO')} to drop", False))
     for s in [f for f in found if f.get("kind") == "schedule"][:1]:
         lines = [f"🗓️ {w.bold('Proposed times')}"] + [f"• {w.bold(w.raw(str(b['from'])))} {w.raw(clip(str(b['title']), 60))}" + (f" · 📞 {w.raw(str(b['phone']))}" if b.get("phone") else "") for b in s.get("blocks", [])]
@@ -278,7 +299,7 @@ def render(answer: str, found: list[dict[str, Any]], limit: int, agent: str | No
             lines.append(f"👉 {w.bold('YES')} to book them · {w.bold('NO')} to drop" if s.get("proposalId") else "👉 Approve it in Stiamo (Needs me).")
         blocks.append(("\n".join(lines), False))
     # A plan comes on the planner's own bot, so it needs no signature; an answer from the master assistant says which agent gave it.
-    tail = [w.italic(w.raw(f"— {agent}"))] if agent and not title else []
+    tail = [w.italic(w.raw(f"— {agent}"))] if agent and not title and not reminder else []
     return _fit(blocks, tail, limit, w)
 
 

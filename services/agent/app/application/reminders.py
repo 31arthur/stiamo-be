@@ -127,7 +127,7 @@ class ReminderService:
         cases = {c["id"]: c for c in await data.cases()}
         items = [self._item(c, cases) for c in run["pending"]]
         n = len(items)
-        card = {"kind": "reminder", "date": day, "headline": f"{n} call{'s' if n != 1 else ''} still pending", "items": items, "footer": "Mark them done in Stiamo when you have."}
+        card = {"kind": "reminder", "date": day, "headline": f"{n} call{'s' if n != 1 else ''} still pending", "items": items}
         await self._announce(who, lambda style, limit: render("", [card], limit, "Stiamo", style), reminder_buttons(run["key"], run["pending"], self._app_url))
         rang = await self._ring(s, call_speech(run["step"], run["pending"]))
         runs[run["key"]] = {"step": run["step"] + 1, "last": minute}

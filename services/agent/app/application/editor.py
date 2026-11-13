@@ -176,7 +176,7 @@ class EditorService:
             for i in range(0, len(opts), 2):
                 rows.append([_b(label, f"iv:{i + j}:{short}") for j, (_, label) in enumerate(opts[i:i + 2])])
             rows.append([_b("⏭ Skip them for a week", f"iv:x:{short}")])
-            lines = [f"🎭 **{c.get('name')}**" + (f" · {q.story.get('title')}" if q.story else ""), "", q.text]
+            lines = [q.text if q.text.startswith("🎭") else "🎭 " + q.text]  # the question already names who it is about
             asked = {"short": short, "kind": "interview", "method": q.method, "lens": q.lens, "character": c["id"], "name": c.get("name"),
                      "story": (q.story or {}).get("id"), "options": [o for o, _ in opts], "specific": q.specific,
                      "scene": (q.scene or {}).get("id"), "prediction": (q.prediction or {}).get("id"), "about": f"bad news about “{(q.story or {}).get('title', '')}”"}
@@ -303,7 +303,7 @@ class EditorService:
     async def _send_rung(self, who: Who, token: str, s: UserSettings, ws: str, rung: int, v: dict[str, Any], today: str) -> bool:
         story, chapters, m = v["story"], v["chapters"], v["momentum"]
         title, short = story.get("title", ""), uuid.uuid4().hex[:8]
-        head = [f"📖 **{title}** · {m.quiet_days} days quiet", f"Last: {clip(ed.previously(story, chapters), 100)}", ""]
+        head = [f"📖 **{title}** · {m.quiet_days} days quiet", clip(ed.previously(story, chapters), 110), ""]
         later = _b("💤 Not now", f"ed:z:{short}")
         q: dict[str, Any] = {"short": short, "story": story["id"], "title": title, "rung": rung}
         if rung == 1:
@@ -365,7 +365,8 @@ class EditorService:
         quiet = [v for v in views if v["momentum"].rung >= 1]
         hunches = [(v, h) for v in views for c in v["chapters"] for h in c.get("hunches") or [] if h.get("cameTrue") is None]
         top = next((v for v in views if v["score"] > 0), None)
-        lines = [f"📚 **Writers' room · {NAMES.get(ws, ws)}** · the week to {today}", ""]
+        end = date.fromisoformat(today)
+        lines = [f"📚 **Writers' room · {NAMES.get(ws, ws)}** · the week to {end.day} {end.strftime('%b')}", ""]
         lines.append("✍️ Moved: " + (", ".join(f"{v['story'].get('title')} ({n})" for v, n in moved) if moved else "nothing this week"))
         if quiet:
             lines.append("🌫️ Gone quiet: " + ", ".join(f"{v['story'].get('title')} ({v['momentum'].quiet_days} days)" for v in quiet))
@@ -374,8 +375,8 @@ class EditorService:
         buttons: list[list[dict[str, str]]] = []
         if top:
             step = ed.oldest_step(top["steps"])
-            lines += ["", f"🎯 Your next hour: **{top['story'].get('title')}** ({ed.why(top['story'], top['momentum'], top['steps'])})"
-                      + (f". Next step: {step.get('title')}" if step else "")]
+            lines += ["", f"🎯 Next hour: **{top['story'].get('title')}** · {ed.why(top['story'], top['momentum'], top['steps'])}"
+                      + (f"\n▶️ {clip(str(step.get('title')), 80)}" if step else "")]
             short = uuid.uuid4().hex[:8]
             buttons = [[_b("💡 Ways to start", f"ed:r2:{short}")]]
             return await self._ask(who, ws, lines, buttons, {"short": short, "story": top["story"]["id"], "title": top["story"].get("title"), "rung": 0, "kind": "room"}, today)

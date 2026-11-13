@@ -8,9 +8,12 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import date
 from html import escape
 from typing import Any
 from urllib.parse import quote
+
+from app.domain.phone import clip
 
 MAX_REPLIES = 3
 RULE = "━━━━━━━━━━━━━━"
@@ -39,24 +42,35 @@ def mail_url(app_url: str, workspace: str, account_id: str, folder: str, uid: in
     return f"{app_url.rstrip('/')}/{workspace}/mail?a={quote(account_id)}&f={quote(folder)}&m={uid}"
 
 
+def _by(due: str) -> str:
+    """"by 13 Nov" for a date, or "by" and whatever the model wrote for one that isn't."""
+    try:
+        d = date.fromisoformat(str(due)[:10])
+    except ValueError:
+        return f"by {due}"
+    return f"by {d.day} {d.strftime('%b')}"
+
+
 def alert_text(a: dict[str, Any], theme: dict[str, Any] | None, workspace_label: str) -> str:
-    """The ping, as Telegram HTML."""
+    """The ping, as Telegram HTML: who it is for and how urgent, the email's subject and sender, the gist, and what to do and by when."""
     e = escape
-    org = f"{theme['emoji']} {e(theme['name'])}" if theme else e(workspace_label)
     urgent = a.get("priority", "high") == "high"
     # Urgent is loud; a plain update is calmer, so a phone that buzzes with both still tells them apart at a glance.
-    head = f"🚨🚨 <b>URGENT · {e(workspace_label)}</b> 🚨🚨" if urgent else f"📬 <b>Needs you · {e(workspace_label)}</b>"
-    lines = [head, RULE if urgent else "┈┈┈┈┈┈┈┈┈┈┈┈┈┈", f"{org}", ""]
-    lines.append(f"✉️ <b>{e(a['subject'] or '(no subject)')}</b>")
+    head = f"🚨 <b>URGENT · {e(workspace_label)}</b>" if urgent else f"📬 <b>Needs you · {e(workspace_label)}</b>"
+    if theme:
+        head += f" · {theme['emoji']} {e(theme['name'])}"
+    lines = [head, f"✉️ <b>{e(clip(a['subject'] or '(no subject)', 120))}</b>"]
     who = a["sender_name"] or a["sender_address"]
     lines.append(f"👤 {e(who)}" + (f" · <code>{e(a['sender_address'])}</code>" if a["sender_name"] and a["sender_address"] else ""))
     if a.get("summary"):
-        lines += ["", f"📝 <i>{e(a['summary'])}</i>"]
+        lines.append(f"📝 <i>{e(clip(a['summary'], 200))}</i>")
+    todo = []
     if a.get("action"):
-        lines += ["", f"⚡ <b>Do:</b> {e(a['action'])}"]
+        todo.append(f"⚡ <b>{e(clip(a['action'], 100))}</b>")
     if a.get("due"):
-        lines.append(f"⏰ <b>By:</b> {e(a['due'])}")
-    lines += ["", RULE if urgent else "┈┈┈┈┈┈┈┈┈┈┈┈┈┈", "👇 Pick a reply, or open it." if a.get("replies") else "👇 Open it, or answer it yourself."]
+        todo.append(f"⏰ {e(_by(a['due']))}")
+    if todo:
+        lines.append(" · ".join(todo))
     return "\n".join(lines)
 
 
@@ -83,7 +97,7 @@ def draft_text(a: dict[str, Any], draft: dict[str, Any], theme_name: str) -> str
     """The reply as it would go, for approving: who it goes to, its subject and its words (the theme's greeting and sign-off are added when it is sent)."""
     e = escape
     body = draft["body"] if len(draft["body"]) <= 3000 else draft["body"][:3000] + "…"
-    return "\n".join(["📝 <b>Draft reply</b>" + (f" · {e(theme_name)}" if theme_name else ""), f"<b>To:</b> {e(draft['to'])}", f"<b>Subject:</b> {e(draft['subject'])}", RULE, e(body), RULE, "Looks right? Send it, or have it rewritten."])
+    return "\n".join(["📝 <b>Draft reply</b>" + (f" · {e(theme_name)}" if theme_name else ""), f"<b>To:</b> {e(draft['to'])}", f"<b>Subject:</b> {e(draft['subject'])}", "", e(body)])
 
 
 def draft_buttons(alert_id: str) -> list[list[dict[str, str]]]:

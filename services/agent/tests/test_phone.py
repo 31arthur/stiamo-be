@@ -102,3 +102,21 @@ def test_a_long_headline_is_cut_and_the_models_extra_line_stays_only_when_it_add
     card = {"kind": "briefing", "date": "2026-11-13", "headline": "word " * 60, "sections": [{"kind": "work", "items": [{"type": "task", "title": "Draft", "priority": "urgent"}]}]}
     out = render("A short extra line.", [card], 4000, None, "plain", title="Plan ·")
     assert "…" in out.split("\n")[1] and len(out.split("\n")[1]) <= 111 and "A short extra line." in out and "❗Draft" in out
+
+
+def test_a_proposal_shows_everything_it_would_save_and_not_what_its_card_already_says():
+    steps = {"kind": "proposal", "title": "New action plan: Prepare the rejoinder", "lines": ["Due Fri 20 Nov", "On SA-2026-001", *[f"{i}. Step number {i}" for i in range(1, 6)]]}
+    out = render("I've proposed it. Approve to save.", [steps], 4000, None, "plain")
+    assert out.startswith("📝 New action plan: Prepare the rejoinder") and "I've proposed it" not in out  # the card says it already
+    assert all(f"{i}. Step number {i}" in out for i in range(1, 6)) and "YES to save · NO to drop" in out  # every step is shown: it is what would be saved
+    short = {"kind": "proposal", "title": "New task: Call Hemla", "lines": ["Due Sat 14 Nov", "High priority"]}
+    assert "↳ Due Sat 14 Nov · High priority" in render("", [short], 4000, None, "plain")  # short facts share a line
+    asked = render("Which Hemla do you mean, Pawar or Rao?", [short], 4000, None, "plain")
+    assert asked.startswith("Which Hemla do you mean")  # a question is not boilerplate: it stays
+    many = {"kind": "proposal", "title": "Plan", "lines": [f"{i}. Step {i}" for i in range(1, 16)]}
+    assert "+3 more in Stiamo" in render("", [many], 4000, None, "plain")
+
+
+def test_a_reminder_is_its_headline_and_its_calls_with_no_signature():
+    card = {"kind": "reminder", "date": "2026-11-06", "headline": "2 calls still pending", "items": [{"type": "followUp", "title": "Call him again", "time": "09:00–09:15", "channel": "call"}]}
+    assert render("", [card], 4000, "Stiamo", "plain") == "🔔 2 calls still pending\n📞 09:00 Call him again"
