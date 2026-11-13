@@ -98,9 +98,9 @@ async def test_the_evening_sends_each_workspaces_plan_to_its_own_bot_with_approv
     rig.telegram.keyboards.clear()
     made = await evening(rig)
     assert [p["workspace"] for p in made] == ["sb", "fsa"]
-    where = {chat: text for chat, text in rig.telegram.sent if "plan for" in text}
-    assert "S&amp;B plan for" in where[888] or "S&B plan for" in where[888]  # S&B's own bot
-    assert "FSA plan for" in where[555] and 555 in where and 888 in where  # FSA has no bot: the general one carries it
+    where = {chat: text for chat, text in rig.telegram.sent if "plan · " in text}
+    assert "S&amp;B plan ·" in where[888] or "S&B plan ·" in where[888]  # S&B's own bot
+    assert "FSA plan ·" in where[555] and 555 in where and 888 in where  # FSA has no bot: the general one carries it
     assert "Tap" in where[888] and "Approve" in where[888]
     keys = [b["callback_data"] for k in rig.telegram.keyboards if k for row in k for b in row if b["callback_data"].startswith("pl:")]
     assert sorted(k.split(":")[1] for k in keys) == ["a", "a", "x", "x"]
@@ -117,7 +117,7 @@ async def test_approving_on_the_phone_books_the_times_and_updates_google(rig):
     await press(rig, sb, f"pl:a:{p['id']}", update=2, chat=888)
     assert rig.data.saved and rig.data.saved[0][1]["slot"] == {"date": TOMORROW, "start": 660, "duration": 90}
     said = rig.telegram.sent[-1][1]
-    assert "Plan approved" in said and "1 item is now on your planner" in said and "Google Calendar updated: 2 added" in said and rig.data.syncs == 1
+    assert "Plan approved" in said and "Google Calendar updated: 2 added" in said and rig.data.syncs == 1
     assert rig.telegram.stripped[-1][2] is None  # the buttons are gone
     await press(rig, sb, f"pl:a:{p['id']}", update=3, chat=888)  # pressed again: it only says so
     assert "already been dealt with" in rig.telegram.sent[-1][1] and len(rig.data.saved) == 1

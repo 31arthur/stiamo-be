@@ -91,11 +91,11 @@ async def test_the_planner_asks_a_short_question_about_a_long_event_and_plans_ca
     rig.telegram.sent.clear()
     await press(rig, bot, press_data(rig, "av:c:"), 2)
     assert rig.telegram.toasts[-1].startswith("⏳ Noting you can take calls")
-    confirmation = next(t for chat, t in rig.telegram.sent if t.startswith("✅ Got it, noted."))
-    assert "🏥 Visit hospital · " in confirmation and "09:00–12:00" in confirmation and "calls and follow-ups" in confirmation
-    assert "I'll remember this for “Visit hospital”" in confirmation and "Remembered answers" in confirmation
-    assert "re-planned" in confirmation and "1 call now sits inside the window" in confirmation
-    new_plan = next(t for chat, t in rig.telegram.sent if "plan for" in t)
+    confirmation = next(t for chat, t in rig.telegram.sent if t.startswith("✅ Noted ·"))
+    assert "🏥 Visit hospital · " in confirmation and "09:00–12:00" in confirmation and "Calls and follow-ups" in confirmation
+    assert "Remembered for “Visit hospital”" in confirmation
+    assert "Re-planned" in confirmation and "1 call inside the window" in confirmation and len(confirmation.splitlines()) <= 5
+    new_plan = next(t for chat, t in rig.telegram.sent if "plan · " in t)
     assert "10:00" in new_plan and "Call Hemla" in new_plan
     plan = (await rig.client.get(PLANS, headers=headers())).json()["plans"][0]
     assert [(b["id"], b["from"]) for b in plan["blocks"]] == [("f-sb", "10:00")]
@@ -168,7 +168,7 @@ async def test_at_most_three_questions_and_the_plan_waits_for_the_last_answer(ri
     assert len(questions) == 3
     rig.telegram.sent.clear()
     await press(rig, bot, questions[0], 2)
-    assert "2 more questions first" in next(t for _, t in rig.telegram.sent if t.startswith("✅ Got it"))  # no re-plan yet
+    assert "2 more questions, then" in next(t for _, t in rig.telegram.sent if t.startswith("✅ Noted"))  # no re-plan yet
     assert not [t for _, t in rig.telegram.sent if t.startswith("🗓️")]  # the new plan is not sent yet
 
 
@@ -195,8 +195,8 @@ async def test_a_button_is_answered_at_once_and_a_message_says_it_is_being_done_
     await press(rig, bot, f"pl:a:{plan['id']}", 2)
     assert rig.telegram.toasts[-1] == "⏳ Putting it on your planner…"  # the instant answer
     holding = rig.telegram.edits[-1]
-    assert holding[2].startswith("✅ Plan approved · S&B · ") and "1 item is now on your planner:" in holding[2]
-    assert "11:00–12:00  📝 Draft the rejoinder" in holding[2] and "Google Calendar updated" in holding[2] and "Nothing more to do" in holding[2]  # the long, detailed confirmation
+    assert holding[2].startswith("✅ Plan approved · S&B · ")
+    assert "11:00–12:00 📝 Draft the rejoinder" in holding[2] and "Google Calendar updated" in holding[2] and "Nothing more to do" not in holding[2] and len(holding[2].splitlines()) <= 4
     assert len(rig.telegram.sent) == 1 and rig.telegram.sent[0][1] == holding[2]  # one message: the "⏳" one, now holding the result
 
 

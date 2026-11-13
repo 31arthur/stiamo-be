@@ -170,6 +170,6 @@ async def test_a_yes_on_the_phone_still_saves_what_the_assistants_agent_proposed
     await send(rig, c, f"/start {c['pairingCode']}", chat=555, update=1)
     rig.script += [ChatResult("", [ToolCall("a", "add_task", {"title": "Call Hemla"})]), ChatResult("Proposed.")]
     await send(rig, c, "add a task to call Hemla tomorrow at S&B", chat=555, update=2)
-    assert "Reply <b>YES</b>" in rig.telegram.sent[-1][1] and rig.data.saved == []
+    assert "<b>YES</b> to save" in rig.telegram.sent[-1][1] and rig.data.saved == []
     await send(rig, c, "yes", chat=555, update=3)
-    assert rig.telegram.sent[-1][1].startswith("Saved:") and [t for t, _ in rig.data.saved] == ["tasks"]
+    assert rig.telegram.sent[-1][1].startswith("✅ Saved") and [t for t, _ in rig.data.saved] == ["tasks"]

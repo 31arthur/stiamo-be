@@ -1,7 +1,8 @@
 """How a reply reads in a phone's chat: Telegram (HTML), WhatsApp (*bold*, _italic_) or plain text. Pure: no network, no framework.
 
-A phone can't show the cards the web app does, so a briefing is laid out as a short message: the day, one line for each thing (an icon for
-what it is, the time or the title in bold, a quieter line under it for the why and the where), and the free time at the end.
+A phone can't show the cards the web app does, and a phone's chat is read at a glance, so a briefing is kept short: a heading and a
+one-line summary, then one line per thing (an icon for what it is, the time and the title, and at most one quiet line under it), a few
+things per section, each thing once, and the free time at the end. Mostly words, with an icon where it saves one.
 """
 
 from __future__ import annotations
@@ -16,7 +17,11 @@ from app.domain.dayplan import SECTION_TITLES
 
 Style = Literal["telegram", "whatsapp", "plain"]
 
-SECTION_ICONS = {"fixed": "📌", "prepare": "📂", "calls": "📞", "work": "✅", "attention": "⚠️", "later": "🔭"}
+SECTION_ICONS = {"fixed": "📌", "prepare": "📂", "calls": "📞", "work": "✅", "push": "🎯", "attention": "⚠️", "later": "🔭"}
+#: How many things a section shows on a phone; the rest are counted, and are in the app.
+SECTION_MAX = {"fixed": 4, "prepare": 3, "calls": 4, "work": 5, "push": 2, "attention": 2, "later": 2}
+#: Free time shorter than this isn't worth listing, and only this many windows are.
+FREE_MIN, FREE_MAX = 30, 2
 TYPE_ICONS = {"hearing": "⚖️", "meeting": "🤝", "task": "☑️", "calendar": "🗓️"}
 CHANNEL_ICONS = {"call": "📞", "phone": "📞", "whatsapp": "💬", "sms": "💬", "message": "💬", "text": "💬", "email": "✉️", "mail": "✉️", "visit": "🚶", "in person": "🚶"}
 #: What is left out first, when a message is too long for the chat: more of what the first sections already say.
@@ -95,35 +100,58 @@ def _similar(a: str, b: str) -> bool:
     return bool(a and b) and (a == b or b in a or a in b or SequenceMatcher(None, a, b).ratio() > 0.6)
 
 
+_CASE_NOTE = re.compile(r"\s*\([^()]*[A-Z]{2,6}-\d{4}-\d{3}[^()]*\)")
+_NUMBER = re.compile(r"\+?\d[\d ()-]{7,}\d")
+_AT_TIME = re.compile(r"at \d{1,2}:\d{2}")
+_BECAUSE = re.compile(r"\s+(?:so|because)\s+", re.I)
+#: A headline that begins with the day ("Fri 13 Nov (S&B): …") when the heading already says it.
+_LEAD_DAY = re.compile(r"^\s*(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\w*,?\s+\d{1,2}\s+[A-Za-z]{3,9}\s*(?:\([^)]*\))?\s*[:—–-]\s*(?=\S)")
+
+
+def clip(text: str | None, n: int) -> str:
+    """At most n characters, cut at a word and marked with an ellipsis."""
+    t = " ".join((text or "").split())
+    if len(t) <= n:
+        return t
+    cut = t[: n - 1].rsplit(" ", 1)[0] or t[: n - 1]
+    return cut.rstrip(" ,;:—-") + "…"
+
+
 def _why(note: str | None, title: str) -> str:
-    """The model's note often begins by saying the title again ("Call him — last try 29 Oct"): keep only what it adds."""
-    note = (note or "").strip()
+    """The model's note often begins by saying the title again ("Call him — last try 29 Oct"): keep only what it adds, short."""
+    note = _CASE_NOTE.sub("", (note or "").strip())
     if not note:
         return ""
     head, sep, tail = note.partition(" — ")
-    if sep and _similar(head, title):
-        note = tail.strip()
+    if sep and (_similar(head, title) or len(head) > 40 or _AT_TIME.search(head)):
+        note = tail.strip()  # "Call him at 10:30 — he asked for a callback": the reason is what the line adds
     elif _similar(note, title):
         return ""
-    return note[:1].upper() + note[1:] if note else ""
+    note = _BECAUSE.split(note, maxsplit=1)[0].strip()  # "Review the file so everything is in hand…": the instruction is enough
+    return clip(note[:1].upper() + note[1:], 60) if note else ""
+
+
+def _number(contact: Any) -> str | None:
+    """The phone number in a contact line ("Jaipal Pawar Pune Work · +91 99706 60979"): that is what is worth showing under a call."""
+    m = _NUMBER.search(str(contact or ""))
+    return re.sub(r"\s+", " ", m.group(0)).strip() if m else None
 
 
 def _detail(it: dict[str, Any], day: str) -> list[str]:
-    out: list[str] = []
-    if it.get("caseRef"):
-        out.append(str(it["caseRef"]))
-    if it.get("place"):
-        out.append(str(it["place"]))
-    if it.get("contact"):
-        out.append(str(it["contact"]))  # how it is reached is the icon
-    if it.get("tries"):
-        out.append(f"tried {it['tries']}×")
-    if it.get("minutes"):
-        out.append(f"{it['minutes']} min")
-    if it.get("due") and it["due"] != day:
+    """The one or two facts that matter for this kind of thing: the number for a call, where for a hearing or a meeting."""
+    kind, out = it.get("type"), []
+    if kind == "followUp":
+        if n := _number(it.get("contact")):
+            out.append(n)
+        if (it.get("tries") or 0) >= 2:
+            out.append(f"tried {it['tries']}×")
+    elif kind == "hearing":
+        out += [str(x) for x in (it.get("caseRef"), it.get("place")) if x]
+    elif kind in ("meeting", "calendar"):
+        if it.get("place"):
+            out.append(clip(str(it["place"]), 30))
+    elif it.get("due") and it["due"] != day:
         out.append(f"due {_short(it['due'])}")
-    if it.get("priority") in ("high", "urgent"):
-        out.append(f"{it['priority']} priority")
     return out
 
 
@@ -133,31 +161,63 @@ def _icon(it: dict[str, Any]) -> str:
     return TYPE_ICONS.get(str(it.get("type")), "▫️")
 
 
+def _start(time: Any) -> str:
+    """A span ("10:30–10:45") as when it starts: the end of a short call or a hearing isn't what a glance is for."""
+    return re.split(r"[–—-]", str(time))[0].strip()
+
+
 def _item(it: dict[str, Any], w: Writer, day: str) -> list[str]:
     if it.get("type") == "note":
-        return [f"💡 {w.italic(w.raw(str(it.get('note') or '')))}"]
-    title = str(it.get("title") or "")
+        return [f"💡 {w.italic(w.raw(clip(str(it.get('note') or ''), 90)))}"]
+    title = clip(str(it.get("title") or ""), 60)
+    flag = "❗" if it.get("priority") in ("high", "urgent") else ""
     time = it.get("time")
-    first = f"{_icon(it)} {w.bold(w.raw(str(time)))} {w.raw(title)}" if time else f"{_icon(it)} {w.bold(w.raw(title))}"
-    under = [x for x in (_why(it.get("note"), title), *_detail(it, day)) if x]
+    first = f"{_icon(it)} {w.bold(w.raw(_start(time)))} {flag}{w.raw(title)}" if time else f"{_icon(it)} {flag}{w.bold(w.raw(title))}"
+    under = [x for x in (_why(it.get("_prep") or it.get("note"), title), *_detail(it, day)) if x]
     return [first, f"   ↳ {w.italic(w.raw(' · '.join(under)))}"] if under else [first]
+
+
+def _merge(sections: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Each thing once. The planner puts a hearing under Fixed and again under Prepare; on a phone it is one line, with what to prepare under it."""
+    seen: dict[tuple[Any, Any], dict[str, Any]] = {}
+    out: list[dict[str, Any]] = []
+    for s in sections:
+        kept: list[dict[str, Any]] = []
+        for it in s.get("items", []):
+            if it.get("type") == "note":
+                kept.append(it)
+                continue
+            key = (it.get("type"), it.get("id") or (it.get("title"), it.get("time")))
+            if key in seen:
+                if it.get("note") and not seen[key].get("_prep"):
+                    seen[key]["_prep"] = it["note"]
+                continue
+            seen[key] = dict(it)
+            kept.append(seen[key])
+        out.append({**s, "items": kept})
+    return out
 
 
 def _section(s: dict[str, Any], w: Writer, day: str) -> str:
     kind = str(s.get("kind"))
-    title = str(s.get("title") or SECTION_TITLES.get(kind, ""))
+    title = clip(str(s.get("title") or SECTION_TITLES.get(kind, "")), 28)
+    items = s.get("items", [])
+    room = SECTION_MAX.get(kind, 4)
     lines = [f"{SECTION_ICONS.get(kind, '▫️')} {w.bold(w.raw(title))}"]
-    for it in s.get("items", []):
+    for it in items[:room]:
         lines += _item(it, w, day)
+    if len(items) > room:
+        lines.append(w.italic(w.raw(f"+{len(items) - room} more in Stiamo")))
     return "\n".join(lines)
 
 
 def _free(card: dict[str, Any], w: Writer) -> str:
-    windows = card.get("free") or []
+    windows = [x for x in (card.get("free") or []) if (x.get("minutes") or 0) >= FREE_MIN]
     if not windows:
         return ""
-    shown = ", ".join(f"{x['from']}–{x['to']}" for x in windows[:4])
-    return f"🟢 {w.bold('Free')} {w.raw(shown)}" + ("" if len(windows) <= 4 else w.raw(f" and {len(windows) - 4} more"))
+    best = sorted(sorted(windows, key=lambda x: x.get("minutes") or 0, reverse=True)[:FREE_MAX], key=lambda x: x["from"])
+    shown = ", ".join(x["from"] + "–" + x["to"] for x in best)
+    return f"🟢 {w.bold('Free')} {w.raw(shown)}"
 
 
 def render(answer: str, found: list[dict[str, Any]], limit: int, agent: str | None = None, style: Style = "plain", title: str | None = None) -> str:
@@ -170,13 +230,16 @@ def render(answer: str, found: list[dict[str, Any]], limit: int, agent: str | No
     if briefing:
         day = str(briefing.get("date") or "")
         head = [f"🗓️ {w.bold(w.raw(((title + ' ') if title else '') + _day(day)))}"]
-        if briefing.get("headline"):
-            head.append(w.raw(str(briefing["headline"]).strip()))
+        headline = _LEAD_DAY.sub("", str(briefing.get("headline") or "")).strip()
+        headline = headline[:1].upper() + headline[1:]
+        if headline:
+            head.append(w.raw(clip(headline, 110)))
         blocks.append(("\n".join(head), False))
+        # The model's own paragraph usually says again what the sections show; it stays only when there is no headline, or it adds a short line.
         lead = say or (w.text(str(briefing["summary"])) if briefing.get("summary") else "")
-        if lead:
+        if lead and (not headline or (len(lead) <= 140 and not _similar(lead, headline))):
             blocks.append((lead, False))
-        for s in briefing.get("sections", []):
+        for s in _merge(briefing.get("sections", [])):
             if s.get("items"):
                 blocks.append((_section(s, w, day), True))
         if _free(briefing, w):
@@ -205,16 +268,17 @@ def render(answer: str, found: list[dict[str, Any]], limit: int, agent: str | No
         blocks.append(("\n".join(lines), True))
     proposals = [f for f in found if f.get("kind") == "proposal"]
     if proposals:
-        cards = ["\n".join([f"📝 {w.bold(w.raw(str(x['title'])))}", *(f"   ↳ {w.raw(str(ln))}" for ln in x.get("lines", []))]) for x in proposals[:6]]
-        blocks.append(("\n\n".join(cards) + f"\n\n👉 Reply {w.bold('YES')} to save, or {w.bold('NO')} to drop.", False))
+        cards = ["\n".join([f"📝 {w.bold(w.raw(clip(str(x['title']), 80)))}", *(f"   ↳ {w.raw(clip(str(ln), 90))}" for ln in x.get("lines", [])[:3])]) for x in proposals[:6]]
+        blocks.append(("\n\n".join(cards) + f"\n\n👉 {w.bold('YES')} to save · {w.bold('NO')} to drop", False))
     for s in [f for f in found if f.get("kind") == "schedule"][:1]:
-        lines = [f"🗓️ {w.bold('Proposed schedule')}"] + [f"• {w.bold(w.raw(str(b['from'])))} {w.raw(str(b['title']))}" + (f" · 📞 {w.raw(str(b['phone']))}" if b.get("phone") else "") for b in s.get("blocks", [])]
+        lines = [f"🗓️ {w.bold('Proposed times')}"] + [f"• {w.bold(w.raw(str(b['from'])))} {w.raw(clip(str(b['title']), 60))}" + (f" · 📞 {w.raw(str(b['phone']))}" if b.get("phone") else "") for b in s.get("blocks", [])]
         if s.get("buttons"):
-            lines.append(f"👉 Tap {w.bold('Approve')} below to put these on your planner and in your Google calendar.")
+            lines.append(f"👉 Tap {w.bold('Approve')} to book them.")
         else:
-            lines.append(f"👉 Reply {w.bold('YES')} to put these on your planner, or {w.bold('NO')} to drop." if s.get("proposalId") else "👉 Approve it in Stiamo (Needs me) and it goes on your planner.")
+            lines.append(f"👉 {w.bold('YES')} to book them · {w.bold('NO')} to drop" if s.get("proposalId") else "👉 Approve it in Stiamo (Needs me).")
         blocks.append(("\n".join(lines), False))
-    tail = [w.italic(w.raw(f"— {agent}"))] if agent else []
+    # A plan comes on the planner's own bot, so it needs no signature; an answer from the master assistant says which agent gave it.
+    tail = [w.italic(w.raw(f"— {agent}"))] if agent and not title else []
     return _fit(blocks, tail, limit, w)
 
 

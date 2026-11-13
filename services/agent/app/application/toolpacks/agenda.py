@@ -262,7 +262,7 @@ class AgendaPack(ToolPack):
                 ToolSpec(
                     "present_plan",
                     "Show the day to the person as a card instead of writing it out: sections (fixed, prepare, calls, work, push, attention, later), each a list of items that point at real hearings, meetings, tasks, follow-ups and calendar events by id. The app fills in their titles and times, and the person can complete or move each one right there. After it, write at most two short sentences.",
-                    {"type": OBJ, "properties": {"date": {"type": "string", "description": "YYYY-MM-DD, default tomorrow."}, "headline": {"type": "string", "description": "One line that sums the day up."}, "summary": {"type": "string", "description": "Optional: a sentence or two of context."}, "sections": {"type": "array", "items": section_schema}}, "required": ["headline", "sections"]},
+                    {"type": OBJ, "properties": {"date": {"type": "string", "description": "YYYY-MM-DD, default tomorrow."}, "headline": {"type": "string", "description": "One short line that sums the day up (at most 12 words)."}, "summary": {"type": "string", "description": "Optional: a sentence or two of context."}, "sections": {"type": "array", "items": section_schema}}, "required": ["headline", "sections"]},
                 ),
                 lambda a: f"Laid out {_day(a, tomorrow(today))}",
                 present_plan,
