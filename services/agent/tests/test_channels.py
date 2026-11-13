@@ -54,7 +54,7 @@ async def test_a_chat_pairs_with_the_code_and_a_stranger_does_not(rig):
     await ready(rig)
     c = await telegram(rig)
     await send(rig, c, "show me cases", chat=999, update=1)
-    assert rig.telegram.sent[-1] == (999, "This chat isn't linked to a Stiamo account. Open AI agents → Channels in Stiamo to connect it.")
+    assert rig.telegram.sent[-1] == (999, "This chat isn't linked to Stiamo. In the app, open Assistant → On your phone to connect it.")
     assert rig.llm_log == []  # nothing reached the model
 
     await send(rig, c, "/start WRONG000", chat=555, update=2)

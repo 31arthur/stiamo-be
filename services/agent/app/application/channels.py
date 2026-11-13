@@ -7,7 +7,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from stiamo_common.errors import Forbidden, NotFound, ValidationFailed
+from stiamo_common.errors import Conflict, Forbidden, NotFound, ValidationFailed
 
 from app.application.availability import confirmation as availability_confirmation
 from app.application.conversations import NEW_THREAD, ConversationService
@@ -66,7 +66,9 @@ PRESS_ACKS = {
     "ed:r2": "Thinking of ways to start…",
 }
 
-NOT_LINKED = "This chat isn't linked to a Stiamo account. Open AI agents → Channels in Stiamo to connect it."
+NOT_LINKED = "This chat isn't linked to Stiamo. In the app, open Assistant → On your phone to connect it."
+#: What a button's result is when the action has already said everything itself: the "⏳ …" message is then taken back out of the chat.
+QUIET = ""
 
 
 def format_reply(run: AgentRun, limit: int, style: Style = "plain") -> str:
@@ -445,8 +447,8 @@ class ChannelService:
         ws = c.public.get("workspace")
         if ws:
             name = WORKSPACE_NAMES.get(ws, ws)
-            return f"I'm the {name} assistant. Ask me what's pending or what's on today, to plan tomorrow, to put things on your schedule (like “call Hemla tomorrow at 11”), or to add a task or follow-up. I show you what I'd save and you reply YES. I plan around everything else on your day. I only see {name}."
-        return "I'm your Stiamo assistant, one for all your workspaces. Ask me what's pending, to plan tomorrow, to call someone, or to add a task. I work out which workspace each message is about (S&B, FSA or Personal) and ask when it isn't clear, and I keep each one's information apart."
+            return f"I'm the {name} assistant. Ask what's pending, to plan tomorrow, or say “call Hemla tomorrow at 11”. I show what I'd save and you reply YES. I only see {name}."
+        return "I'm your Stiamo assistant for all your workspaces. Ask what's pending, to plan tomorrow, or to add a task or a call. If it's unclear which workspace you mean, I'll ask."
 
     async def _answer(self, c: Channel, sender: str, text: str, channel_name: str, limit: int, style: Style) -> str | tuple[str, list[list[dict[str, str]]]]:
         """Runs the agent for the channel's owner and returns what to say back, written for the chat."""
@@ -583,7 +585,11 @@ class ChannelService:
             result = await self._run_press(c, who, chat, message, data)
         except Exception as exc:  # noqa: BLE001  a button must always answer
             log.exception("a button press failed on channel %s", c.id)
-            result = "⚠️ " + str(getattr(exc, "message", None) or "That didn't work.") + " Nothing was changed. Try again, or do it in Stiamo."
+            reason = str(getattr(exc, "message", None) or "That didn't work.")
+            result = f"⚠️ {reason}" if isinstance(exc, Conflict) else f"⚠️ {reason} Nothing was saved. Try again."  # "try again" is no help when it is already done
+        if result == QUIET:
+            await self._dismiss(token, chat, holder)
+            return
         buttons, html = None, False
         if isinstance(result, tuple):
             result, buttons, *rest = result
@@ -616,6 +622,18 @@ class ChannelService:
         except Exception:  # noqa: BLE001
             log.warning("could not report what a button did")
 
+    async def _dismiss(self, token: str, chat: int | str, holder: int | None) -> None:
+        """The "⏳ …" message of a button whose action sent its own reply: gone, so the chat isn't left with a "Done" that says nothing."""
+        if holder is None:
+            return
+        try:
+            await self._tg.delete_message(token, chat, holder)
+        except Exception:  # noqa: BLE001  too old or already gone: leave it saying something short
+            try:
+                await self._tg.edit_message(token, chat, holder, "✔️")
+            except Exception:  # noqa: BLE001
+                log.info("could not clear the holding message")
+
     async def _strip(self, token: str, chat: int | str, message: dict[str, Any]) -> None:
         try:
             await self._tg.edit_buttons(token, chat, int(message.get("message_id") or 0), None)
@@ -637,7 +655,7 @@ class ChannelService:
                 calls = call_rows(self.app_url, [b for b in done["plan"]["blocks"] if b["kind"] == "followUp"])
                 return (approval_text(done), calls) if calls else approval_text(done)  # the calls it booked stay one tap away
             await self.plan_actions.dismiss(who, rest)
-            return "👍 Dropped. Nothing was changed on your planner or in Google Calendar.\n\nSay “plan tomorrow” if you want a new one."
+            return "👍 Plan dropped. Nothing was changed."
         if kind == "ws":
             pending = (c.state.get("pending") or {}).pop(rest, None)
             if pending is None or action not in ("sb", "fsa", "personal", "all"):
@@ -660,7 +678,7 @@ class ChannelService:
             return await self.editor_actions.press(who, access, action, rest)
         if kind == "al" and self.alerts is not None:
             await self.alerts.on_callback(who, access, c.id, chat, int(message.get("message_id") or 0), "", data)
-            return "✅ Done. The details are above."
+            return QUIET  # the draft, the question or the confirmation was sent as its own message
         return "That button is from an older message and doesn't work any more. Open the latest one, or say what you need."
 
     async def _heard(self, c: Channel, chat: int | str, voice: dict[str, Any]) -> str:

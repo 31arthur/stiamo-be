@@ -133,7 +133,7 @@ async def test_dropping_a_plan_on_the_phone_changes_nothing(rig):
     plan(rig, SB)
     p = (await rig.client.post(f"{PLANS}/generate", json={"day": TOMORROW, "workspace": "sb"}, headers=headers())).json()
     await press(rig, sb, f"pl:x:{p['id']}", update=2, chat=888)
-    assert rig.data.saved == [] and "Dropped" in rig.telegram.sent[-1][1]
+    assert rig.data.saved == [] and "dropped" in rig.telegram.sent[-1][1]
     assert (await rig.client.get(PLANS, headers=headers())).json()["plans"][0]["status"] == "dismissed"
 
 

@@ -28,6 +28,15 @@ A workspace's plan goes to the first of these it has: its bot set to **The daily
 
 Short, so it can be read at a glance: a heading, a one-line summary, then a line for each thing with a small icon, and only the one fact that matters under it (the number to ring, where a hearing is). Each thing appears once (a hearing that is both fixed and needs preparing is one line), a few things per section with the rest counted, only the two longest free windows, and no signature on the planner's own bot. Confirmations ("Saved", "Plan approved") are a few lines, and the same thing proposed several times is one line with a count.
 
+### Reading every kind of message
+
+`services/agent/tests/test_message_gallery.py` drives each kind of message (pairing, the plan and its buttons, the time question, proposals and their YES and NO, reminders, mail alerts and their drafts, the story editor and the interviewer, the assistant's own answers) through a fake Telegram and keeps what the phone would receive. Each kind has a length budget, so a message that grows long again fails the test. To read them all in one file:
+
+```bash
+cd services/agent
+STIAMO_GALLERY=gallery.txt pytest tests/test_message_gallery.py
+```
+
 ### Attach the bots you already made
 
 Telegram bot tokens are secrets, so they are entered in the app, not here: Assistant → Workspace assistants → pick the workspace → paste that bot's token from @BotFather → choose what it is for → Connect. Then open the bot in Telegram and press Start (or send the pairing code shown). Do it once per bot. A workspace can have several: one for everything, one for mail alerts, one for the daily plan (each purpose once per workspace).

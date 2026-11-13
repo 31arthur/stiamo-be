@@ -56,7 +56,7 @@ async def test_an_urgent_email_pings_the_phone_at_once_with_a_link_and_suggested
     run = (await rig.client.post(f"{BASE}/{wid}/run", json={}, headers=headers())).json()
     assert run["counts"]["queued"] == 1  # it is in the Attention queue too
     text = rig.telegram.sent[-1][1]
-    assert text.startswith("🚨🚨 <b>URGENT · S&amp;B</b> 🚨🚨") and "Partnership opportunity" in text and "🏛️ Client Co" in text and "Confirm and send delegate details" in text
+    assert text.startswith("🚨 <b>URGENT · S&amp;B</b>") and "Partnership opportunity" in text and "🏛️ Client Co" in text and "Confirm and send delegate details" in text
     buttons = last_keyboard(rig)
     assert buttons[0] == {"text": "🔗 Open the email in Stiamo", "url": "https://app.example.com/sb/mail?a=acc1&f=INBOX&m=4"}
     assert [b["text"] for b in buttons[1:4]] == ["1️⃣ Confirm attendance", "2️⃣ Ask for time", "3️⃣ Decline"] and [b["text"] for b in buttons[4:]] == ["✍️ Write my own", "👌 Handled"]
@@ -124,7 +124,7 @@ async def test_write_my_own_takes_what_you_type_next_and_a_stranger_cannot_press
     assert len(rig.telegram.sent) == before and len(rig.llm_log) == asked
 
     await press(rig, c, f"al:{alert_id}:own", update=3)
-    assert "Tell me what to say" in rig.telegram.sent[-1][1]
+    assert "Type what to say" in rig.telegram.sent[-1][1]
     rig.script += [DRAFT]
     await send(rig, c, "tell them yes but only on Monday", chat=555, update=4)
     assert 'In their own words, they want to say: "tell them yes but only on Monday"' in rig.llm_log[-1]["system"] and "Draft reply" in rig.telegram.sent[-1][1]
@@ -219,7 +219,7 @@ async def test_an_agent_that_sends_updates_tells_the_phone_quietly_and_loudly_wh
     another(rig, 9)  # the same agent, when the model finds the next one high priority
     rig.script += [answer("issue"), read("high")]
     await rig.client.post(f"{BASE}/{wid}/run", json={}, headers=headers())
-    assert rig.telegram.sent[-1][1].startswith("🚨🚨 <b>URGENT · S&amp;B</b>")
+    assert rig.telegram.sent[-1][1].startswith("🚨 <b>URGENT · S&amp;B</b>")
 
 
 async def test_an_agent_with_updates_off_says_nothing_for_attention_mail(rig):

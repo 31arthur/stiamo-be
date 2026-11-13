@@ -228,6 +228,8 @@ class FakeTelegram(TelegramApi):
         self.stripped: list[tuple] = []
         #: Messages changed after they were sent: (chat, message id, new text). `edit_fails` makes Telegram refuse.
         self.edits: list[tuple] = []
+        #: Messages taken back out of the chat: (chat, message id).
+        self.deleted_messages: list[tuple] = []
         self.sent_ids: dict[int, tuple] = {}
         self.edit_fails = False
         self.edit_buttons_shown: list = []
@@ -277,6 +279,12 @@ class FakeTelegram(TelegramApi):
 
     async def edit_buttons(self, token, chat_id, message_id, buttons):
         self.stripped.append((chat_id, message_id, buttons))
+
+    async def delete_message(self, token, chat_id, message_id):
+        entry = self.sent_ids.get(message_id)
+        self.deleted_messages.append((chat_id, message_id))
+        if entry is not None:
+            self.sent[:] = [e for e in self.sent if e is not entry]  # the chat no longer shows it
 
     async def edit_message(self, token, chat_id, message_id, text, html=False, buttons=None):
         if getattr(self, "edit_fails", False):

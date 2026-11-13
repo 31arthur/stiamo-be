@@ -84,7 +84,7 @@ def push_score(story: dict[str, Any], m: Momentum, open_steps: list[dict[str, An
 
 def why(story: dict[str, Any], m: Momentum, open_steps: list[dict[str, Any]]) -> str:
     """The score in words, for the planner's "push this" and the writers' room."""
-    bits = [f"{story.get('chance', 50) if isinstance(story.get('chance'), int) else '?'}% × stakes {story.get('stakes', 3)}"]
+    bits = [(f"{story['chance']}% chance" if isinstance(story.get("chance"), int) else "chance not set") + f" · stakes {story.get('stakes', 3)}"]
     if m.state == "waiting":
         bits.append("waiting")
     elif open_steps:
@@ -134,19 +134,20 @@ def here_of(story: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def previously(story: dict[str, Any], chapters: list[dict[str, Any]]) -> str:
-    """"Previously…": the latest chapter in a line, where the story stands, and what it waits on. Written by code from the person's own
-    words, so it never says anything that isn't there."""
+    """"Previously…": the latest chapter's day and its first line, where the story stands, and what it waits on. Written by code from the person's
+    own words, so it never says anything that isn't there."""
     last = max(chapters, key=lambda c: (c.get("date") or "", c.get("number") or 0)) if chapters else None
     parts = []
     if last:
-        line = last.get("title") or first_sentence(last.get("prose") or "")
-        parts.append(f"last chapter ({last.get('date')}): {line}")
+        d = _d(last.get("date"))
+        when = f"{d.day} {d.strftime('%b')}" if d else str(last.get("date"))
+        parts.append(f"{when}: “{last.get('title') or first_sentence(last.get('prose') or '', 80)}”")
     here = here_of(story)
     if here:
         parts.append(f"now at “{here.get('title')}”")
     if story.get("waitingOn"):
         parts.append(f"waiting on {story['waitingOn'].get('on')}")
-    return "; ".join(parts) if parts else "nothing written yet"
+    return " · ".join(parts) if parts else "nothing written yet"
 
 
 def due_hunch(chapters: list[dict[str, Any]], pace: int, today: str) -> tuple[dict[str, Any], dict[str, Any]] | None:
@@ -179,7 +180,7 @@ def fallback_openings(story: dict[str, Any], cast: list[str], today: str) -> lis
     here = here_of(story)
     out = []
     if cast:
-        out.append({"opening": f"You ask {cast[0]} where things stand.", "step": {"kind": "followUp", "title": f"Ask {cast[0]} where things stand", "due": tomorrow, "contact": cast[0], "channel": "call"}})
+        out.append({"opening": f"You ask {cast[0][:1].lower() + cast[0][1:] if cast[0].lower().startswith('the ') else cast[0]} where things stand.", "step": {"kind": "followUp", "title": f"Ask {cast[0]} where things stand", "due": tomorrow, "contact": cast[0], "channel": "call"}})
     if here:
         out.append({"opening": f"You write down what “{here.get('title')}” still needs.", "step": {"kind": "task", "title": f"List what “{here.get('title')}” needs", "due": tomorrow}})
     out.append({"opening": "You set a day to come back to it with fresh eyes.", "step": {"kind": "task", "title": f"Look at “{story.get('title')}” again", "due": later}})

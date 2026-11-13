@@ -217,11 +217,11 @@ async def test_a_press_still_works_when_telegram_refuses_the_instant_answer_or_t
 async def test_a_button_that_fails_or_is_out_of_date_says_so(rig):
     bot, plan = await plan_to_approve(rig)
     await press(rig, bot, "pl:a:no-such-plan", 2)
-    assert rig.telegram.sent[-1][1].startswith("⚠️ No such plan.") and "Nothing was changed" in rig.telegram.sent[-1][1]
+    assert rig.telegram.sent[-1][1].startswith("⚠️ No such plan.") and "Nothing was saved" in rig.telegram.sent[-1][1]
     await press(rig, bot, "zz:q:1", 3)
     assert "older message" in rig.telegram.sent[-1][1]
     await press(rig, bot, f"pl:x:{plan['id']}", 4)
-    assert rig.telegram.sent[-1][1].startswith("👍 Dropped. Nothing was changed")
+    assert rig.telegram.sent[-1][1].startswith("👍 Plan dropped. Nothing was changed")
     await press(rig, bot, f"pl:a:{plan['id']}", 5)
     assert "already been dealt with" in rig.telegram.sent[-1][1]  # a second tap on a settled plan says so
 

@@ -37,7 +37,7 @@ async def test_the_reminders_come_after_the_calls_end_then_an_hour_half_an_hour_
     first = await check(rig, at(9, 40))
     assert first == {"calls": ["a", "b"], "step": 1, "rang": False}
     text = strip_markup(rig.telegram.sent[-1][1])
-    assert "🔔 2 calls still pending" in text and "Call him again" in text and "Followup with Hemla Pawar" in text and "Mark them done in Stiamo" in text
+    assert "🔔 2 calls still pending" in text and "Call him again" in text and "Followup with Hemla Pawar" in text and "Mark them done" not in text and "— Stiamo" not in text
     assert not hasattr(rig.telegram, "voices")  # no audio is ever sent: a real call is what rings
     assert await check(rig, at(9, 41)) is None and await check(rig, at(10, 39)) is None  # not again for an hour
     assert (await check(rig, at(10, 40)))["step"] == 2

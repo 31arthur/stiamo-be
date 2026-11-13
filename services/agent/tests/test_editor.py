@@ -87,7 +87,8 @@ def test_previously_and_hunches_come_from_the_persons_own_words():
                 chapter("c2", "s1", 9, number=2, prose="HR answered. They want a letter first! More later.",
                         hunches=[{"id": "h1", "text": "They'll ask for ITRs next"}])]
     s = story(waitingOn={"on": "HR"})
-    assert ed.previously(s, chapters) == f"last chapter ({ago(9)}): HR answered.; now at “Documents in”; waiting on HR"
+    then = TODAY - timedelta(days=9)
+    assert ed.previously(s, chapters) == f"{then.day} {then.strftime('%b')}: “HR answered.” · now at “Documents in” · waiting on HR"
     c, h = ed.due_hunch(chapters, 7, TODAY.isoformat())
     assert (c["id"], h["id"]) == ("c2", "h1")
     assert ed.due_hunch(chapters, 14, TODAY.isoformat()) is None  # not its moment yet
@@ -130,7 +131,7 @@ async def test_a_quiet_story_gets_three_openings_and_a_tap_books_its_step(rig):
     assert [x for x in sent if "rung" in x] == [{"workspace": "personal", "story": "s1", "rung": 2}]
     text = next(t for _, t in rig.telegram.sent if "Three ways" in t)
     assert "Home loan" in text and "16 days quiet" in text and "Three ways the next chapter could start" in text
-    assert "Last:" in text and "1. You call the agent and ask for a date." in text
+    assert "Documents in" in text and "1. You call the agent and ask for a date." in text
     job = next(x for x in rig.llm_log if "People in the story:" in x["last"])
     assert "People in the story: The agent" in job["last"] and job["tools"] == []
 
@@ -192,9 +193,9 @@ async def test_the_writers_room_sums_up_the_week_on_its_day(rig):
     assert {"workspace": "personal", "room": True} in sent
     room = next(t for _, t in rig.telegram.sent if "Writers' room" in t)
     assert "Moved: Car loan (1)" in room and "Gone quiet: Home loan (16 days)" in room and "“They'll approve” (Car loan)" in room
-    assert "Your next hour" in room and "Home loan" in room.split("Your next hour")[1]
+    assert "Next hour" in room and "Home loan" in room.split("Next hour")[1] and "60% chance · stakes 5" in room
     ladder = next(t for _, t in rig.telegram.sent if "Three ways" in t)
-    assert "1. You ask The agent where things stand." in ladder  # the fallback openings, from the story itself
+    assert "1. You ask the agent where things stand." in ladder  # the fallback openings, from the story itself
 
 
 async def test_switched_off_it_sends_nothing(rig):
@@ -251,4 +252,4 @@ async def test_the_evening_run_brings_the_editor_along(rig):
 
     await ready(rig, {"stories": [story()], "chapters": [chapter("c1", "s1", 9)]})
     await evening(rig)  # nothing to plan, but a story has gone quiet
-    assert any("Last:" in t and "Home loan" in t for _, t in rig.telegram.sent)
+    assert any("quiet" in t and "Home loan" in t for _, t in rig.telegram.sent)

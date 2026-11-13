@@ -79,6 +79,9 @@ class HttpTelegramApi(TelegramApi):
                 return
             raise
 
+    async def delete_message(self, token: str, chat_id: int | str, message_id: int) -> None:
+        await self._call(token, "deleteMessage", {"chat_id": chat_id, "message_id": message_id})
+
     async def send_typing(self, token: str, chat_id: int | str) -> None:
         await self._call(token, "sendChatAction", {"chat_id": chat_id, "action": "typing"})
 

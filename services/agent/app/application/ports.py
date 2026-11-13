@@ -336,6 +336,10 @@ class TelegramApi(ABC):
         """Changes the words of a message already sent, and its buttons (none, by default). Raises when Telegram refuses."""
 
     @abstractmethod
+    async def delete_message(self, token: str, chat_id: int | str, message_id: int) -> None:
+        """Takes a message the bot sent out of the chat. Raises when Telegram refuses (too old, already gone)."""
+
+    @abstractmethod
     async def download_file(self, token: str, file_id: str) -> bytes:
         """What a person sent (a voice note, say), as bytes."""
 
