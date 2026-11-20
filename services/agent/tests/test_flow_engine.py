@@ -878,3 +878,35 @@ async def test_an_agent_can_call_another_and_use_its_answer_but_not_itself_or_to
     loop = [n("t", "trigger.chat"), n("call", "core.call_agent", agent="daily-planner", message="x"), n("a", "respond")]
     await put(rig, loop, wire(("t", 0, "call"), ("call", 0, "a")), agent=f"/v1/agent/agents/{other}")
     assert "too deeply" in (await rig.client.post(RUN, json={"message": "hi"}, headers=headers())).text
+
+
+async def test_the_priority_mail_templates_are_valid_and_route_by_stage(rig):
+    from app.domain.flow import Flow, validate
+    from app.domain.flow_priority import priority_flow
+
+    for kind in ("sb", "personal"):
+        assert validate(Flow.from_json(priority_flow(kind))) == []
+    await planner_ready(rig)
+    made = await rig.client.post("/v1/agent/agents", json={"name": "S&B priority", "templateId": "priority-mail-sb"}, headers=headers())
+    assert made.status_code == 201, made.text
+    a = f"/v1/agent/agents/{made.json()['id']}"
+    f = (await rig.client.get(f"{a}/flow", headers=headers())).json()
+    assert f["problems"] == []
+    types = [x["type"] for x in f["nodes"]]
+    assert types.count("ai.read") >= 4 and types.count("ai.classify") == 2 and "core.safe_senders" in types
+    for x in f["nodes"]:
+        if x["type"] == "ai.classify":
+            x["parameters"]["batchSize"] = 1
+        if x["type"] == "data.mail":
+            x["parameters"]["days"] = 400
+    assert (await rig.client.put(f"{a}/flow", json={"nodes": f["nodes"], "connections": f["connections"]}, headers=headers())).status_code == 200
+    reading = ChatResult(json.dumps({"summary": "They answered and ask for the papers.", "priority": "high", "action": "Send the papers", "due": None, "event": None, "replies": []}))
+    # the rules send BWI straight to its reader and drop the shop; the friend (written to) goes to the reply reader; the lead to the sorter
+    rig.script += [reading, verdict("notify"), verdict("other"), reading, verdict("notify")]
+    out = await rig.client.post(f"{a}/flow/run", json={"message": "go", "scheduled": True}, headers=headers())
+    assert out.status_code == 200, out.text
+    trace = {r["node"]: r for r in (await last(rig, made.json()["id"]))["trace"]}
+    assert trace["vip"]["outputs"] == [1, 3] and trace["noise"]["outputs"] == [1, 2]  # the shop's "50% off" never reaches a model
+    assert trace["safe"]["outputs"] == [1, 1] and trace["sort"]["itemsIn"] == 1
+    assert rig.script == [] and trace["critic"]["itemsIn"] == 1 and trace["attention"]["itemsIn"] == 1
+    assert (await rig.client.get("/v1/agent/attention", headers=headers())).json()["count"] == 2  # BWI and the friend's reply, each once
