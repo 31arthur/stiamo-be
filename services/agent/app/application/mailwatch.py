@@ -18,7 +18,7 @@ from app.application.ports import DataGateway, SettingsRepository, UserSettings,
 from app.application.services import Who, selection_of
 from app.domain.agents import WORKSPACES
 from app.domain.llm import AiError
-from app.domain.mailwatch import NAMES, watch_config, watch_description, watch_id, watch_name, workspace_of
+from app.domain.mailwatch import NAMES, upgraded, watch_config, watch_description, watch_id, watch_name, workspace_of
 
 log = logging.getLogger(__name__)
 
@@ -78,6 +78,13 @@ class MailWatchService:
                 w.version += 1
                 await self._workflows.save(w)
                 changed.append(ws)
+            newer = upgraded(ws, w.config)
+            if newer is not None:
+                w.config = newer
+                w.version += 1
+                await self._workflows.save(w)
+                if ws not in changed:
+                    changed.append(ws)
             if ws not in off:
                 await self._listen(who, w)
         return changed
