@@ -39,7 +39,7 @@ class DecisionBody(DomainModel):
 
 
 class PromptBody(DomainModel):
-    system: Annotated[str, Field(max_length=20000)]
+    system: Annotated[str, Field(max_length=60000)]
     input_template: Annotated[str, Field(max_length=20000)]
     tools: dict[str, ToolOverride] = Field(default_factory=dict)
 

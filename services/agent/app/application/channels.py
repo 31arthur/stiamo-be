@@ -497,6 +497,8 @@ class ChannelService:
         settings_email = c.public.get("ownerEmail", "")
         who = Who(c.user_id, settings_email)
         agent_id = c.public.get("agent") or ORCHESTRATOR_ID
+        if role_of(c) == "mail":  # the mail bot is Chittu, with the mail tools: it must be able to say what is in the inbox
+            agent_id = "daily-planner"
         # A yes or a no is about what the agent just proposed in this chat, not a new question for it.
         verdict = verdict_of(text) if self._proposals else None
         if verdict is not None:
