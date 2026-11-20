@@ -279,7 +279,7 @@ async def test_chittu_says_good_morning_brings_one_thing_at_a_time_and_says_good
     assert len(rig.telegram.sent) == 1
     await press(rig, c, keys[0]["callback_data"], update=2)
     first = rig.telegram.edits[-1][2]
-    assert first.startswith("1 of 6 · ⚖️ Arguments") or first.startswith("1 of 6")  # the hearing is fixed and at a time, so it comes first
+    assert first.startswith("1/6 · ⚖️ Arguments") or first.startswith("1/6")  # the hearing is fixed and at a time, so it comes first
     assert len(rig.telegram.edits) == 1  # one item, not the whole list
     # settle them one by one: each press brings the next
     seen = [first]
@@ -343,3 +343,36 @@ async def test_every_tool_an_agent_has_carries_a_full_card_and_the_prompt_lists_
         d = t["description"]
         assert all(part in d for part in ("USE IT WHEN:", "RETURNS:", "EFFECT:")) and len(d.split()) >= 45, t["name"]
     assert "USE IT WHEN" not in out["system"]  # the prompt names each tool with a line; the card travels with the tool, not twice
+
+
+async def test_on_telegram_a_question_about_many_items_is_answered_one_at_a_time_numbered_never_as_a_list(rig):
+    from app.domain.llm import ChatResult, ToolCall
+
+    from .conftest import headers  # noqa: F401
+    from .test_agent_api import choose, connect
+    from .test_alerts import press
+    from .test_channels import send, telegram
+
+    fill(rig)
+    await connect(rig)
+    await choose(rig, agent=PLANNER)
+    c = await telegram(rig, agent="daily-planner")
+    await send(rig, c, f"/start {c['pairingCode']}", chat=555, update=1)
+    rig.telegram.sent.clear()
+    rig.telegram.keyboards.clear()
+    rig.script += [ChatResult("", [ToolCall("c1", "walk_through", {})]), ChatResult("Say stop whenever you like.")]
+    await send(rig, c, "What's on today?", chat=555, update=2)
+    texts = [t for _, t in rig.telegram.sent]
+    assert texts[0].startswith("Here's your day, ") and "6 things. One at a time." in texts[0]
+    assert texts[1].startswith("1/6 · ")  # the first, numbered, with its buttons: not a list
+    assert [b["text"] for row in rig.telegram.keyboards[1] for b in row][0] in ("✔️ Noted", "✅ Done")
+    assert texts[2] == "Say stop whenever you like." and len(texts) == 3
+    assert not any("2/6" in t for t in texts)  # the second comes only when the first is settled
+    first_button = rig.telegram.keyboards[1][0][0]["callback_data"]
+    await press(rig, c, first_button, update=3)
+    assert rig.telegram.edits[-1][2].count("/6") == 1 and "2/6" in rig.telegram.edits[-1][2]
+    # a question with a filter: only what is overdue
+    rig.data.tables["tasks"].append({"id": "late", "title": "Pay the registry fee", "priority": "normal", "dueDate": (TODAY - timedelta(days=2)).isoformat(), "outcome": {"status": "open"}})
+    rig.script += [ChatResult("", [ToolCall("c2", "walk_through", {"overdue_only": True, "label": "what is late"})]), ChatResult("Say stop whenever you like.")]
+    await send(rig, c, "what's overdue?", chat=555, update=4)
+    assert any("what is late" in t and "one thing. One at a time." in t for _, t in rig.telegram.sent) and any(t.startswith("1/1 · ") and "registry fee" in t for _, t in rig.telegram.sent)

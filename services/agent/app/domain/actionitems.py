@@ -214,7 +214,7 @@ class MovePlan:
         return {"target": self.target, "targetLabel": label_day(self.target), "moves": [m.view() for m in self.moves], "staying": [{"ref": r, "title": t, "why": w} for r, t, w in self.stays], "noRoom": [{"ref": r, "title": t} for r, t in self.overflow]}
 
 
-def pick(items: list[ActionItem], *, day: str | None = None, until: str | None = None, kinds: list[str] | None = None, workspace: str | None = None, priority_below: str | None = None, refs: list[str] | None = None) -> list[ActionItem]:
+def pick(items: list[ActionItem], *, day: str | None = None, until: str | None = None, kinds: list[str] | None = None, workspace: str | None = None, priority_below: str | None = None, refs: list[str] | None = None, priority_at_least: str | None = None) -> list[ActionItem]:
     """The open items a request is about. `day` (or `day` to `until`): placed or due in that range, and overdue ones when the range starts today or earlier
     is the caller's choice. `priority_below`: only items strictly less important than that ("non-urgent" is below "urgent")."""
     out = []
@@ -227,6 +227,8 @@ def pick(items: list[ActionItem], *, day: str | None = None, until: str | None =
             continue
         if workspace and it.workspace != workspace:
             continue
+        if priority_at_least and PRIORITY_RANK.get(it.priority, 2) > PRIORITY_RANK.get(priority_at_least, 2):
+            continue
         if priority_below and PRIORITY_RANK.get(it.priority, 2) <= PRIORITY_RANK.get(priority_below, 2):
             continue
         if refs is None and day:
@@ -238,7 +240,7 @@ def pick(items: list[ActionItem], *, day: str | None = None, until: str | None =
     return sorted(out, key=lambda i: (i.day or i.due or "9999", i.start if i.start is not None else 24 * 60, PRIORITY_RANK.get(i.priority, 2)))
 
 
-def queue_order(items: list[ActionItem], today: str) -> list[ActionItem]:
+def queue_order(items: list[ActionItem], today: str, through: str | None = None) -> list[ActionItem]:
     """What Chittu brings to the owner today, in the order he brings it: first the things at a fixed time (a hearing, a meeting, an event), then urgent items,
     then what is overdue (oldest first), then what is for today by priority. Only open items on, due on, or overdue before today; done ones never come."""
     mine = []
@@ -246,11 +248,13 @@ def queue_order(items: list[ActionItem], today: str) -> list[ActionItem]:
         if it.status != "open":
             continue
         there = it.day or it.due
-        if not there or there > today:
+        if not there or there > (through or today):
             continue
         mine.append(it)
 
     def key(it: ActionItem) -> tuple[Any, ...]:
+        if through and through > today:  # a range ahead: by day, then the usual order within a day
+            return (it.day or it.due or "", 0 if it.priority == "urgent" else 1, it.start if it.start is not None else 24 * 60, PRIORITY_RANK.get(it.priority, 2))
         timed_fixed = it.fixed and it.day == today and it.start is not None
         overdue = (it.day or it.due or today) < today
         return (0 if timed_fixed else 1, it.start if timed_fixed else 0, 0 if it.priority == "urgent" else 1, 0 if overdue else 1, (it.day or it.due or today) if overdue else "", PRIORITY_RANK.get(it.priority, 2), it.start if it.start is not None else 24 * 60)

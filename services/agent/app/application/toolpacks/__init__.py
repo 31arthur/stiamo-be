@@ -39,6 +39,9 @@ class PackContext:
     token: str = ""
     #: Who is named in the history for what the agent does.
     actor: str = "chittu"
+    #: Chittu's one-at-a-time list on Telegram (application/queue.py), and where the message came from ("Telegram", "the web app", …).
+    queue: Any = None
+    channel: str = ""
 
 
 class ToolPack(ABC):
