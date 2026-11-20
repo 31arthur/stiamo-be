@@ -28,6 +28,7 @@ from app.application.ports import (
 from app.application.registry import AgentRegistry
 from app.application.runner import AgentRun, Tool, run_agent
 from app.application.scope import PlannerData, ScopedData
+from app.application.toolpacks.cards import enrich
 from app.application.toolpacks import PackContext
 from app.application.usage_totals import Bucket
 from app.domain.agents import WORKSPACES, AgentDefinition, UnknownAgent, clean_workspaces
@@ -460,7 +461,7 @@ class AgentService:
         context: dict[str, Any] = {"today": today, "user": who.name, "channel": channel}
         for name in agent.packs:
             pack = self._registry.packs.get(name)
-            made = await pack.tools(ctx)
+            made = [Tool(enrich(t.spec), t.label, t.run) for t in await pack.tools(ctx)]  # every tool carries its full card
             tools += made
             tool_packs.update({t.spec.name: name for t in made})
             context.update(await pack.context(ctx))

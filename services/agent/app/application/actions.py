@@ -19,9 +19,10 @@ from zoneinfo import ZoneInfo
 from stiamo_common.errors import Conflict, NotFound, ValidationFailed
 
 from app.application.services import Who
-from app.domain.actionitems import ActionItem, patch_for, pick, plan_move, resolve_day
+from app.domain.actionitems import ActionItem, label_day, patch_for, pick, plan_move, resolve_day
 from app.domain.actionitems import busy_for as busy_on
 from app.domain.actionitems import from_event, from_follow_up, from_hearing, from_meeting, from_native, from_task
+from app.domain.dayplan import clock, free_windows
 from app.domain.llm import AiError
 from app.infrastructure.db.actions import SqlActionRepository
 
@@ -77,13 +78,19 @@ class ActionService:
         items += [from_native(r) for r in await self._repo.items(who.user_id, ["open", "snoozed"])]
         return Loaded(items, {"tasks": tasks, "follow-ups": follow_ups, "meetings": meetings, "hearings": hearings}, calendar)
 
-    async def find(self, who: Who, token: str, *, day: str | None = None, until: str | None = None, kinds: list[str] | None = None, workspace: str | None = None, priority_below: str | None = None, include_overdue: bool = False) -> list[ActionItem]:
+    def free_on(self, loaded: Loaded, day: str) -> list[str]:
+        """What is free of a day, inside the day Chittu keeps, as "09:15–11:00" (hearings, meetings, events and timed items are taken)."""
+        r = loaded.records
+        return [f"{clock(a)}–{clock(b)}" for a, b in free_windows(busy_on(day, r["hearings"], r["meetings"], r["tasks"], r["follow-ups"], loaded.calendar, set()))]
+
+    async def find(self, who: Who, token: str, *, day: str | None = None, until: str | None = None, kinds: list[str] | None = None, workspace: str | None = None, priority_below: str | None = None, include_overdue: bool = False, with_free: bool = False) -> Any:
+        """The open items asked for. With `with_free` (one day), also what is free of that day: returns (items, free windows)."""
         loaded = await self.load(who, token)
         found = pick(loaded.items, day=day, until=until, kinds=kinds, workspace=workspace, priority_below=priority_below)
         if include_overdue and day:
             seen = {i.ref for i in found}
             found += [i for i in pick(loaded.items, kinds=kinds, workspace=workspace, priority_below=priority_below) if i.ref not in seen and (i.due or i.day) and (i.due or i.day) < day]  # type: ignore[operator]
-        return found
+        return (found, self.free_on(loaded, day or self.today())) if with_free else found
 
     # --- history ---------------------------------------------------------------------------------------------------------------------------
 
@@ -134,10 +141,50 @@ class ActionService:
             ops.append({"ref": m.ref, "table": table, "id": m.ref.split(":", 1)[1], "title": m.title, "before": {k: it.record.get(k) for k in patch}, "after": patch, "from": m.view()["from"], "to": m.view()["to"]})
         plan.moves = [m for m in plan.moves if any(o["ref"] == m.ref for o in ops)]
         what = f"{len(ops)} item{'s' if len(ops) != 1 else ''} to {target}"
+        warnings = []
+        urgent = [loaded.get(m.ref).title for m in plan.moves if loaded.get(m.ref) and loaded.get(m.ref).priority == "urgent"]  # type: ignore[union-attr]
+        due_moves = [loaded.get(m.ref).title for m in plan.moves if loaded.get(m.ref) and loaded.get(m.ref).priority != "urgent" and loaded.get(m.ref).due and loaded.get(m.ref).due < target]  # type: ignore[union-attr,operator]
+        if urgent:
+            warnings.append(f"Urgent: {'; '.join(f'“{t}”' for t in urgent[:5])}.")
+        if due_moves:
+            warnings.append(f"{len(due_moves)} item{'s' if len(due_moves) != 1 else ''} had a due date before {label_day(target)}; their due dates move to {label_day(target)} too.")
+        # what the filter left where it was, so "the urgent one stays" is said by the tool and not inferred
+        left = [i for i in pick(loaded.items, day=source, until=last, workspace=workspace, refs=refs) if i.ref not in {m.ref for m in plan.moves} and i.ref not in {r for r, _, _ in plan.stays} and i.ref not in {r for r, _ in plan.overflow}]
+        not_included = [{"ref": i.ref, "title": i.title, "why": f"{i.priority} priority is not below the line you gave" if priority_below else "not selected"} for i in left[:10]]
         cs = {"id": str(uuid.uuid4()), "title": f"Move {what}", "status": "pending", "ops": ops, "summary": {**plan.view(), "why": why}, "actor": actor, "channelId": channel_id, "createdAt": self._now()}
         if ops:
             await self._repo.add_changeset(who.user_id, cs)
-        return {"changesetId": cs["id"] if ops else None, "title": cs["title"], "willMove": len(ops), **plan.view()}
+        return {"changesetId": cs["id"] if ops else None, "title": cs["title"], "willMove": len(ops), **plan.view(), "warnings": warnings, "notIncluded": not_included, "free_on_target": self.free_on(loaded, target)}
+
+    async def preview_close(self, who: Who, token: str, *, action: str, day: str | None = None, until: str | None = None, kinds: list[str] | None = None, workspace: str | None = None, priority_below: str | None = None,
+                            refs: list[str] | None = None, include_overdue: bool = False, actor: str = "chittu", why: str = "") -> dict[str, Any]:
+        """Previews marking many items done, or cancelling them. A pending change like a move: nothing is changed until it is applied, and it can be undone.
+        Fixed items (hearings, meetings, events) are left alone: they are not the owner's to cancel from here."""
+        if action not in ("complete", "cancel"):
+            raise ValidationFailed("The action is complete or cancel.")
+        today = self.today()
+        source = resolve_day(day, today) if day else None
+        last = resolve_day(until, today) if until else None
+        if day and source is None:
+            raise ValidationFailed(f"I can't tell which day “{day}” is.")
+        loaded = await self.load(who, token)
+        chosen = pick(loaded.items, day=source, until=last, kinds=kinds, workspace=workspace, priority_below=priority_below, refs=refs)
+        if include_overdue and source:
+            have = {i.ref for i in chosen}
+            chosen += [i for i in pick(loaded.items, kinds=kinds, workspace=workspace, priority_below=priority_below) if i.ref not in have and (i.due or i.day) and (i.due or i.day) < source]  # type: ignore[operator]
+        ops, stays = [], []
+        for it in chosen:
+            if it.table not in (*WRITABLE, "native") or it.fixed or it.kind in ("hearing", "event", "meeting"):
+                stays.append({"ref": it.ref, "title": it.title, "why": "a hearing, a meeting or an event is not cancelled or finished from here"})
+                continue
+            status = "done" if action == "complete" else "cancelled"
+            patch: dict[str, Any] = {"status": status} if it.table == "native" else {"outcome": {**(it.record.get("outcome") or {}), "status": status, "recordedAt": _iso(self._now())}}
+            ops.append({"ref": it.ref, "table": it.table, "id": it.ref.split(":", 1)[1], "title": it.title, "before": {k: it.record.get(k) for k in patch}, "after": patch, "from": it.when, "to": status, "event": "completed" if action == "complete" else "cancelled"})
+        verb = "Finish" if action == "complete" else "Cancel"
+        cs = {"id": str(uuid.uuid4()), "title": f"{verb} {len(ops)} item{'s' if len(ops) != 1 else ''}", "status": "pending", "ops": ops, "summary": {"why": why}, "actor": actor, "channelId": None, "createdAt": self._now()}
+        if ops:
+            await self._repo.add_changeset(who.user_id, cs)
+        return {"changesetId": cs["id"] if ops else None, "title": cs["title"], "willChange": len(ops), "items": [{"ref": o["ref"], "title": o["title"]} for o in ops], "staying": stays, "warnings": [f"“{i.title}” is urgent." for i in chosen if i.priority == "urgent" and i.ref in {o["ref"] for o in ops}]}
 
     async def apply_changeset(self, who: Who, token: str, changeset_id: str, *, actor: str = "owner") -> dict[str, Any]:
         cs = await self._repo.changeset(who.user_id, changeset_id)
@@ -237,7 +284,9 @@ class ActionService:
             if not patch:
                 raise ValidationFailed(f"“{it.title}” can't be moved from here.")
             before = {k: it.record.get(k) for k in patch}
-            title = f"{'Snoozed' if action == 'snooze' else 'Moved'} to {day}: {it.title}"
+            new_start = (patch.get("slot") or {}).get("start") if "slot" in patch else (patch.get("due") or {}).get("time") if "due" in patch else patch.get("start")
+            when = label_day(day) + (f" {clock(new_start)}" if new_start is not None else "")
+            title = f"{'Snoozed' if action == 'snooze' else 'Moved'} to {when}: {it.title}"
         else:
             raise ValidationFailed("The action is complete, cancel, reopen, move or snooze.")
         event = {"complete": "completed", "cancel": "cancelled", "reopen": "reopened", "snooze": "snoozed", "move": "moved"}[action]

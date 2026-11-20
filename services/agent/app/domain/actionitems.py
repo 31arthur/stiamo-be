@@ -17,6 +17,14 @@ from typing import Any
 
 from app.domain.dayplan import DAY_END, DAY_START, DEFAULT_MEETING, busy_blocks, clock, free_windows, hearing_block, is_open
 
+def label_day(day: str | None) -> str | None:
+    """A day as it is said: Thu 26 Nov."""
+    if not day:
+        return None
+    d = date.fromisoformat(day)
+    return f"{d.strftime('%a')} {d.day} {d.strftime('%b')}"
+
+
 KINDS = ("task", "call", "message", "meeting", "hearing", "event", "mail", "step", "deadline")
 STATUSES = ("open", "done", "cancelled", "snoozed")
 PRIORITY_RANK = {"urgent": 0, "high": 1, "normal": 2, "low": 3}
@@ -54,10 +62,17 @@ class ActionItem:
             return f"{self.day} {clock(self.start)}"
         return self.day or (f"due {self.due}" if self.due else "unscheduled")
 
-    def view(self) -> dict[str, Any]:
-        """What Chittu is shown: the facts, never the raw record."""
-        out = {"ref": self.ref, "kind": self.kind, "title": self.title, "workspace": self.workspace, "day": self.day, "time": clock(self.start) if self.start is not None else None,
-               "minutes": self.duration, "due": self.due, "status": self.status, "priority": self.priority, "fixed": self.fixed, "case": self.case_ref, "contact": self.contact, "source": self.source}
+    def view(self, today: str | None = None) -> dict[str, Any]:
+        """What Chittu is shown: the facts, never the raw record. Days come with a label ready to say (Thu 26 Nov), and an overdue item with how many days late
+        it is, so he never has to work either out."""
+        out = {"ref": self.ref, "kind": self.kind, "title": self.title, "workspace": self.workspace, "day": self.day, "dayLabel": label_day(self.day), "time": clock(self.start) if self.start is not None else None,
+               "minutes": self.duration, "due": self.due, "dueLabel": label_day(self.due) if self.due and self.due != self.day else None, "status": self.status, "priority": self.priority, "fixed": self.fixed, "case": self.case_ref,
+               "contact": self.contact, "source": self.source}
+        there = self.day or self.due
+        if today and there and there < today:
+            out["daysLate"] = (date.fromisoformat(today) - date.fromisoformat(there)).days
+        if self.kind == "mail" and self.notes:
+            out["summary"] = str(self.notes)[:220]
         return {k: v for k, v in out.items() if v not in (None, "", False) or k in ("fixed",)}
 
 
@@ -183,7 +198,7 @@ class Move:
     note: str = ""
 
     def view(self) -> dict[str, Any]:
-        return {"ref": self.ref, "title": self.title, "kind": self.kind, "from": f"{self.from_day or 'unplaced'}{' ' + clock(self.from_start) if self.from_start is not None else ''}", "to": f"{self.to_day}{' ' + clock(self.to_start) if self.to_start is not None else ''}", **({"note": self.note} if self.note else {})}
+        return {"ref": self.ref, "title": self.title, "kind": self.kind, "from": f"{label_day(self.from_day) or 'unplaced'}{' ' + clock(self.from_start) if self.from_start is not None else ''}", "to": f"{label_day(self.to_day)}{' ' + clock(self.to_start) if self.to_start is not None else ''}", **({"note": self.note} if self.note else {})}
 
 
 @dataclass
@@ -196,7 +211,7 @@ class MovePlan:
     overflow: list[tuple[str, str]] = field(default_factory=list)
 
     def view(self) -> dict[str, Any]:
-        return {"target": self.target, "moves": [m.view() for m in self.moves], "staying": [{"ref": r, "title": t, "why": w} for r, t, w in self.stays], "noRoom": [{"ref": r, "title": t} for r, t in self.overflow]}
+        return {"target": self.target, "targetLabel": label_day(self.target), "moves": [m.view() for m in self.moves], "staying": [{"ref": r, "title": t, "why": w} for r, t, w in self.stays], "noRoom": [{"ref": r, "title": t} for r, t in self.overflow]}
 
 
 def pick(items: list[ActionItem], *, day: str | None = None, until: str | None = None, kinds: list[str] | None = None, workspace: str | None = None, priority_below: str | None = None, refs: list[str] | None = None) -> list[ActionItem]:
@@ -269,17 +284,19 @@ def plan_move(items: list[ActionItem], target: str, busy_on_target: list[tuple[i
             continue
         length = it.duration or 30
         free = free_windows(busy)
-        spot = None
-        if keep_times and any(a <= it.start and it.start + length <= b for a, b in free):
+        clash = next((n for a, b, n in sorted(busy) if it.start < b and a < it.start + length), None)
+        if keep_times and clash is None and any(a <= it.start and it.start + length <= b for a, b in free):
             spot = it.start
         else:
-            spot = next((a for a, b in free if b - a >= length), None)
+            # the nearest free place to where it was (a draft that was at nine goes to eleven, not to six in the morning)
+            fits = [max(a, min(it.start, b - length)) for a, b in free if b - a >= length]
+            spot = min(fits, key=lambda c: (abs(c - it.start), -c)) if fits else None
         if spot is None:
             plan.overflow.append((it.ref, it.title))
             continue
         busy.append((spot, spot + length, it.title))
         busy.sort()
-        plan.moves.append(Move(it.ref, it.title, it.kind, it.day, it.start, target, spot, "" if spot == it.start else f"{clock(it.start)} was taken, so it goes at {clock(spot)}"))
+        plan.moves.append(Move(it.ref, it.title, it.kind, it.day, it.start, target, spot, "" if spot == it.start else (f"{clock(it.start)} clashes with {clash}, so it goes at {clock(spot)}" if clash else f"{clock(it.start)} is not free, so it goes at {clock(spot)}")))
     return plan
 
 
