@@ -220,7 +220,16 @@ def summary(uid: int, raw: bytes, flags: tuple, structure=None, envelope=None) -
         seen="\\Seen" in seen,
         flagged="\\Flagged" in seen,
         has_attachments=has_files,
+        in_reply_to=str(msg["in-reply-to"] or "").strip()[:998],
+        references=" ".join(str(msg["references"] or "").split())[:2000],
+        to=tuple(p.address.lower() for p in _people(msg["to"]) if p.address)[:20],
+        cc=tuple(p.address.lower() for p in _people(msg["cc"]) if p.address)[:20],
     )
+
+
+def message_ids(value: str) -> list[str]:
+    """The <ids> in a Message-ID, In-Reply-To or References header, lower case, angle brackets kept off."""
+    return [x.lower() for x in re.findall(r"<([^<>\s]+)>", value or "")]
 
 
 def message(uid: int, raw: bytes, flags: tuple) -> tuple[Message, list[tuple[Attachment, EmailMessage]]]:

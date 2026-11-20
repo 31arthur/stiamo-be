@@ -10,7 +10,7 @@ from typing import Any
 
 from app.domain.agents import WORKSPACES
 from app.domain.mailrules import DISCARD_ORDER_COPY, DISCARD_SUBJECT, DISCARD_TEXT, PRIORITY_DOMAINS
-from app.domain.prompting import brief
+from app.domain.mailprompts import PROMPTS
 
 PREFIX = "watch-"
 NAMES = {"personal": "Personal", "sb": "S&B", "fsa": "FSA", "media": "Media"}
@@ -29,77 +29,33 @@ _V2_SB = (
 )
 _V2_PERSONAL = "You watch the owner's personal inbox. Almost nothing here deserves an interruption. "
 
-#: What each kind of work needs to hear about. The one thing every inbox shares: replies to the owner's own mail.
-_REPLY = "A reply to the owner's own mail: \"Re:\" in the subject, the owner's words quoted, \"in response to your\", \"as discussed\", or the facts say the owner has written to this sender before."
-_NOT = (
-    "One-time passwords, verification, login and security codes, sign-in alerts, password resets, account and balance statements, order copies and confirmations, shipping, receipts, invoices from shops, "
-    "newsletters, promotions, webinars, social and app notifications."
+#: The prompts, written out in domain/mailprompts.py: one long prompt per workspace (the shared rules and facts, then that workspace's own priorities and examples).
+FOCUS: dict[str, str] = PROMPTS
+
+#: The persona lines of the wording before this one, so a watch the owner never edited can still be recognised and upgraded.
+_V3_PERSONAS = (
+    "## Persona\nYou are the intake clerk of S&B Consultants, a legal and advocacy practice for trade unions and migrant workers.",
+    "## Persona\nYou are the gatekeeper of the owner's personal inbox. You are blunt. Almost nothing here deserves an interruption.",
+    "## Persona\nYou are the intake clerk of FSA, a software and technology consultancy. You are blunt.",
+    "## Persona\nYou are the intake clerk for the owner's media work. You are blunt.",
 )
 
-FOCUS: dict[str, str] = {
-    "sb": brief(
-        persona="You are the intake clerk of S&B Consultants, a legal and advocacy practice for trade unions and migrant workers. You are blunt. Silence is the default; the owner is interrupted rarely and only for the list below.",
-        tasks=["Read the sender and the subject first, the start of the text second.", "Decide: needed or discarded.", "Choose needed only if the email is one of the kinds in Context."],
-        context=[
-            "Needed, kind 1: BWI (Building and Wood Workers' International).",
-            "Needed, kind 2: MFA (Migrants Forum in Asia).",
-            "Needed, kind 3: the United Nations or any UN body or agency (ILO, OHCHR, UNDP, UNICEF, UNHCR, IOM, UN Women, UNESCO and the like).",
-            "Needed, kind 4: a government agency, ministry, department, court, tribunal or commission.",
-            "Needed, kind 5: Right to Information (RTI) mail: a reply, a fee demand, a transfer, a first-appeal or information-commission notice.",
-            "Needed, kind 6: " + _REPLY,
-            "Judge by who sent it or signed it, not by words in the subject. A promotional mail that mentions the UN is discarded.",
-            "A line starting \"[Facts from the system: ...]\" is established by code. Believe it. A sender on the priority list is usually kind 1 to 4, but a circular or newsletter from them is still discarded.",
-            "Discarded: " + _NOT + " Also clients and general correspondence that are not one of the six kinds.",
-        ],
-        output=["One label: needed or discarded.", "Unsure: discarded, with low confidence. A person reviews low-confidence mail."],
-    ),
-    "fsa": brief(
-        persona="You are the intake clerk of FSA, a software and technology consultancy. You are blunt. Silence is the default; the owner is interrupted rarely.",
-        tasks=["Read the sender and the subject first, the start of the text second.", "Decide: needed or discarded.", "Choose needed only for the kinds in Context."],
-        context=[
-            "Needed: a client who is blocked, unhappy or waiting on a reply, approval, fix or delivery.",
-            "Needed: a payment, invoice dispute, contract or renewal with a client or partner that needs the owner.",
-            "Needed: a person or monitoring service reporting that a client's system is down, breached or failing.",
-            "Needed: a real person or company asking FSA to build, quote or partner.",
-            "Needed: " + _REPLY,
-            "A line starting \"[Facts from the system: ...]\" is established by code. Believe it.",
-            "Discarded: " + _NOT + " Also cold sales pitches, recruiters' bulk mail and vendor marketing.",
-        ],
-        output=["One label: needed or discarded.", "Unsure: discarded, with low confidence. A person reviews low-confidence mail."],
-    ),
-    "media": brief(
-        persona="You are the intake clerk for the owner's media work. You are blunt. Silence is the default; the owner is interrupted rarely.",
-        tasks=["Read the sender and the subject first, the start of the text second.", "Decide: needed or discarded.", "Choose needed only for the kinds in Context."],
-        context=[
-            "Needed: an editor, producer, journalist or publication asking for a piece, an interview, a comment, a correction or a deadline.",
-            "Needed: a commission, a booking or an invitation to appear that names a date.",
-            "Needed: " + _REPLY,
-            "A line starting \"[Facts from the system: ...]\" is established by code. Believe it.",
-            "Discarded: " + _NOT + " Also press releases and mass pitches sent to a list.",
-        ],
-        output=["One label: needed or discarded.", "Unsure: discarded, with low confidence. A person reviews low-confidence mail."],
-    ),
-    "personal": brief(
-        persona="You are the gatekeeper of the owner's personal inbox. You are blunt. Almost nothing here deserves an interruption. Silence is the default.",
-        tasks=["Read the sender and the subject first, the start of the text second.", "Decide: needed or discarded.", "Choose needed only for the two kinds in Context."],
-        context=[
-            "Needed, kind 1: " + _REPLY,
-            "Needed, kind 2: a real person or company writing to the owner personally to do business: an enquiry, a request for a quote or a meeting, a proposal, a collaboration, an offer of work.",
-            "A mass-mailed pitch, a template, a recruiter's bulk mail or \"grow your business\" mail is not kind 2.",
-            "A line starting \"[Facts from the system: ...]\" is established by code. Believe it.",
-            "Discarded, always, even if it looks urgent: " + _NOT + " Also bank and card mail of any kind, and anything else that is not kind 1 or 2.",
-        ],
-        output=["One label: needed or discarded.", "Unsure: discarded, with low confidence. A person reviews low-confidence mail."],
-    ),
+#: Subjects that must reach the model even when a dropping rule matched: harm, deadlines, legal words and leads.
+RESCUE = {
+    "sb": [r"(court|order dated|certified copy|hearing|summons|notice|appeal|\brti\b|tribunal|registry|undeliver|delivery (status|failure))"],
+    "personal": [r"(fraud|suspicious|unauthori[sz]ed|blocked|declined|failed|bounced|lapse|expir|overdue|cancell?ed|rescheduled|delayed|gate change|enquiry|inquiry|quote|undeliver|delivery (status|failure))"],
+    "fsa": [r"(down|outage|breach|incident|vulnerab|enquiry|inquiry|quote|undeliver|delivery (status|failure))"],
+    "media": [r"(deadline|correction|takedown|copyright|licen[cs]e|interview|comment|undeliver|delivery (status|failure))"],
 }
+
 
 #: The pre-model rules per workspace (see domain/mailrules.py). Only personal drops "order copy": in a law practice an order is often a court order.
 def _rules(workspace: str) -> dict[str, Any]:
     subject = list(DISCARD_SUBJECT.values()) + (list(DISCARD_ORDER_COPY.values()) if workspace == "personal" else [])
     return {
         "protectedDomains": [], "protectedPhrases": [], "protectCorrespondents": False,
-        "discardPatterns": subject, "discardTextPatterns": list(DISCARD_TEXT.values()),
-        "priorityDomains": list(PRIORITY_DOMAINS) if workspace in ("sb", "media") else [], "noteCorrespondents": True,
+        "discardPatterns": subject, "discardTextPatterns": list(DISCARD_TEXT.values()), "rescuePatterns": list(RESCUE.get(workspace, [])),
+        "priorityDomains": list(PRIORITY_DOMAINS) if workspace in ("sb", "media", "fsa") else [], "noteCorrespondents": True,
     }
 
 
@@ -124,21 +80,22 @@ def watch_description(workspace: str) -> str:
 
 
 def labels_for(workspace: str) -> list[dict[str, str]]:
-    """Two labels, for every workspace: the decision model chooses between them, and only "needed" reaches the phone."""
+    """Three outcomes for every workspace, chosen by the decision model: the phone, the Attention list (shown in the evening plan), or nothing."""
     return [
-        {"name": "needed", "description": "One of the kinds listed in the instructions for this inbox. The owner is told now.", "route": "alert"},
-        {"name": "discarded", "description": "Anything else, including every code, login, statement, order, receipt, newsletter and promotion. Nothing happens.", "route": "none"},
+        {"name": "now", "description": "Worth interrupting the owner for: a priority sender asking or announcing something, a verified reply from a person who is waiting, a close deadline, something breaking, a possible impersonation.", "route": "alert"},
+        {"name": "digest", "description": "Real and relevant but can wait until the evening: acknowledgements, circulars from priority senders, information with nothing to do, anything unclear.", "route": "attention"},
+        {"name": "drop", "description": "Automated, bulk or not for the owner: codes, logins, statements, orders, receipts, newsletters, promotions, notifications, cold pitches.", "route": "none"},
     ]
 
 
 #: Bumped when the default setup of a watch changes. A watch the owner never edited is brought up to it; an edited one is left alone.
-FOCUS_VERSION = 3
+FOCUS_VERSION = 4
 
 
 def _is_default(workspace: str, prompt: Any) -> bool:
     """Whether the prompt is one an earlier version of this app wrote, so the owner never changed it."""
     p = str(prompt or "")
-    return p == _V1.get(workspace) or (workspace == "sb" and p.startswith(_V2_SB)) or (workspace == "personal" and p.startswith(_V2_PERSONAL)) or p == FOCUS.get(workspace)
+    return p == _V1.get(workspace) or (workspace == "sb" and p.startswith(_V2_SB)) or (workspace == "personal" and p.startswith(_V2_PERSONAL)) or any(p.startswith(x) for x in _V3_PERSONAS) or p == FOCUS.get(workspace)
 
 
 def upgraded(workspace: str, config: dict[str, Any]) -> dict[str, Any] | None:

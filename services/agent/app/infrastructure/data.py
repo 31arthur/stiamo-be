@@ -113,6 +113,13 @@ class HttpDataGateway(DataGateway):
             raise await self._mail_error(r)
         return r.json()
 
+    async def mail_sent_ids(self, account_id: str) -> list[str]:
+        try:
+            r = await self._get(f"{self._mail}/v1/mail/accounts/{account_id}/sent-ids")
+        except AiError:
+            return []  # a reply is then told by its subject and sender alone: not worth failing the run
+        return r.json() if r.status_code == 200 and isinstance(r.json(), list) else []
+
     async def mail_accounts(self) -> list[dict[str, Any]]:
         try:
             r = await self._get(f"{self._mail}/v1/mail/accounts")

@@ -15,6 +15,7 @@ from stiamo_common.errors import ValidationFailed
 from stiamo_common.models import DomainModel
 
 from app.domain.alerts import clean_replies
+from app.domain.mailfacts import Knowledge, facts_for
 
 #: The Stiamo collections a workflow can read, and the path each lives at in the practice service.
 TABLES: dict[str, str] = {
@@ -135,6 +136,8 @@ class Rules(DomainModel):
     discard_patterns: list[str] = Field(default_factory=list)
     #: The same, checked against the sender line and the start of the text as well.
     discard_text_patterns: list[str] = Field(default_factory=list)
+    #: Mail whose subject matches one of these is never dropped by the patterns above: it goes to the model (a fraud alert is not a balance statement).
+    rescue_patterns: list[str] = Field(default_factory=list)
     #: Mail from these domains is not dropped by the patterns, and the model is told the sender is on the owner's priority list.
     priority_domains: list[str] = Field(default_factory=list)
     #: The model is told when the owner has written to the sender before (without keeping the mail from being judged).
@@ -164,7 +167,7 @@ class WorkflowConfig(DomainModel):
     source: Source = Field(default_factory=Source)
     filters: Filters = Field(default_factory=Filters)
     #: Tells the model what the sorting is for.
-    prompt: str = Field(max_length=4000)
+    prompt: str = Field(max_length=60000)
     labels: list[Label]
     #: `model`: the agent's own model answers with JSON. `jev`: the decision model answers with probabilities.
     decider: Literal["model", "jev"] = "model"
@@ -292,7 +295,11 @@ def item_from_mail(msg: dict[str, Any], uid_validity: int, account_id: str = "")
     who = f"{sender.get('name')} <{address}>" if sender.get("name") else address
     attached = "Attachment: yes\n" if msg.get("hasAttachments") else ""  # it can't open attachments, but it can tell there is one
     text = f"From: {who}\nSubject: {msg.get('subject', '')}\n{attached}\n{msg.get('snippet', '')}"
-    return Item(f"{account_id}:{uid_validity}:{msg['uid']}", str(msg.get("subject") or "(no subject)")[:120], text[:MAX_ITEM_CHARS], msg.get("date"), {"from": address})
+    meta = {
+        "from": address, "in_reply_to": str(msg.get("inReplyTo") or ""), "references": str(msg.get("references") or ""),
+        "to": ",".join(msg.get("to") or []), "cc": ",".join(msg.get("cc") or []), "files": "1" if msg.get("hasAttachments") else "",
+    }
+    return Item(f"{account_id}:{uid_validity}:{msg['uid']}", str(msg.get("subject") or "(no subject)")[:120], text[:MAX_ITEM_CHARS], msg.get("date"), meta)
 
 
 def uid_of(item_id: str) -> int:
@@ -324,33 +331,51 @@ def _domain_in(address: str, domains: list[str]) -> bool:
     return bool(domain) and any(domain == d or domain.endswith("." + d) for d in domains)
 
 
-def discarded_by(item: Item, rules: Rules) -> str | None:
-    """Why this item is dropped in code without asking the model, or None. A sender on the priority list is never dropped this way."""
+#: Facts that mean a mail must reach the model whatever its subject looks like.
+_RESCUE_FACTS = ("VERIFIED REPLY", "delivery-failure", "IMPERSONATION", "contact-form", "names an active case", "other side in an active case", "client of an active case", "calendar invitation")
+
+
+def discarded_by(item: Item, rules: Rules, kn: Knowledge | None = None) -> str | None:
+    """Why this item is dropped in code without asking the model, or None. A sender on the priority list is never dropped this way, nor is a mail
+    that the facts show to be a reply, a bounce, an enquiry or about an active case."""
     if _domain_in(item.meta.get("from", ""), rules.priority_domains):
         return None
+    why: str | None = None
     for pattern in rules.discard_patterns:
         try:
             if re.search(pattern, item.title, re.IGNORECASE):
-                return "a rule dropped it: automated or bulk mail"
+                why = "a rule dropped it: automated or bulk mail"
+                break
         except re.error:
             continue
-    for pattern in rules.discard_text_patterns:
+    if why is None:
+        for pattern in rules.discard_text_patterns:
+            try:
+                if re.search(pattern, item.title + "\n" + item.text[:400], re.IGNORECASE):
+                    why = "a rule dropped it: one-time code or login mail"
+                    break
+            except re.error:
+                continue
+    if why is None:
+        return None
+    for pattern in rules.rescue_patterns:
         try:
-            if re.search(pattern, item.title + "\n" + item.text[:400], re.IGNORECASE):
-                return "a rule dropped it: one-time code or login mail"
+            if re.search(pattern, item.title, re.IGNORECASE):
+                return None
         except re.error:
             continue
-    return None
+    if any(any(k in f for k in _RESCUE_FACTS) for f in facts_for(item.meta, item.title, item.text, kn or knowledge_from(rules, set()))):
+        return None
+    return why
 
 
-def with_context(item: Item, rules: Rules, correspondents: set[str]) -> Item:
-    """The item with what the code knows about the sender written above it, for the model to take as fact."""
-    address = item.meta.get("from", "")
-    lines = []
-    if _domain_in(address, rules.priority_domains):
-        lines.append("Sender is on the owner's priority list (a partner, UN body or government domain).")
-    if rules.note_correspondents and address and address in correspondents:
-        lines.append("The owner has written to this sender before.")
+def knowledge_from(rules: Rules, friends: set[str]) -> Knowledge:
+    return Knowledge(correspondents=set(friends) if rules.note_correspondents else set(), priority=list(rules.priority_domains))
+
+
+def with_context(item: Item, rules: Rules, correspondents: set[str], kn: Knowledge | None = None) -> Item:
+    """The item with what the code knows about it written above it, for the model to take as fact."""
+    lines = facts_for(item.meta, item.title, item.text, kn or knowledge_from(rules, correspondents))
     if not lines:
         return item
     return Item(item.id, item.title, "[Facts from the system: " + " ".join(lines) + "]\n" + item.text, item.when, item.meta)

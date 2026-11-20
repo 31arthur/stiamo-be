@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from stiamo_common.errors import ValidationFailed
@@ -112,6 +112,28 @@ class MailWatchService:
         s = await self._load(who)
         s.mailwatch = {**s.mailwatch, "off": sorted(self._off(s) | {ws})}
         await self._settings.save(s)
+
+    async def audit(self, who: Who, hours: int = 24) -> dict[str, Any]:
+        """What each watch did in the last `hours`: how many mails a rule dropped, how many the model dropped, how many went to the evening list and
+        how many to the phone, with a few of the dropped ones (the costly mistake is a wrongly dropped mail, so these are shown)."""
+        since = datetime.now(UTC) - timedelta(hours=max(1, min(hours, 24 * 14)))
+        entries = await self._workflows.since(who.user_id, since)
+        out = []
+        for ws in WORKSPACES:
+            wid = watch_id(ws, who.user_id)
+            mine = [e for e in entries if e.agent_id == wid and e.status != "seen"]
+            if not mine:
+                continue
+            by_rule = [e for e in mine if e.status == "protected" and "a rule dropped it" in (e.reason or "")]
+            by_label = lambda name: [e for e in mine if e.label == name and e not in by_rule]  # noqa: E731
+            dropped = by_label("drop")
+            out.append({
+                "workspace": ws, "name": NAMES.get(ws, ws), "agentId": wid, "hours": hours, "total": len(mine),
+                "droppedByRule": len(by_rule), "droppedByModel": len(dropped), "digest": len(by_label("digest")), "now": len(by_label("now")),
+                "samples": [{"title": e.title, "why": e.reason or "", "by": "rule" if e in by_rule else "model"} for e in [*by_rule[:3], *dropped[:3]]],
+                "line": f"{NAMES.get(ws, ws)}: {len(mine)} mails: {len(by_label('now'))} to the phone, {len(by_label('digest'))} for the evening, {len(dropped)} dropped by the model, {len(by_rule)} by a rule.",
+            })
+        return {"workspaces": out}
 
     # --- showing them ----------------------------------------------------------------------------------------------
 

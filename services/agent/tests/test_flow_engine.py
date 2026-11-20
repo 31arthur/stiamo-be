@@ -883,9 +883,13 @@ async def test_an_agent_can_call_another_and_use_its_answer_but_not_itself_or_to
 async def test_the_priority_mail_templates_are_valid_and_route_by_stage(rig):
     from app.domain.flow import Flow, validate
     from app.domain.flow_priority import priority_flow
+    from app.domain.mailprompts import critic_prompt, reader_prompt
 
     for kind in ("sb", "personal"):
-        assert validate(Flow.from_json(priority_flow(kind))) == []
+        f = priority_flow(kind)
+        assert validate(Flow.from_json(f)) == []
+        assert all(len(x["parameters"]["prompt"].split()) >= 2000 for x in f["nodes"] if x["type"] in ("ai.classify", "ai.read"))
+        assert len(reader_prompt(kind).split()) >= 2000 and len(critic_prompt(kind).split()) >= 2000
     await planner_ready(rig)
     made = await rig.client.post("/v1/agent/agents", json={"name": "S&B priority", "templateId": "priority-mail-sb"}, headers=headers())
     assert made.status_code == 201, made.text
@@ -893,23 +897,24 @@ async def test_the_priority_mail_templates_are_valid_and_route_by_stage(rig):
     f = (await rig.client.get(f"{a}/flow", headers=headers())).json()
     assert f["problems"] == []
     types = [x["type"] for x in f["nodes"]]
-    assert types.count("ai.read") >= 4 and types.count("ai.classify") == 2 and "core.safe_senders" in types
+    assert types.count("ai.read") == 3 and types.count("ai.classify") == 2 and "trigger.mail" in types
     for x in f["nodes"]:
         if x["type"] == "ai.classify":
             x["parameters"]["batchSize"] = 1
         if x["type"] == "data.mail":
             x["parameters"]["days"] = 400
     assert (await rig.client.put(f"{a}/flow", json={"nodes": f["nodes"], "connections": f["connections"]}, headers=headers())).status_code == 200
-    reading = ChatResult(json.dumps({"summary": "They answered and ask for the papers.", "priority": "high", "action": "Send the papers", "due": None, "event": None, "replies": []}))
-    # the rules send BWI straight to its reader and drop the shop; the friend (written to) goes to the reply reader; the lead to the sorter
-    rig.script += [reading, verdict("notify"), verdict("other"), reading, verdict("notify")]
+    reading = ChatResult(json.dumps({"summary": "They ask for a quote.", "priority": "high", "action": "Send the quote", "due": None, "event": None, "replies": []}))
+    # the rule drops the shop ("50% off") before any model; the lead, the friend and BWI's newsletter (a priority sender is never dropped by a rule) are judged
+    rig.script += [verdict("now"), verdict("digest"), verdict("digest"), reading, reading, reading, verdict("notify")]
     out = await rig.client.post(f"{a}/flow/run", json={"message": "go", "scheduled": True}, headers=headers())
     assert out.status_code == 200, out.text
     trace = {r["node"]: r for r in (await last(rig, made.json()["id"]))["trace"]}
-    assert trace["vip"]["outputs"] == [1, 3] and trace["noise"]["outputs"] == [1, 2]  # the shop's "50% off" never reaches a model
-    assert trace["safe"]["outputs"] == [1, 1] and trace["sort"]["itemsIn"] == 1
-    assert rig.script == [] and trace["critic"]["itemsIn"] == 1 and trace["attention"]["itemsIn"] == 1
-    assert (await rig.client.get("/v1/agent/attention", headers=headers())).json()["count"] == 2  # BWI and the friend's reply, each once
+    assert trace["sort"]["itemsIn"] == 4 and trace["sort"]["outputs"] == [1, 2, 1, 0]  # now, digest, drop (by rule), unsure
+    assert trace["read_now"]["itemsIn"] == 1 and trace["read_digest"]["itemsIn"] == 2 and trace["critic"]["outputs"][0] == 1
+    assert rig.script == []
+    queue = (await rig.client.get("/v1/agent/attention", headers=headers())).json()
+    assert queue["count"] == 3  # the alert and the two for the evening, each once
 
 
 async def test_a_workflow_with_an_on_new_mail_trigger_listens_to_its_workspaces_mailboxes_and_stops_when_deleted(rig):

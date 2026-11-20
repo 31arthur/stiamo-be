@@ -131,6 +131,9 @@ class Memo(DataGateway):
     async def mail_correspondents(self, account_id):
         return await self._once(f"correspondents:{account_id}", lambda: self._inner.mail_correspondents(account_id))
 
+    async def mail_sent_ids(self, account_id):
+        return await self._once(f"sent_ids:{account_id}", lambda: self._inner.mail_sent_ids(account_id))
+
     async def mail_trash(self, account_id, folder, uids):
         return await self._inner.mail_trash(account_id, folder, uids)
 

@@ -126,6 +126,9 @@ class MailService:
     async def correspondents(self, owner: str, account_id: str) -> list[str]:
         return await self._reading(owner, account_id, lambda a: self.gateway.correspondents(a.credentials))
 
+    async def sent_ids(self, owner: str, account_id: str) -> list[str]:
+        return await self._reading(owner, account_id, lambda a: self.gateway.sent_ids(a.credentials))
+
     async def trash(self, owner: str, account_id: str, folder: str, uids: list[int]) -> int:
         return await self._reading(owner, account_id, lambda a: self.gateway.move_to_trash(a.credentials, folder, uids))
 

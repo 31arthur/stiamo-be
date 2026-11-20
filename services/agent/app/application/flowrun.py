@@ -286,7 +286,7 @@ async def node_mail(run: Run, n: FNode, inputs: list[Item]) -> list[list[Item]]:
             got = await data.mail_uids(str(acc["id"]), str(p.get("folder") or "INBOX"), since, None)
             uids = list(got.get("uids", []))[: max(1, min(int(p.get("limit") or 20), 100))]
             for m in await data.mail_summaries(str(acc["id"]), str(p.get("folder") or "INBOX"), uids) if uids else []:
-                row = {"id": f"{acc['id']}:{m.get('uid')}", "account": acc["id"], "workspace": acc.get("workspace"), "uid": m.get("uid"), "subject": m.get("subject"), "from": (m.get("sender") or {}).get("name") or (m.get("sender") or {}).get("address"), "fromAddress": (m.get("sender") or {}).get("address"), "date": m.get("date"), "snippet": m.get("snippet")}
+                row = {"id": f"{acc['id']}:{m.get('uid')}", "account": acc["id"], "workspace": acc.get("workspace"), "uid": m.get("uid"), "subject": m.get("subject"), "from": (m.get("sender") or {}).get("name") or (m.get("sender") or {}).get("address"), "fromAddress": (m.get("sender") or {}).get("address"), "date": m.get("date"), "snippet": m.get("snippet"), "inReplyTo": m.get("inReplyTo") or "", "references": m.get("references") or "", "to": m.get("to") or [], "cc": m.get("cc") or [], "hasAttachments": bool(m.get("hasAttachments"))}
                 if not word or word in json.dumps(row, default=str).lower():
                     out.append(row)
     except AiError as exc:
@@ -481,7 +481,8 @@ def _mail_item(i: int, j: dict[str, Any]) -> Any:
     who = f"{name} <{address}>" if name and address and name != address else (address or name)
     title = str(j.get("subject") or j.get("title") or j.get("name") or "(no subject)")[:120]
     text = str(j.get("text") or "") or f"From: {who}\nSubject: {title}\n\n{j.get('snippet') or ''}"
-    return Judged(f"i{i}", title, text[:MAX_ITEM_CHARS], j.get("date"), {"from": address})
+    meta = {"from": address, "in_reply_to": str(j.get("inReplyTo") or ""), "references": str(j.get("references") or ""), "to": ",".join(j.get("to") or []), "cc": ",".join(j.get("cc") or []), "files": "1" if j.get("hasAttachments") else ""}
+    return Judged(f"i{i}", title, text[:MAX_ITEM_CHARS], j.get("date"), meta)
 
 
 def _sorter(run: Run) -> Any:
@@ -504,6 +505,60 @@ async def node_classify(run: Run, n: FNode, inputs: list[Item]) -> list[list[Ite
     chosen = inputs[:MAX_SORT]
     if not chosen:
         return lanes
+    names = [x["name"] for x in labels]
+    judged = [_mail_item(i, it["json"]) for i, it in enumerate(chosen)]
+    facts: dict[int, str] = {}
+    # The rules in code run first (they are the node's "rules" setting, the same ones the always-on watch uses): what they drop never reaches a model,
+    # and what the system knows about the rest is written above it as facts.
+    rules_raw = n.parameters.get("mailRules")
+    if isinstance(rules_raw, dict):
+        from app.application.mailknowledge import load as load_knowledge
+        from app.domain.workflows import Rules, discarded_by, with_context
+
+        rules = Rules.model_validate(rules_raw)
+        accounts = {str(a["id"]): a for a in await run.prep.data.mail_accounts()}
+        known: dict[str, Any] = {}
+        for it in chosen:
+            acc = str(it["json"].get("account") or "")
+            if acc and acc not in known:
+                known[acc] = await load_knowledge(run.prep.data, acc, str((accounts.get(acc) or {}).get("address") or ""), rules.priority_domains, workspace=(accounts.get(acc) or {}).get("workspace"), note_correspondents=rules.note_correspondents)
+        keep: list[int] = []
+        for i, item in enumerate(judged):
+            kn = known.get(str(chosen[i]["json"].get("account") or ""))
+            why = discarded_by(item, rules, kn)
+            if why and "drop" in names:
+                lanes[names.index("drop")].append({"json": {**chosen[i]["json"], "label": "drop", "confidence": 1.0, "reason": why, "sure": True, "byRule": True}})
+                continue
+            told = with_context(item, rules, set(), kn)
+            facts[i] = told.text.split("\n", 1)[0] if told.text.startswith("[Facts") else ""
+            judged[i] = told
+            keep.append(i)
+    else:
+        keep = list(range(len(chosen)))
+    if not keep:
+        return lanes
+    # (the model is given the kept items under new ids so a batch is numbered from one)
+    from app.domain.workflows import Item as Judged
+
+    sent = [Judged(f"i{k}", judged[i].title, judged[i].text, judged[i].when, judged[i].meta) for k, i in enumerate(keep)]
+    # The decision model runs through OpenRouter; without a key the node judges with the agent's own model rather than failing.
+    jev = p.get("decider") == "jev" and "openrouter" in run.prep.settings.keys
+    outcomes = await _sorter(run).sort_items(
+        run.who, run.prep.settings, run.agent.id, sent,
+        prompt=str(n.parameters.get("prompt") or ""), labels=labels, decider="jev" if jev else "model", decision_model=str(p.get("decisionModel") or "") or None,
+        batch_size=max(1, min(int(p.get("batchSize") or 1), 50)), default_threshold=float(p.get("threshold") if p.get("threshold") not in (None, "") else 0.7), selection=_model_of(p),
+    )
+    if outcomes and all(o.status == "failed" for o in outcomes):
+        raise ValidationFailed(f"Nothing could be judged: {outcomes[0].error}")
+    by = {o.item.id: o for o in outcomes}
+    for k, i in enumerate(keep):
+        o = by.get(f"i{k}")
+        base = {**chosen[i]["json"], **({"facts": facts[i]} if facts.get(i) else {})}
+        if o is None or o.status == "failed" or o.label is None or o.status == "needs_review":
+            lanes[-1].append({"json": {**base, "label": o.label if o else None, "confidence": round(o.confidence, 3) if o else 0.0, "reason": (o.error or o.reason) if o else "No answer.", "sure": False}})
+        else:
+            lanes[names.index(o.label)].append({"json": {**base, "label": o.label, "confidence": round(o.confidence, 3), "reason": o.reason, "sure": True}})
+    return lanes
     # The decision model runs through OpenRouter; without a key the node judges with the agent's own model rather than failing.
     jev = p.get("decider") == "jev" and "openrouter" in run.prep.settings.keys
     outcomes = await _sorter(run).sort_items(
@@ -561,6 +616,7 @@ async def node_read(run: Run, n: FNode, inputs: list[Item]) -> list[list[Item]]:
     for it in inputs[:10]:
         j = it["json"]
         email = _mail_item(0, j).text
+        told = f"{j['facts']}\n" if j.get("facts") else ""  # what the system established about it, ahead of the mail
         folder = str(p.get("folder") or j.get("folder") or "INBOX")
         full: dict[str, Any] = {}
         if j.get("account") and j.get("uid") is not None:
@@ -571,7 +627,7 @@ async def node_read(run: Run, n: FNode, inputs: list[Item]) -> list[list[Item]]:
             except (AiError, ValueError, TypeError):
                 pass
         try:
-            parsed, _, _ = await _sorter(run).read_one(run.who, run.prep.settings, run.agent.id, prompt=str(p.get("prompt") or ""), route=route, email=email, selection=_model_of(p))
+            parsed, _, _ = await _sorter(run).read_one(run.who, run.prep.settings, run.agent.id, prompt=str(p.get("prompt") or ""), route=route, email=told + email, selection=_model_of(p))
         except AiError as exc:
             raise ValidationFailed(str(getattr(exc, "message", None) or exc)) from exc
         sender = full.get("sender") or {}

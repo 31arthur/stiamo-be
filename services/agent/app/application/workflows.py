@@ -16,6 +16,7 @@ from typing import Any
 from pydantic import ValidationError as PydanticValidationError
 from stiamo_common.errors import Conflict, NotFound, ValidationFailed
 
+from app.application.mailknowledge import load as load_knowledge
 from app.application.ports import (
     DataGateway,
     DecisionClient,
@@ -289,8 +290,10 @@ class WorkflowService:
         protected: list[tuple[Item, str]] = []
         scanned = total = remaining = 0
         try:
+            owners = {str(a["id"]): a for a in await data.mail_accounts()} if cfg.rules.note_correspondents else {}
             for account in cfg.source.account_ids:
-                friends = set(await data.mail_correspondents(account)) if (cfg.rules.protect_correspondents or cfg.rules.note_correspondents) else set()
+                friends = set(await data.mail_correspondents(account)) if cfg.rules.protect_correspondents else set()
+                kn = await load_knowledge(data, account, str(owners.get(account, {}).get("address") or ""), cfg.rules.priority_domains, workspace=owners.get(account, {}).get("workspace"), note_correspondents=cfg.rules.note_correspondents)
                 listing = await data.mail_uids(account, cfg.source.folder, since, f.before)
                 validity, everything = listing.get("uidValidity", 0), listing.get("uids", [])
                 total += len(everything)
@@ -302,11 +305,11 @@ class WorkflowService:
                     for m in await data.mail_summaries(account, cfg.source.folder, chunk):
                         scanned += 1
                         item = item_from_mail(m, validity, account)
-                        why = protected_by(item, cfg.rules, friends) or discarded_by(item, cfg.rules)
+                        why = protected_by(item, cfg.rules, friends) or discarded_by(item, cfg.rules, kn)
                         if why:
                             protected.append((item, why))
                         else:
-                            items.append(with_context(item, cfg.rules, friends))
+                            items.append(with_context(item, cfg.rules, friends, kn))
                 remaining += len(todo) - i
         except AiError as exc:
             raise ValidationFailed(str(exc)) from exc

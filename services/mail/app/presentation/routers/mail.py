@@ -114,6 +114,12 @@ async def correspondents(account_id: str, me: CurrentPrincipal, mail: Mail):
     return await mail.correspondents(me.user_id, account_id)
 
 
+@router.get("/accounts/{account_id}/sent-ids", response_model=list[str])
+async def sent_ids(account_id: str, me: CurrentPrincipal, mail: Mail):
+    """The Message-IDs of what this mailbox has sent, so a reply can be told from a mail that only looks like one."""
+    return await mail.sent_ids(me.user_id, account_id)
+
+
 @router.post("/accounts/{account_id}/messages/trash")
 async def trash(account_id: str, body: TrashIn, me: CurrentPrincipal, mail: Mail):
     """Moves messages to the Trash folder. They are not deleted: the mail provider keeps them there."""
