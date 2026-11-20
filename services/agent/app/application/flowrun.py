@@ -504,9 +504,11 @@ async def node_classify(run: Run, n: FNode, inputs: list[Item]) -> list[list[Ite
     chosen = inputs[:MAX_SORT]
     if not chosen:
         return lanes
+    # The decision model runs through OpenRouter; without a key the node judges with the agent's own model rather than failing.
+    jev = p.get("decider") == "jev" and "openrouter" in run.prep.settings.keys
     outcomes = await _sorter(run).sort_items(
         run.who, run.prep.settings, run.agent.id, [_mail_item(i, it["json"]) for i, it in enumerate(chosen)],
-        prompt=str(n.parameters.get("prompt") or ""), labels=labels, decider="jev" if p.get("decider") == "jev" else "model", decision_model=str(p.get("decisionModel") or "") or None,
+        prompt=str(n.parameters.get("prompt") or ""), labels=labels, decider="jev" if jev else "model", decision_model=str(p.get("decisionModel") or "") or None,
         batch_size=max(1, min(int(p.get("batchSize") or 1), 50)), default_threshold=float(p.get("threshold") if p.get("threshold") not in (None, "") else 0.7), selection=_model_of(p),
     )
     if outcomes and all(o.status == "failed" for o in outcomes):
@@ -777,7 +779,7 @@ async def node_respond(run: Run, n: FNode, inputs: list[Item]) -> list[list[Item
 
 
 NODES: dict[str, Any] = {
-    "trigger.chat": node_trigger, "trigger.telegram": node_trigger, "trigger.orchestrator": node_trigger, "trigger.schedule": node_trigger, "trigger.manual": node_trigger,
+    "trigger.chat": node_trigger, "trigger.mail": node_trigger, "trigger.telegram": node_trigger, "trigger.orchestrator": node_trigger, "trigger.schedule": node_trigger, "trigger.manual": node_trigger,
     "core.if": node_if, "core.switch": node_switch, "core.filter": node_filter, "core.set": node_set, "core.sort": node_sort, "core.limit": node_limit,
     "core.split_out": node_split, "core.aggregate": node_aggregate, "core.noop": node_noop, "core.stop": node_stop,
     "data.mail": node_mail, "data.mail_body": node_mail_body, "data.contacts": node_contacts,

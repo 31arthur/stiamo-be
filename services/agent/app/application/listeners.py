@@ -38,6 +38,7 @@ class Listening:
     error: str | None = None
     runs: int = 0
     tasks: list[asyncio.Task[None]] = field(default_factory=list)
+    wake: asyncio.Event | None = None
 
     def json(self) -> dict[str, Any]:
         iso = lambda d: d.astimezone(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z") if d else None  # noqa: E731
@@ -61,10 +62,25 @@ class ListenerManager:
             return
         s = Listening(workflow_id, list(dict.fromkeys(accounts)), folder)
         wake = asyncio.Event()
+        s.wake = wake
         wake.set()  # once at the start, to catch up on whatever came while nobody was listening
         loop = asyncio.get_running_loop()
         s.tasks = [loop.create_task(self._watch(s, a, mint, wake)) for a in s.accounts] + [loop.create_task(self._runner(s, wake, trigger))]
         self._by[workflow_id] = s
+
+    def listens(self, workflow_id: str, accounts: list[str], folder: str) -> bool:
+        """Whether it is already listening to exactly these mailboxes (so nothing needs restarting)."""
+        s = self._by.get(workflow_id)
+        return s is not None and s.folder == folder and sorted(s.accounts) == sorted(dict.fromkeys(accounts))
+
+    def nudge(self, workflow_id: str) -> None:
+        """Wakes a listener once more, for mail that arrived while its run was busy."""
+        s = self._by.get(workflow_id)
+        if s is not None and s.wake is not None:
+            s.wake.set()
+
+    def keys(self, prefix: str) -> list[str]:
+        return [k for k in self._by if k.startswith(prefix)]
 
     def stop(self, workflow_id: str) -> None:
         s = self._by.pop(workflow_id, None)

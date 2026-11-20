@@ -758,6 +758,27 @@ class AgentService:
                         out.append({"agent": agent_id, "node": n.id, "time": at, "timezone": tz, "days": days})
         return out
 
+    async def mail_triggers(self, who: Who) -> list[dict[str, Any]]:
+        """The "On new mail" triggers of this person's workflows that are switched on: [{agent, node, accounts, workspaces}]. Each listens to its
+        mailboxes and runs the workflow when mail arrives."""
+        from app.domain.flow import Flow
+
+        s = await self._load(who)
+        known = {a.id: a for a in self._all(s)}
+        out = []
+        for agent_id, raw in s.flows.items():
+            if agent_id not in known:
+                continue
+            try:
+                f = Flow.from_json(raw)
+            except ValueError:
+                continue
+            where = s.workspaces.get(agent_id, list(known[agent_id].workspaces))
+            for n in f.nodes:
+                if n.type == "trigger.mail" and not n.disabled:
+                    out.append({"agent": agent_id, "node": n.id, "accounts": [str(a) for a in (n.parameters.get("accounts") or [])], "workspaces": where})
+        return out
+
     async def flow_progress(self, who: Who, agent_id: str, progress_id: str) -> dict[str, Any]:
         from app.application.flowrun import progress_get
 
@@ -825,7 +846,7 @@ class AgentService:
         agent_id, i = slug, 2
         while agent_id in taken:
             agent_id, i = f"{slug}-{i}", i + 1
-        s.custom_agents = {**s.custom_agents, agent_id: {"name": name[:60], "description": (description or (t["description"] if t else ""))[:300], "system": (t["system"] if t else None), "packs": list(chosen), "suggestions": list(t["suggestions"]) if t else [], "workspaces": ["personal", "sb", "fsa"]}}
+        s.custom_agents = {**s.custom_agents, agent_id: {"name": name[:60], "description": (description or (t["description"] if t else ""))[:300], "system": (t["system"] if t else None), "packs": list(chosen), "suggestions": list(t["suggestions"]) if t else [], "workspaces": list((t or {}).get("workspaces") or ["personal", "sb", "fsa"])}}
         s.flows = {**s.flows, agent_id: Flow.from_json(raw).to_json()}
         await self._repo.save(s)
         return {**self._summary(next(a for a in self._all(s) if a.id == agent_id), s), "id": agent_id}

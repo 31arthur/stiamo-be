@@ -5,6 +5,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.domain.prompting import brief
+
 
 def n(i: str, t: str, name: str, x: int, y: int = 0, **parameters: Any) -> dict[str, Any]:
     return {"id": i, "type": t, "name": name, "position": [x, y], "parameters": parameters}
@@ -27,7 +29,13 @@ TEMPLATES: list[dict[str, Any]] = [
         "name": "Chat assistant",
         "description": "A message comes in, the AI agent answers with the tools you give it. The simplest agent; start here and add nodes.",
         "packs": ["agenda", "changes"],
-        "system": "You are a helpful assistant for {{user}} inside Stiamo. Answer briefly and use your tools to look things up; never guess a name, a date or a time.",
+        "system": brief(
+            persona="You are {{user}}'s assistant inside Stiamo. You are brief and exact.",
+            tasks=["Understand what was asked.", "Look it up with your tools.", "Answer in a few lines."],
+            context=["Your tools are the only source of names, dates, times and numbers."],
+            output=["Plain sentences, no preamble.", "Say \"I don't know\" when the tools did not show it."],
+            guardrails=["Never guess a name, a date or a time."],
+        ),
         "suggestions": ["What is on tomorrow?"],
         "flow": {
             "nodes": [n("trigger", "trigger.chat", "When a message comes in", 0), n("agent", "ai.agent", "AI agent", 280, prompt="{{ $json.asked }}"), n("answer", "respond", "Answer", 560, text="{{ $json.text }}")],
@@ -39,7 +47,13 @@ TEMPLATES: list[dict[str, Any]] = [
         "name": "Daily calls digest",
         "description": "Each morning: gets the follow-ups due or overdue, and if there are any, has the AI write a short list and sends it to your phone.",
         "packs": ["agenda"],
-        "system": "You write short, friendly messages for {{user}}. Use plain words and a few emoji. Never invent anything that is not in what you are given.",
+        "system": brief(
+            persona="You write short messages for {{user}}. Plain words, a few emoji.",
+            tasks=["Read the list you are given.", "Write the message."],
+            context=["The list is the calls {{user}} owes, due or overdue."],
+            output=["One short message, most important call first, one line each."],
+            guardrails=["Never add anything that is not in the list."],
+        ),
         "suggestions": [],
         "flow": {
             "nodes": [
@@ -47,7 +61,7 @@ TEMPLATES: list[dict[str, Any]] = [
                 n("calls", "data.follow_ups", "Calls due or overdue", 260, overdue=True, status="open", limit=30),
                 n("any", "core.if", "Any calls?", 520, conditions=[{"left": "{{ $input.length }}", "op": "gt", "right": "0"}]),
                 n("list", "core.aggregate", "Put them together", 780, field="title"),
-                n("write", "ai.agent", "Write the digest", 1040, prompt="Write a short message listing these calls to make, most important first: {{ join($json.title, '; ') }}", tools=[], history=False),
+                n("write", "ai.agent", "Write the digest", 1040, prompt="Calls to make:\n{{ join($json.title, '; ') }}\n\nWrite the message.", tools=[], history=False),
                 n("send", "msg.send", "Send to my phone", 1300, text="📞 {{ $json.text }}"),
             ],
             "connections": link(("trigger", 0, "calls"), ("calls", 0, "any"), ("any", 0, "list"), ("list", 0, "write"), ("write", 0, "send")),
@@ -58,7 +72,13 @@ TEMPLATES: list[dict[str, Any]] = [
         "name": "Mail digest",
         "description": "Reads the last day of this workspace's mail and has the AI pick out what needs you, then sends a short summary to your phone.",
         "packs": ["agenda"],
-        "system": "You read email subjects and snippets for {{user}} and say what needs a reply or action, briefly. Never invent anything.",
+        "system": brief(
+            persona="You read {{user}}'s email subjects. You are blunt and brief.",
+            tasks=["Read the subjects.", "Pick the ones that need a reply or an action.", "Say why, in a few words each."],
+            context=["You see subjects only, not the text. Say so when a subject is not enough."],
+            output=["A short list, one line per email that needs the owner. Nothing else."],
+            guardrails=["Never invent anything that is not in a subject."],
+        ),
         "suggestions": [],
         "flow": {
             "nodes": [
@@ -66,7 +86,7 @@ TEMPLATES: list[dict[str, Any]] = [
                 n("mail", "data.mail", "Read recent mail", 260, days=1, limit=25),
                 n("any", "core.if", "Any mail?", 520, conditions=[{"left": "{{ $input.length }}", "op": "gt", "right": "0"}]),
                 n("list", "core.aggregate", "Put it together", 780, field="subject"),
-                n("write", "ai.agent", "Pick out what needs me", 1040, prompt="These are today's email subjects. Say which need a reply or action and why, in a few lines: {{ join($json.subject, ' | ') }}", tools=[], history=False),
+                n("write", "ai.agent", "Pick out what needs me", 1040, prompt="Today's email subjects:\n{{ join($json.subject, ' | ') }}\n\nWhich need a reply or an action, and why?", tools=[], history=False),
                 n("send", "msg.send", "Send to my phone", 1300, text="✉️ {{ $json.text }}"),
             ],
             "connections": link(("trigger", 0, "mail"), ("mail", 0, "any"), ("any", 0, "list"), ("list", 0, "write"), ("write", 0, "send")),
@@ -136,13 +156,24 @@ TEMPLATES: list[dict[str, Any]] = [
                 n("mail", "data.mail", "New mail", 260, 80, days=2, limit=50),
                 n("new", "core.only_new", "Only what is new", 500, 80),
                 n("safe", "core.safe_senders", "Keep people I trust", 740, 80, correspondents=True, domains=[], addresses=[], phrases=[]),
-                n("sort", "ai.classify", "Sort the mail", 980, 80, prompt="This is my work inbox. Sort each email: is it junk, does it need me, or is it fine to leave?", threshold=0.7, decider="model", batchSize=5, labels=[
+                n("sort", "ai.classify", "Sort the mail", 980, 80, prompt=brief(
+                    persona="You are the sorter of the owner's work inbox. You are blunt. Silence is the default.",
+                    tasks=["Read the sender and the subject first, the start of the text second.", "Pick exactly one label."],
+                    context=["Mail from people the owner trusts has already been removed.", "A close call between junk and anything else is not junk."],
+                    output=["One label: junk, important or fine.", "Unsure: low confidence."],
+                ), threshold=0.7, decider="model", batchSize=5, labels=[
                     {"name": "junk", "description": "Unwanted sales mail, newsletters, mass mailings and promotions that nobody asked for."},
                     {"name": "important", "description": "Needs me: a person waiting for an answer, a deadline, a hearing or court matter, a client, an invoice or money."},
                     {"name": "fine", "description": "Everything else that can stay in the inbox without a look."},
                 ]),
                 n("trash", "msg.trash", "Move junk to Trash", 1260, 0, folder="INBOX", auto=False, tell=True),
-                n("read", "ai.read", "Read what matters", 1260, 200, prompt="Mail that needs my attention: what is it, how urgent, what should I do.", route="event"),
+                n("read", "ai.read", "Read what matters", 1260, 200, prompt=brief(
+                    persona="You are an assistant reading mail that needs the owner. You are exact and short.",
+                    tasks=["Say what it is and who wants what, in two sentences.", "Say how urgent it is.", "Say what to do."],
+                    context=["Priority high only with a close deadline or someone important waiting."],
+                    output=["JSON as the system asks: summary, priority, action, due, event."],
+                    guardrails=["Never invent a date, name or number."],
+                ), route="event"),
                 n("attention", "msg.attention", "Add to Attention", 1540, 200),
             ],
             "connections": link(("morning", 0, "mail"), ("byhand", 0, "mail"), ("mail", 0, "new"), ("new", 0, "safe"), ("safe", 0, "sort"), ("sort", 0, "trash"), ("sort", 1, "read"), ("sort", 3, "read"), ("read", 0, "attention")),
@@ -154,10 +185,10 @@ TEMPLATES: list[dict[str, Any]] = [
 def _priority_templates() -> list[dict[str, Any]]:
     from app.domain.flow_priority import priority_flow
 
-    base = "Several small stages, each one a node you can change or swap: cheap rules that never reach a model (known senders in, codes, statements and order mail out), a sorter, specialist readers for each kind of mail, and a critic that decides whether the phone really should buzz."
+    base = "Live: it listens to the mailbox (IMAP IDLE) and judges each mail the moment it arrives, with no timer. Several small stages, each one a node you can change or swap: cheap rules that never reach a model (known senders in, codes, statements and order mail out), a sorter, specialist readers for each kind of mail, and a critic that decides whether the phone really should buzz."
     return [
-        {"id": "priority-mail-sb", "name": "Priority mail · S&B", "description": f"Tells you only about BWI, MFA, the UN and its bodies, government agencies, RTI replies and replies to your own mail. {base}", "packs": ["agenda"], "system": None, "suggestions": [], "flow": priority_flow("sb")},
-        {"id": "priority-mail-personal", "name": "Priority mail · personal", "description": f"Tells you only about replies to your mail and people who want to do business with you; never codes, logins, statements or orders. {base}", "packs": ["agenda"], "system": None, "suggestions": [], "flow": priority_flow("personal")},
+        {"id": "priority-mail-sb", "name": "Priority mail · S&B", "description": f"Tells you only about BWI, MFA, the UN and its bodies, government agencies, RTI replies and replies to your own mail. {base}", "packs": ["agenda"], "system": None, "suggestions": [], "workspaces": ["sb"], "flow": priority_flow("sb")},
+        {"id": "priority-mail-personal", "name": "Priority mail · personal", "description": f"Tells you only about replies to your mail and people who want to do business with you; never codes, logins, statements or orders. {base}", "packs": ["agenda"], "system": None, "suggestions": [], "workspaces": ["personal"], "flow": priority_flow("personal")},
     ]
 
 

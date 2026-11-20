@@ -31,7 +31,7 @@ from app.infrastructure.mailevents import HttpMailEvents
 from app.infrastructure.messaging import HttpTelegramApi, HttpTwilioApi
 from app.infrastructure.security import JwtAccessTokens, SecretBox
 from app.infrastructure.voice import DeepgramVoice
-from app.presentation.deps import apply_schedules, sync_evening, sync_listener, sync_reminders, watch_everyone
+from app.presentation.deps import apply_mail_triggers, apply_schedules, sync_evening, sync_listener, sync_reminders, watch_everyone
 from app.presentation.routers import (
     agent,
     alerts,
@@ -90,6 +90,7 @@ async def start_flow_schedules(app: FastAPI) -> None:
                 if s.flows:
                     who = Who(s.user_id, s.email)
                     apply_schedules(app, who, await agent.schedules(who))
+                    await apply_mail_triggers(app, who, await agent.mail_triggers(who))
     except Exception:  # noqa: BLE001  a problem here must not keep the service from starting
         logging.getLogger(__name__).exception("could not start the workflow schedules")
 

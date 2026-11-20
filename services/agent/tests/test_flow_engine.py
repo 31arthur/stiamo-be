@@ -910,3 +910,19 @@ async def test_the_priority_mail_templates_are_valid_and_route_by_stage(rig):
     assert trace["safe"]["outputs"] == [1, 1] and trace["sort"]["itemsIn"] == 1
     assert rig.script == [] and trace["critic"]["itemsIn"] == 1 and trace["attention"]["itemsIn"] == 1
     assert (await rig.client.get("/v1/agent/attention", headers=headers())).json()["count"] == 2  # BWI and the friend's reply, each once
+
+
+async def test_a_workflow_with_an_on_new_mail_trigger_listens_to_its_workspaces_mailboxes_and_stops_when_deleted(rig):
+    from app.domain.flow_priority import priority_flow
+
+    await planner_ready(rig)
+    assert any(x["type"] == "trigger.mail" for x in priority_flow("sb")["nodes"]) and not any(x["type"] == "trigger.schedule" for x in priority_flow("sb")["nodes"])
+    made = await rig.client.post("/v1/agent/agents", json={"name": "Live S&B", "templateId": "priority-mail-sb"}, headers=headers())
+    assert made.status_code == 201, made.text
+    listeners = rig.app.state.listeners
+    keys = listeners.keys("flowmail|")
+    assert len(keys) == 1 and keys[0].endswith("|live") and listeners.status(keys[0])["listening"] is True and listeners.status(keys[0])["mailboxes"] == 1
+    again = await rig.client.put(f"/v1/agent/agents/{made.json()['id']}/flow", json=(await rig.client.get(f"/v1/agent/agents/{made.json()['id']}/flow", headers=headers())).json() | {}, headers=headers())
+    assert again.status_code == 200 and listeners.keys("flowmail|") == keys  # saving again doesn't restart it
+    assert (await rig.client.delete(f"/v1/agent/agents/{made.json()['id']}", headers=headers())).status_code == 204
+    assert listeners.keys("flowmail|") == []

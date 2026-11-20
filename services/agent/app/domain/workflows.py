@@ -131,6 +131,14 @@ class Rules(DomainModel):
     protect_correspondents: bool = True
     #: Addresses that are always kept, in addition to the ones found in the Sent folder.
     protected_addresses: list[str] = Field(default_factory=list)
+    #: Mail whose subject matches any of these regular expressions is dropped in code, without asking the model (never for a priority domain).
+    discard_patterns: list[str] = Field(default_factory=list)
+    #: The same, checked against the sender line and the start of the text as well.
+    discard_text_patterns: list[str] = Field(default_factory=list)
+    #: Mail from these domains is not dropped by the patterns, and the model is told the sender is on the owner's priority list.
+    priority_domains: list[str] = Field(default_factory=list)
+    #: The model is told when the owner has written to the sender before (without keeping the mail from being judged).
+    note_correspondents: bool = False
 
 
 class Action(DomainModel):
@@ -309,6 +317,43 @@ def protected_by(item: Item, rules: Rules, correspondents: set[str]) -> str | No
     if rules.protect_correspondents and address and address in correspondents:
         return "someone you have written to"
     return None
+
+
+def _domain_in(address: str, domains: list[str]) -> bool:
+    domain = address.rsplit("@", 1)[-1] if "@" in address else ""
+    return bool(domain) and any(domain == d or domain.endswith("." + d) for d in domains)
+
+
+def discarded_by(item: Item, rules: Rules) -> str | None:
+    """Why this item is dropped in code without asking the model, or None. A sender on the priority list is never dropped this way."""
+    if _domain_in(item.meta.get("from", ""), rules.priority_domains):
+        return None
+    for pattern in rules.discard_patterns:
+        try:
+            if re.search(pattern, item.title, re.IGNORECASE):
+                return "a rule dropped it: automated or bulk mail"
+        except re.error:
+            continue
+    for pattern in rules.discard_text_patterns:
+        try:
+            if re.search(pattern, item.title + "\n" + item.text[:400], re.IGNORECASE):
+                return "a rule dropped it: one-time code or login mail"
+        except re.error:
+            continue
+    return None
+
+
+def with_context(item: Item, rules: Rules, correspondents: set[str]) -> Item:
+    """The item with what the code knows about the sender written above it, for the model to take as fact."""
+    address = item.meta.get("from", "")
+    lines = []
+    if _domain_in(address, rules.priority_domains):
+        lines.append("Sender is on the owner's priority list (a partner, UN body or government domain).")
+    if rules.note_correspondents and address and address in correspondents:
+        lines.append("The owner has written to this sender before.")
+    if not lines:
+        return item
+    return Item(item.id, item.title, "[Facts from the system: " + " ".join(lines) + "]\n" + item.text, item.when, item.meta)
 
 
 def item_from_entry(entry_id: str, title: str, excerpt: str, when: str | None) -> Item:
