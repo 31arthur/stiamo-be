@@ -268,6 +268,18 @@ async def cmd_replay(path: str) -> None:
         shown = [kb for kb in b.telegram.keyboards if kb]
         if shown:
             print("buttons:", [x["text"] for row in shown[-1] for x in row])
+        for j, word in enumerate(turn.get("then") or []):  # plain words typed afterwards: the code handles these, so no model answer is scripted
+            b.telegram.sent.clear()
+            b.telegram.keyboards.clear()
+            print(f"\n▶ You: {word}   (handled by the app, no model)")
+            await send(r, c, word, chat=555, update=100 + k * 10 + j)
+            for _, text in b.telegram.sent:
+                print("┌" + "─" * 58)
+                print("\n".join("│ " + line for line in text.splitlines()))
+                print("└" + "─" * 58)
+            kb = [x for x in b.telegram.keyboards if x]
+            if kb:
+                print("buttons:", [x["text"] for row in kb[-1] for x in row])
     _save_state(b.data)
     await b.close()
 

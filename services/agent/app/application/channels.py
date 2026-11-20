@@ -566,6 +566,14 @@ class ChannelService:
                 who = Who(c.user_id, c.public.get("ownerEmail", ""))
                 if await self.alerts.take_text(who, self._tokens.mint(who.user_id, who.email), c.id, chat, text):
                     return
+            if self.queue_actions is not None and not text.startswith("/"):
+                # a plain word about the list in force (next, done, tomorrow, stop, continue, how many left, undo) is handled by the code: no model, no wait
+                who = Who(c.user_id, c.public.get("ownerEmail", ""))
+                said = await self.queue_actions.command(who, self._tokens.mint(who.user_id, who.email), text)
+                if said is not None:
+                    body, buttons = said if isinstance(said, tuple) else (said, None)
+                    await self._tg.send_message(token, chat, body, buttons=buttons)
+                    return
             await self._tg.send_typing(token, chat)
             reply = await self._answer(c, str(chat), text, "Telegram", TELEGRAM_MAX, "telegram")
             if isinstance(reply, tuple):
