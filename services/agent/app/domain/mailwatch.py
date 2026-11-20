@@ -89,7 +89,7 @@ def labels_for(workspace: str) -> list[dict[str, str]]:
 
 
 #: Bumped when the default setup of a watch changes. A watch the owner never edited is brought up to it; an edited one is left alone.
-FOCUS_VERSION = 4
+FOCUS_VERSION = 5
 
 
 def _is_default(workspace: str, prompt: Any) -> bool:
@@ -103,7 +103,7 @@ def upgraded(workspace: str, config: dict[str, Any]) -> dict[str, Any] | None:
     if config.get("focusVersion", 1) >= FOCUS_VERSION or workspace not in FOCUS or not _is_default(workspace, config.get("prompt")):
         return None
     fresh = watch_config(workspace, [])
-    return {**config, "prompt": fresh["prompt"], "labels": fresh["labels"], "decider": fresh["decider"], "defaultThreshold": fresh["defaultThreshold"], "rules": fresh["rules"], "focusVersion": FOCUS_VERSION}
+    return {**config, "prompt": fresh["prompt"], "labels": fresh["labels"], "decider": fresh["decider"], "defaultThreshold": fresh["defaultThreshold"], "rules": fresh["rules"], "action": fresh["action"], "focusVersion": FOCUS_VERSION}
 
 
 def watch_config(workspace: str, account_ids: list[str]) -> dict[str, Any]:
@@ -119,7 +119,7 @@ def watch_config(workspace: str, account_ids: list[str]) -> dict[str, Any]:
         "decider": "jev",
         "defaultThreshold": 0.7,
         "rules": _rules(workspace),
-        "action": {"trashLabel": None, "auto": False},
+        "action": {"trashLabel": "drop", "auto": True},  # what is dropped is moved to Trash (never deleted); what is needed is stored and alerted, what is digest is stored
         "listen": True,
         "notify": {"telegram": True, "call": False},
     }

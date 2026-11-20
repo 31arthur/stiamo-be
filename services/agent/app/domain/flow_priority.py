@@ -8,7 +8,8 @@ Each stage does one job and can be swapped, retuned or deleted on the canvas lik
      (verified reply, priority sender, active case, impersonation...) are written above the rest; then the model chooses now, digest or drop.
   4. **Reader** (chat model): opens the whole email and says what it is and what to do.
   5. **Critic** (decision model): for what the sorter called now, a second look at the reader's summary: is the phone worth it?
-  6. **Alert / Attention**: the phone is told once per mail; digest and held mail wait in Attention, which the evening plan shows.
+  6. **Trash**: what was dropped is moved to Trash (never deleted).
+  7. **Alert / Attention**: the phone is told once per mail; digest and held mail wait in Attention, which the evening plan shows.
 
 All prompts are the long briefs of domain/mailprompts.py. For "swap a stage", replace the node: a *Run another agent* node can stand in for any reader.
 """
@@ -49,12 +50,13 @@ def priority_flow(kind: str) -> dict[str, Any]:
         n("attention_hold", "msg.attention", "Keep in Attention", 1860, 120),
         n("read_digest", "ai.read", "Reader · for the evening", 1060, 260, prompt=reader, route="attention"),
         n("attention_digest", "msg.attention", "Add to Attention", 1320, 260),
+        n("trash_drop", "msg.trash", "Move dropped mail to Trash", 1060, 620, folder="INBOX", auto=True, tell=False),
         n("read_unsure", "ai.read", "Reader · unsure", 1060, 440, prompt=reader, route="attention"),
         n("attention_unsure", "msg.attention", "Add to Attention", 1320, 440),
     ]
     c = [
         ("live", 0, "mail"), ("byhand", 0, "mail"), ("mail", 0, "new"), ("new", 0, "sort"),
-        ("sort", 0, "read_now"), ("sort", 1, "read_digest"), ("sort", 3, "read_unsure"),  # lane 2 is drop: nothing follows
+        ("sort", 0, "read_now"), ("sort", 1, "read_digest"), ("sort", 2, "trash_drop"), ("sort", 3, "read_unsure"),  # drop goes to Trash (moved, never deleted)
         ("read_now", 0, "shape"), ("shape", 0, "critic"), ("critic", 0, "alert"), ("critic", 1, "attention_hold"), ("critic", 2, "alert"), ("alert", 0, "attention"),
         ("read_digest", 0, "attention_digest"), ("read_unsure", 0, "attention_unsure"),
     ]

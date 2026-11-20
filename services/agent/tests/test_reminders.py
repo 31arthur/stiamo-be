@@ -60,8 +60,8 @@ async def test_it_waits_for_a_free_minute_and_stays_quiet_outside_the_working_da
     rig.data.tables["meetings"] = [{"id": "m1", "title": "Union leaders", "slot": {"date": DAY, "start": 9 * 60 + 30, "duration": 60}, "outcome": {"status": "open"}}]
     assert await check(rig, at(9, 40)) is None and await check(rig, at(10, 29)) is None  # in a meeting
     assert (await check(rig, at(10, 30)))["step"] == 1  # the first free minute
-    rig.data.tables["follow-ups"] = [call("z", 20 * 60 + 30, "Late call")]
-    assert await check(rig, at(21, 30)) is None  # past nine in the evening
+    rig.data.tables["follow-ups"] = [call("z", 21 * 60 + 30, "Late call")]
+    assert await check(rig, at(22, 30)) is None  # past ten at night
 
 
 async def test_nothing_is_sent_while_the_reminders_are_off(rig):

@@ -180,6 +180,9 @@ class WorkflowService:
         #: Whether a run through the whole inbox is going for an agent (see sweeps.py).
         self._sweeping = sweeping or (lambda _id: False)
         self._llm, self._decisions, self._data = llm_factory, decision_factory, data_factory
+        self._trashed: set[str] = set()  # mail a rule dropped that was moved to Trash in this run
+        #: Keeps an email that needs the owner as an action item (set by the app: see presentation/deps.py).
+        self.record_item: Any = None
         #: Raises an urgent email on the phone (see alerts.py); None where there is no phone to tell.
         self._alerts = alerts
 
@@ -506,6 +509,7 @@ class WorkflowService:
         decider = await self._decider(who, cfg, s, workflow.id if workflow else None)
         outcomes, batches = await self._decide_all(cfg, items, decider) if items else ([], 0)
         trash_note = await self._act(token, cfg, outcomes, mode)
+        trash_note += await self._trash_ruled(token, cfg, fetched.protected, mode)
         await self._route(who, token, cfg, s, workflow.id if workflow else None, outcomes, mode)
 
         counts = {"items": len(outcomes), "proposed": 0, "needsReview": 0, "failed": 0}
@@ -535,7 +539,7 @@ class WorkflowService:
                 for o in outcomes if o.status != "failed" and not (o.error and not o.data)
             ] + [
                 # Kept by a rule: remembered, so the next run goes on to older mail instead of reading these again.
-                LedgerEntry(str(uuid.uuid4()), workflow.id, who.user_id, item.id, item.title, item.text[:MAX_ITEM_CHARS], None, 0.0, f"Kept: {why}", "protected", run_id, workflow.version)
+                LedgerEntry(str(uuid.uuid4()), workflow.id, who.user_id, item.id, item.title, item.text[:MAX_ITEM_CHARS], "drop" if item.id in self._trashed else None, 0.0, f"Moved to Trash: {why}" if item.id in self._trashed else f"Kept: {why}", "applied" if item.id in self._trashed else "protected", run_id, workflow.version)
                 for item, why in fetched.protected
             ])
             await self._repo.touch(workflow.id, started)
@@ -681,6 +685,7 @@ class WorkflowService:
                         log.exception("could not raise the alert for %s", o.item.id)
 
         await asyncio.gather(*(one(o) for o in targets))
+        await self._keep_as_items(who, workflow_id, folder, targets, mode, cfg)
 
     async def _act(self, token: str, cfg: WorkflowConfig, outcomes: list[Outcome], mode: str) -> str:
         """What the labels mean for a mailbox. Confident "trash" items are moved to Trash only in a real run of an agent set to act on
@@ -689,13 +694,15 @@ class WorkflowService:
         act = cfg.action
         if cfg.source.kind != "mail" or not act.trash_label:
             return ""
+        routed = {lb.name for lb in cfg.labels if lb.route != "none"}  # labels that are read and queued (or alerted) go on to _route, so they are left as they are
         for o in outcomes:
             if o.label is None or o.status == "failed":
                 continue
             if o.label != act.trash_label:
-                o.status = "kept"  # judged fine: kept however sure the model was, so only mail to be moved ever needs a look
+                if o.label not in routed:
+                    o.status = "kept"  # judged fine: kept however sure the model was, so only mail to be moved ever needs a look
             elif o.status == "proposed":
-                o.action = "trash"
+                o.action = "trash"  # (an unsure one stays in the inbox, for review)
         targets = [o for o in outcomes if o.action == "trash"]
         if mode != "run" or not act.auto or not targets:
             return ""
@@ -710,6 +717,44 @@ class WorkflowService:
                 continue
             for o in mine:
                 o.status = "applied"
+        return f". Couldn't move some to Trash: {notes[0]}" if notes else ""
+
+    async def _keep_as_items(self, who: Who, workflow_id: str | None, folder: str, targets: list[Outcome], mode: str, cfg: WorkflowConfig) -> None:
+        """Every email judged to need the owner (now) or to wait for the evening (digest) is kept as an action item, once, with its own history. It is stored
+        whatever happens to the phone message. Never lets a failure here undo the judging."""
+        if mode != "run" or self.record_item is None or cfg.source.kind not in ("mail", "agent"):
+            return
+        from app.domain.mailwatch import NAMES, workspace_of
+
+        ws = workspace_of(workflow_id or "") or "personal"
+        for o in targets:
+            if o.status not in ("queued", "event_proposed") or not o.data:
+                continue
+            try:
+                await self.record_item(
+                    who, agent_name=f"Mail watch · {NAMES.get(ws, ws)}", workflow_id=workflow_id or "", item_id=o.item.id, account=account_of(o.item.id), uid=uid_of(o.item.id), folder=folder, subject=o.item.title,
+                    sender=o.item.meta.get("from", ""), summary=o.data.get("summary"), priority=str(o.data.get("priority") or "normal"), label=o.label or "", due=o.data.get("due"), workspace=ws,
+                )
+            except Exception:  # noqa: BLE001
+                log.exception("could not keep %s as an action item", o.item.id)
+
+    async def _trash_ruled(self, token: str, cfg: WorkflowConfig, protected: list[tuple[Item, str]], mode: str) -> str:
+        """Mail a rule dropped (a code, a login, a statement, an order, bulk mail) is moved to Trash too, when the agent acts on its own. Moved, never deleted:
+        it can be put back from the Trash folder. Mail the rules kept for any other reason is left where it is."""
+        act = cfg.action
+        ruled = [item for item, why in protected if why.startswith("a rule dropped it")]
+        if cfg.source.kind != "mail" or not act.trash_label or not act.auto or mode != "run" or not ruled:
+            return ""
+        data = Memo(self._data(token))
+        notes = []
+        for account in dict.fromkeys(account_of(i.id) for i in ruled):
+            mine = [i for i in ruled if account_of(i.id) == account]
+            try:
+                await data.mail_trash(account, cfg.source.folder, [uid_of(i.id) for i in mine])
+            except AiError as exc:
+                notes.append(str(exc))
+                continue
+            self._trashed.update(i.id for i in mine)
         return f". Couldn't move some to Trash: {notes[0]}" if notes else ""
 
     @staticmethod

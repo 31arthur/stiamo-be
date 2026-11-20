@@ -90,7 +90,7 @@ async def test_the_assistant_picks_the_agent_and_every_agent_knows_the_whole_con
     c = await start(rig, "all")
     rig.script += [ChatResult("Call Hemla at 09:30.")]
     first = await say(rig, c["id"], "Who should I call tomorrow?")
-    assert first["agentId"] == "daily-planner" and first["agentName"] == "Daily planner" and first["routedBy"] == "rules"
+    assert first["agentId"] == "daily-planner" and first["agentName"] == "Chittu" and first["routedBy"] == "rules"
     rig.script += [ChatResult("The labour office is first.")]
     second = await say(rig, c["id"], "and the labour office?")
     assert second["agentId"] == "daily-planner" and second["routedBy"] == "continuity"
@@ -98,7 +98,7 @@ async def test_the_assistant_picks_the_agent_and_every_agent_knows_the_whole_con
     third = await say(rig, c["id"], "Prepare me for the hearing in TUMWU-2026-001")
     assert third["agentId"] == "cases"
     told = rig.llm_log[-1]["last"]  # what the third agent was given: the earlier exchanges, which another agent answered
-    assert "Who should I call tomorrow?" in told and "Call Hemla at 09:30." in told and "Daily planner:" in told and "TUMWU-2026-001" in told and told.rstrip().endswith("Prepare me for the hearing in TUMWU-2026-001")
+    assert "Who should I call tomorrow?" in told and "Call Hemla at 09:30." in told and "Chittu:" in told and "TUMWU-2026-001" in told and told.rstrip().endswith("Prepare me for the hearing in TUMWU-2026-001")
     full = (await rig.client.get(f"{C}/{c['id']}", headers=headers())).json()
     assert full["agentId"] == "assistant" and [t["agentId"] for t in full["turns"]] == ["daily-planner", "daily-planner", "cases"]
 
@@ -133,7 +133,7 @@ async def test_the_assistant_on_a_phone_keeps_one_thread_that_the_web_app_shows_
     rig.script += [ChatResult("Call Hemla first.")]
     await send(rig, c, "who should I call tomorrow at S&B?", chat=555, update=2)
     reply = rig.telegram.sent[-1][1]
-    assert reply.startswith("Call Hemla first.") and strip_markup(reply).rstrip().endswith("— Daily planner · S&B") and "<i>— Daily planner · S&amp;B</i>" in reply  # signed with the workspace it worked in
+    assert reply.startswith("Call Hemla first.") and strip_markup(reply).rstrip().endswith("— Chittu · S&B") and "<i>— Chittu · S&amp;B</i>" in reply  # signed with the workspace it worked in
     rig.script += [ChatResult("Then the labour office.")]
     await send(rig, c, "and after that?", chat=555, update=3)
     assert "who should I call tomorrow at S&B?" in rig.llm_log[-1]["last"]  # the second message knows the first (same workspace, no need to say it again)

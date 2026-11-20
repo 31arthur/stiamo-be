@@ -9,7 +9,7 @@ from stiamo_common.errors import ValidationFailed
 
 from app.domain.llm import ToolSpec
 
-MAX_TEMPLATE_CHARS = 8000
+MAX_TEMPLATE_CHARS = 60000
 
 DEFAULT_INPUT = "{{input}}"
 

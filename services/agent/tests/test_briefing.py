@@ -40,7 +40,7 @@ async def test_the_day_is_laid_out_as_a_card_of_real_items_with_their_own_titles
     assert call["title"] == "Call the advocate" and call["tries"] == 1 and call["channel"] == "call" and call["note"] == "She asked for a call back"
     task, note = card["sections"][2]["items"]
     assert task["title"] == "Draft the rejoinder" and task["priority"] == "high" and task["minutes"] == 90 and note == {"type": "note", "note": "Leave the afternoon open."}
-    assert card["free"] and card["free"][0]["from"] == "09:00"
+    assert card["free"] and card["free"][0]["from"] == "06:00"
 
 
 async def test_an_item_that_is_not_there_is_sent_back_so_the_card_never_shows_a_guess(rig):
