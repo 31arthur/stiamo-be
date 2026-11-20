@@ -10,7 +10,7 @@ Small changes the owner asks for (done, move this, snooze) are applied at once a
 from __future__ import annotations
 
 import uuid
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
@@ -49,6 +49,8 @@ def _iso(d: datetime) -> str:
 class ActionService:
     def __init__(self, repo: SqlActionRepository, data_factory: Callable[[str], Any], now: Callable[[], datetime] = lambda: datetime.now(UTC)) -> None:
         self._repo, self._data, self._now = repo, data_factory, now
+        #: Called with (who, ref) when a new item is created, so the list in force can take it in (set by the app).
+        self.on_created: Callable[..., Awaitable[Any]] | None = None
 
     def today(self) -> str:
         return self._now().astimezone(ZoneInfo(ZONE)).date().isoformat()
@@ -146,6 +148,8 @@ class ActionService:
         due_moves = [loaded.get(m.ref).title for m in plan.moves if loaded.get(m.ref) and loaded.get(m.ref).priority != "urgent" and loaded.get(m.ref).due and loaded.get(m.ref).due < target]  # type: ignore[union-attr,operator]
         if urgent:
             warnings.append(f"Urgent: {'; '.join(f'“{t}”' for t in urgent[:5])}.")
+        if date.fromisoformat(target).weekday() >= 5:
+            warnings.append(f"{label_day(target)} is a {date.fromisoformat(target).strftime('%A')}.")
         if due_moves:
             warnings.append(f"{len(due_moves)} item{'s' if len(due_moves) != 1 else ''} had a due date before {label_day(target)}; their due dates move to {label_day(target)} too.")
         # what the filter left where it was, so "the urgent one stays" is said by the tool and not inferred
@@ -309,6 +313,11 @@ class ActionService:
         await self._repo.save_item(who.user_id, row, self._now())
         ref = f"{kind}:{iid}"
         await self._log(who, ref, "created", actor, title, None, {k: v for k, v in row.items() if v not in (None, {}, "")}, reason)
+        if self.on_created is not None:
+            try:  # the list in force takes it in; a failure here must never lose the item
+                await self.on_created(who, ref)
+            except Exception:  # noqa: BLE001
+                pass
         return row
 
     async def record_mail(self, who: Who, *, agent_name: str, workflow_id: str, item_id: str, account: str, uid: int, folder: str, subject: str, sender: str, summary: str | None, priority: str, label: str, due: str | None, workspace: str) -> dict[str, Any]:

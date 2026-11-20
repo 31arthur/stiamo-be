@@ -1,9 +1,9 @@
-"""Chittu on Telegram: the day's things, one at a time.
+"""Chittu's worklist on Telegram: the owner's things, one at a time, numbered (1/10), kept until a new request replaces it.
 
-In the morning (06:00) he says good morning and how many things need the owner, and asks whether to start. On *Start* he brings the first one, with buttons that
-fit what it is; each time one is settled he brings the next, and says how far along they are. After ten he asks whether to go on. At night (22:00) he says
-good night with what got done, what moved and what is still open. The state of all of it is kept (the action_queues table), so a button pressed an hour later,
-or twice, does the right thing, and every step is in the history of the item it was about.
+*Making* a list is a request: the morning, a question ("what's overdue?"), or a list a model gave as JSON (set_queue). It happens once. *Walking* it is code: a button,
+a word the owner types (next, done, tomorrow, stop, continue, how many left, undo), or an item settled somewhere else moves it on, with no model call in between. The
+list is stored (action_queues), so a pause, a night, a restart or a week changes nothing: "continue" picks up where it stopped, and the morning carries what is left
+over and adds what is new. Only a new request replaces it (or adds to it, when the request says to). Every step is in the history of the item it was about.
 """
 
 from __future__ import annotations
@@ -11,41 +11,50 @@ from __future__ import annotations
 import logging
 import uuid
 from collections.abc import Awaitable, Callable
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
 from app.application.actions import ZONE, ActionService
 from app.application.services import Who
-from app.domain.actionitems import EMOJI, ActionItem, queue_order, resolve_day
+from app.domain.actionitems import EMOJI, ActionItem, pick, queue_order, resolve_day
 from app.domain.chittu import SITTING, good_morning, good_night
 from app.domain.dayplan import clock, day_label
+from app.domain.worklist import DONE, GONE, MOVED, PENDING, SETTLED, SHOWN, SKIPPED, Spec, classify_words, counts, entry, merge, next_index, position
 from app.infrastructure.db.actions import SqlActionRepository
 
 log = logging.getLogger(__name__)
 
 #: Sends a message (text, buttons) to the owner's phone.
 Send = Callable[[Who, str, list[list[dict[str, str]]] | None], Awaitable[int]]
+Reply = "str | tuple[str, list[list[dict[str, str]]] | None]"
 FIXED_KINDS = ("hearing", "meeting", "event")
+OPEN = ["waiting", "active", "paused"]
 
 
 def _tag(queue_id: str) -> str:
     return queue_id.replace("-", "")[:8]
 
 
-def _buttons(kind: str, fixed: bool, tag: str, index: int, at_limit: bool = False) -> list[list[dict[str, str]]]:
-    d = lambda action: f"aq:{action}:{tag}:{index}"  # noqa: E731  (64 bytes is Telegram's limit)
+def _buttons(kind: str, fixed: bool, tag: str, index: int, *, at_limit: bool = False, undo: int | None = None) -> list[list[dict[str, str]]]:
+    d = lambda action, i=index: f"aq:{action}:{tag}:{i}"  # noqa: E731  (64 bytes is Telegram's limit)
+    if kind == "review":  # looking at what a change would do: nothing here changes an item
+        return [[{"text": "⏭ Next", "callback_data": d("k")}, {"text": "⏹ Stop", "callback_data": d("x")}]]
     if at_limit:
         return [[{"text": "▶️ Keep going", "callback_data": d("g")}, {"text": "⏹ Enough for now", "callback_data": d("x")}]]
     if fixed or kind in FIXED_KINDS:
-        return [[{"text": "✔️ Noted", "callback_data": d("d")}, {"text": "⏭ Next", "callback_data": d("k")}], [{"text": "⏹ Stop", "callback_data": d("x")}]]
-    if kind == "mail":
-        return [[{"text": "✅ Handled", "callback_data": d("d")}, {"text": "😴 Tomorrow", "callback_data": d("t")}], [{"text": "⏭ Skip", "callback_data": d("k")}, {"text": "⏹ Stop", "callback_data": d("x")}]]
-    return [[{"text": "✅ Done", "callback_data": d("d")}, {"text": "🔁 Tomorrow", "callback_data": d("t")}], [{"text": "⏭ Skip", "callback_data": d("k")}, {"text": "⏹ Stop", "callback_data": d("x")}]]
+        rows = [[{"text": "✔️ Noted", "callback_data": d("d")}, {"text": "⏭ Next", "callback_data": d("k")}], [{"text": "⏹ Stop", "callback_data": d("x")}]]
+    elif kind == "mail":
+        rows = [[{"text": "✅ Handled", "callback_data": d("d")}, {"text": "😴 Tomorrow", "callback_data": d("t")}], [{"text": "⏭ Skip", "callback_data": d("k")}, {"text": "⏹ Stop", "callback_data": d("x")}]]
+    else:
+        rows = [[{"text": "✅ Done", "callback_data": d("d")}, {"text": "🔁 Tomorrow", "callback_data": d("t")}], [{"text": "⏭ Skip", "callback_data": d("k")}, {"text": "⏹ Stop", "callback_data": d("x")}]]
+    if undo is not None:
+        rows.append([{"text": "↩️ Undo the last one", "callback_data": d("u", undo)}])
+    return rows
 
 
-def item_text(it: ActionItem, position: int, total: int, today: str) -> str:
-    """One item, as Chittu says it: where we are, what it is, when, and why it matters. Short."""
+def item_text(it: ActionItem, position_: int, total: int, today: str, note: str | None = None) -> str:
+    """One item, as Chittu says it: where we are (3/10), what it is, when, and why it is on the list. Short."""
     when = None
     if it.day and it.start is not None:
         when = ("Today " if it.day == today else f"{day_label(it.day)} ") + clock(it.start)
@@ -54,11 +63,13 @@ def item_text(it: ActionItem, position: int, total: int, today: str) -> str:
     elif it.due:
         when = f"Due {'today' if it.due == today else day_label(it.due)}"
     bits = [b for b in (when, it.priority if it.priority in ("urgent", "high") else None, it.case_ref, it.contact) if b]
-    lines = [f"{position}/{total} · {EMOJI.get(it.kind, '•')} {it.title}"]
+    lines = [f"{position_}/{total} · {EMOJI.get(it.kind, '•')} {it.title}"]
     if bits:
         lines.append(" · ".join(str(b) for b in bits))
     if it.kind == "mail" and it.notes:
         lines.append(str(it.notes)[:200])
+    if note:
+        lines.append(f"💬 {note}")
     return "\n".join(lines)
 
 
@@ -73,42 +84,73 @@ class QueueService:
     def _owner(who: Who) -> str:
         return (who.name.split() or ["there"])[0].title()
 
-    async def _items(self, who: Who, token: str) -> list[ActionItem]:
-        return queue_order((await self._actions.load(who, token)).items, self._today())
+    async def current(self, who: Who) -> dict[str, Any] | None:
+        """The list that is in force: the latest that is waiting, being walked or paused. It stays so until a new request replaces it or every entry is settled."""
+        return await self._repo.queue(who.user_id, statuses=OPEN)
 
-    # --- the day opens and closes ----------------------------------------------------------------------------------------------------------
+    async def _save(self, who: Who, q: dict[str, Any]) -> None:
+        q["updatedAt"] = self._now()
+        await self._repo.save_queue(who.user_id, q)
 
-    async def morning(self, who: Who, token: str) -> dict[str, Any]:
-        """Good morning: how many things need the owner today, and whether to start. Nothing is brought until they say so."""
+    async def _retire(self, who: Who, q: dict[str, Any], status: str = "replaced") -> int:
+        left = counts(q["entries"])["left"]
+        q["status"], q["shown"] = status, {**(q.get("shown") or {}), "leftWhenClosed": left}
+        await self._save(who, q)
+        return left
+
+    # --- making a list: a request, once -------------------------------------------------------------------------------------------------------
+
+    async def set(self, who: Who, token: str, spec: Spec, source: str = "ai") -> dict[str, Any]:
+        """Makes the list a request asked for. `replace` puts the old list aside (its place is kept in the database) and starts this one; `append` adds to the end of the
+        list in force, `next` right after the item in front of the owner. Sends the opening line and, for a new or woken list, the first item."""
+        if not spec.entries:
+            return {"started": False, "count": 0, "dropped": spec.dropped}
+        old = await self.current(who)
         today = self._today()
-        old = await self._repo.queue(who.user_id, statuses=["waiting", "active", "paused"])
-        if old and old["day"] == today and old["status"] in ("waiting", "active"):
-            return {"queueId": old["id"], "again": True}  # this morning's hello already went (a restart, a second trigger)
-        if old:
-            old["status"], old["updatedAt"] = "done", self._now()
-            await self._repo.save_queue(who.user_id, old)
-        items = await self._items(who, token)
-        entries = [{"ref": i.ref, "state": "pending"} for i in items]
-        row = {"id": str(uuid.uuid4()), "day": today, "status": "waiting" if entries else "done", "entries": entries, "cursor": 0, "shown": {"sitting": 0}, "createdAt": self._now(), "updatedAt": self._now()}
+        if spec.mode != "replace" and old is not None:
+            before = counts(old["entries"])["left"]
+            old["entries"] = merge(old["entries"], spec.entries, spec.mode, old["cursor"])
+            added = counts(old["entries"])["left"] - before
+            was_paused = old["status"] != "active"
+            old["status"], old["shown"] = "active", {**(old.get("shown") or {}), "sitting": 0}
+            await self._save(who, old)
+            has_front = any(e["state"] == SHOWN for e in old["entries"])
+            if has_front and not was_paused:
+                await self._send(who, f"Added {added} to your list: {counts(old['entries'])['left']} left.", None)
+                return {"started": True, "mode": spec.mode, "count": counts(old["entries"])["left"], "added": added, "dropped": spec.dropped}
+            await self._send(who, f"Added {added} to your list.", None)
+            text, buttons = await self._show(who, token, old)
+            await self._send(who, text, buttons)
+            return {"started": True, "mode": spec.mode, "count": counts(old["entries"])["left"], "added": added, "dropped": spec.dropped}
+        set_aside = await self._retire(who, old) if old is not None else 0
+        row = {"id": str(uuid.uuid4()), "day": today, "status": "active", "entries": spec.entries, "cursor": -1, "shown": {"sitting": 0}, "title": spec.title, "source": source, "createdAt": self._now(), "updatedAt": self._now()}
         await self._repo.save_queue(who.user_id, row)
-        first = items[0].title if items else None
-        buttons = [[{"text": "▶️ Start", "callback_data": f"aq:s:{_tag(row['id'])}:0"}, {"text": "⏰ Later", "callback_data": f"aq:l:{_tag(row['id'])}:0"}]] if entries else None
-        await self._send(who, good_morning(self._owner(who), today, len(entries), first), buttons)
-        return {"queueId": row["id"], "count": len(entries)}
+        n = len(spec.entries)
+        many = "one thing" if n == 1 else f"{n} things"
+        aside = f" (I've put the earlier list aside: {set_aside} were left.)" if set_aside else ""
+        await self._send(who, f"{spec.title}: {many}. One at a time.{aside}", None)
+        text, buttons = await self._show(who, token, row)
+        await self._send(who, text, buttons)
+        return {"started": True, "mode": "replace", "count": n, "first": spec.entries[0]["ref"], "dropped": spec.dropped, "putAside": set_aside}
+
+    async def set_from_json(self, who: Who, token: str, raw: Any) -> dict[str, Any]:
+        """A list a model gave as JSON: {title, mode, items: [{ref, note}]}. Every ref is checked against the real open items; then the code walks it."""
+        loaded = await self._actions.load(who, token)
+        spec = parse_spec_for(raw, loaded)
+        return await self.set(who, token, spec, "ai")
 
     async def begin(self, who: Who, token: str, *, day: str | None = None, until: str | None = None, kinds: list[str] | None = None, workspace: str | None = None, priority_below: str | None = None,
-                    priority_at_least: str | None = None, overdue_only: bool = False, label: str = "") -> dict[str, Any]:
-        """Whatever the owner asked to see (today, a day, a week, only calls, only what is overdue): never a list, always the same one-at-a-time walk as the
-        morning, numbered 1/10. A short line says how many, then the first item comes with its buttons, and each one settled brings the next. Replaces a list that
-        was waiting or paused."""
+                    priority_at_least: str | None = None, overdue_only: bool = False, or_overdue: bool = False, changeset_id: str | None = None, label: str = "") -> dict[str, Any]:
+        """A question the owner asked (today, a day or a week, only calls, only what is overdue): the code picks and orders the items by the usual rules and makes the list."""
         today = self._today()
-        old = await self._repo.queue(who.user_id, statuses=["waiting", "active", "paused"])
-        if old:
-            old["status"], old["updatedAt"] = "done", self._now()
-            await self._repo.save_queue(who.user_id, old)
+        if changeset_id:  # "which ones?": the items of a change that was previewed, to look at one by one (nothing is changed by looking)
+            cs = await self._repo.changeset(who.user_id, changeset_id)
+            if cs is None or not cs["ops"]:
+                return {"started": False, "count": 0}
+            rows = [{**entry(o["ref"], f"→ {o.get('to') or ''}"[:140]), "review": True} for o in cs["ops"]]
+            out = await self.set(who, token, Spec((label or "What I'd change")[:60], "replace", rows), "ask")
+            return {**out, "first": cs["ops"][0].get("title")}
         loaded = await self._actions.load(who, token)
-        from app.domain.actionitems import pick
-
         base = pick(loaded.items, kinds=kinds, workspace=workspace, priority_below=priority_below, priority_at_least=priority_at_least)
         through = until or day or today
         if overdue_only:
@@ -117,24 +159,54 @@ class QueueService:
             items = queue_order(base, today, through)
             if day and day > today:  # a day or a week ahead: not what was left over from before
                 items = [i for i in items if (i.day or i.due or "") >= day]
-        when = through
+            if or_overdue:  # "overdue, and also urgent": the filters are AND, this adds what is late (of the kinds and workspace asked) to the end
+                late = queue_order([i for i in pick(loaded.items, kinds=kinds, workspace=workspace) if (i.day or i.due) and (i.day or i.due) < today], today)  # type: ignore[operator]
+                items += [i for i in late if i.ref not in {x.ref for x in items}]
         if not items:
             return {"started": False, "count": 0}
-        row = {"id": str(uuid.uuid4()), "day": today, "status": "active", "entries": [{"ref": i.ref, "state": "pending"} for i in items], "cursor": 0, "shown": {"sitting": 0}, "createdAt": self._now(), "updatedAt": self._now()}
-        await self._repo.save_queue(who.user_id, row)
-        many = "one thing" if len(items) == 1 else f"{len(items)} things"
-        scope = label or ("your day" if when == today and not kinds and not priority_below and not priority_at_least else day_label(when) if when != today else "today")
-        await self._send(who, f"Here's {scope}, {self._owner(who)}: {many}. One at a time.", None)
-        text, buttons = await self._show(who, token, row)
-        await self._send(who, text, buttons)
-        return {"started": True, "count": len(items), "first": items[0].title}
+        scope = (label[:1].upper() + label[1:]) if label else ("Your day" if through == today and not kinds and not priority_below and not priority_at_least else day_label(through) if through != today else "Today")
+        out = await self.set(who, token, Spec(scope[:60] or "Your list", "replace", [entry(i.ref) for i in items]), "ask")
+        return {**out, "first": items[0].title}
+
+    # --- the day opens, nudges and closes ---------------------------------------------------------------------------------------------------
+
+    async def morning(self, who: Who, token: str) -> dict[str, Any]:
+        """Good morning: how many things need the owner (and how many are still on the list from before), and whether to start. A list left over from yesterday is
+        kept, checked against what is real now, and what is new today is added to its end; nothing is brought until the owner says start."""
+        today = self._today()
+        old = await self.current(who)
+        if old and old["day"] == today and old["status"] in ("waiting", "active"):
+            return {"queueId": old["id"], "again": True}  # this morning's hello already went (a restart, a second trigger)
+        loaded = await self._actions.load(who, token)
+        todays = queue_order(loaded.items, today)
+        carried = 0
+        if old is not None and counts(old["entries"])["left"] > 0:
+            self._revalidate(old, loaded)
+            carried = counts(old["entries"])["left"]
+            fresh = [entry(i.ref) for i in todays]
+            old["entries"] = merge(old["entries"], fresh, "append")
+            old["status"], old["day"], old["cursor"] = "waiting", today, -1
+            old["shown"] = {"sitting": 0}
+            row = old
+            await self._save(who, row)
+        else:
+            if old is not None:
+                await self._retire(who, old, "done")
+            entries = [entry(i.ref) for i in todays]
+            row = {"id": str(uuid.uuid4()), "day": today, "status": "waiting" if entries else "done", "entries": entries, "cursor": -1, "shown": {"sitting": 0}, "title": "Your day", "source": "morning", "createdAt": self._now(), "updatedAt": self._now()}
+            await self._repo.save_queue(who.user_id, row)
+        total = counts(row["entries"])["left"]
+        first = next((loaded.get(e["ref"]).title for e in row["entries"] if e["state"] == PENDING and loaded.get(e["ref"])), None)  # type: ignore[union-attr]
+        buttons = [[{"text": "▶️ Start", "callback_data": f"aq:s:{_tag(row['id'])}:0"}, {"text": "⏰ Later", "callback_data": f"aq:l:{_tag(row['id'])}:0"}]] if total else None
+        await self._send(who, good_morning(self._owner(who), today, total, first, carried), buttons)
+        return {"queueId": row["id"], "count": total, "carried": carried}
 
     async def remind(self, who: Who, token: str) -> dict[str, Any]:
         """If the owner has not answered the good morning, ask once more, gently. Never a third time."""
         q = await self._repo.queue(who.user_id, statuses=["waiting"])
         if q is None or q["day"] != self._today() or (q.get("shown") or {}).get("reminded"):
             return {"reminded": False}
-        left = sum(1 for e in q["entries"] if e["state"] == "pending")
+        left = counts(q["entries"])["left"]
         if not left:
             return {"reminded": False}
         q["shown"] = {**(q.get("shown") or {}), "reminded": True}
@@ -144,7 +216,10 @@ class QueueService:
         return {"reminded": True}
 
     async def night(self, who: Who, token: str) -> dict[str, Any]:
-        """Good night: what got done today, what moved, what is still open, and what tomorrow opens with. Closes the queue."""
+        """Good night: what got done today, what moved, what is still open, and what tomorrow opens with. The list is not closed: it is paused where it is, and
+        the morning will pick it up."""
+        from app.domain.dayplan import clock as hhmm
+
         today = self._today()
         since = datetime.combine(date.fromisoformat(today), datetime.min.time(), tzinfo=ZoneInfo(ZONE)).astimezone(UTC)
         events = await self._repo.history(who.user_id, None, 500, since)
@@ -154,99 +229,202 @@ class QueueService:
         left = len(queue_order(loaded.items, today))
         tomorrow = resolve_day("tomorrow", today)
         nxt = sorted((i for i in loaded.items if i.status == "open" and i.day == tomorrow), key=lambda i: (i.start if i.start is not None else 24 * 60))
-        q = await self._repo.queue(who.user_id, statuses=["waiting", "active", "paused"])
-        if q:
-            q["status"], q["updatedAt"] = "done", self._now()
-            await self._repo.save_queue(who.user_id, q)
-        await self._send(who, good_night(self._owner(who), done, moved, left, f"{nxt[0].title}" + (f" at {clock(nxt[0].start)}" if nxt[0].start is not None else "") if nxt else None), None)
-        return {"done": done, "moved": moved, "left": left}
+        q = await self.current(who)
+        kept = 0
+        if q is not None:
+            self._revalidate(q, loaded)
+            kept = counts(q["entries"])["left"]
+            q["status"] = "paused" if kept else "done"
+            q["shown"] = {**(q.get("shown") or {}), "sitting": 0}
+            await self._save(who, q)
+        await self._send(who, good_night(self._owner(who), done, moved, left, f"{nxt[0].title}" + (f" at {hhmm(nxt[0].start)}" if nxt[0].start is not None else "") if nxt else None, kept), None)
+        return {"done": done, "moved": moved, "left": left, "kept": kept}
 
-    # --- one at a time ---------------------------------------------------------------------------------------------------------------------
+    # --- walking the list ------------------------------------------------------------------------------------------------------------------
+
+    @staticmethod
+    def _revalidate(q: dict[str, Any], loaded: Any) -> None:
+        """Entries whose item was settled somewhere else, or deleted, since the list was made are gone: the list never shows what is not real."""
+        for e in q["entries"]:
+            if e["state"] in (PENDING, SHOWN):
+                it = loaded.get(e["ref"])
+                if it is None or it.status != "open":
+                    e["state"] = GONE
 
     async def _show(self, who: Who, token: str, q: dict[str, Any], ack: str = "") -> tuple[str, list[list[dict[str, str]]] | None]:
-        """The next pending item as a message with its buttons, or the closing words when none is left. Saves where the queue has got to."""
+        """The item in front of the owner (the one already shown, else the next pending), with its buttons; or the closing words when none is left."""
         today = self._today()
         loaded = await self._actions.load(who, token)
-        total = len(q["entries"])
+        self._revalidate(q, loaded)
         sitting = int((q.get("shown") or {}).get("sitting", 0))
-        for i, e in enumerate(q["entries"]):
-            if e["state"] != "pending":
-                continue
-            it = loaded.get(e["ref"])
-            if it is None or it.status != "open":  # settled somewhere else since the morning
-                e["state"] = "gone"
-                continue
-            if sitting >= SITTING:
-                q["entries"][i]["state"] = "pending"
-                await self._save(who, q)
-                left = sum(1 for x in q["entries"] if x["state"] == "pending")
-                return (f"{ack}\n\nThat's {sitting} so far. {left} more to go. Keep going?".strip(), _buttons("task", False, _tag(q["id"]), i, at_limit=True))
-            e["state"], q["cursor"] = "shown", i
-            q["shown"] = {**(q.get("shown") or {}), "sitting": sitting + 1, "index": i}
+        front = next((i for i, e in enumerate(q["entries"]) if e["state"] == SHOWN), None)
+        index = front if front is not None else next_index(q["entries"], int(q.get("cursor", -1)))
+        if index is None:
+            left_counts = counts(q["entries"])
+            q["status"] = "done"
             await self._save(who, q)
+            bits = [f"{n} {w}" for w, n in (("done", left_counts[DONE]), ("moved", left_counts[MOVED]), ("skipped", left_counts[SKIPPED]), ("snoozed", left_counts["snoozed"])) if n]
+            return (f"{ack}\n\n✅ That's everything on the list" + (f" ({', '.join(bits)})." if bits else ".")).strip(), None
+        e = q["entries"][index]
+        it = loaded.get(e["ref"])
+        assert it is not None
+        if front is None and sitting >= SITTING:
+            await self._save(who, q)
+            left = counts(q["entries"])["left"]
+            return (f"{ack}\n\nThat's {sitting} so far. {left} more to go. Keep going?".strip(), _buttons("task", False, _tag(q["id"]), index, at_limit=True))
+        if front is None:
+            e["state"], q["cursor"] = SHOWN, index
+            q["shown"] = {**(q.get("shown") or {}), "sitting": sitting + 1}
             await self._actions.note(who, e["ref"], "queued", "chittu", it.title, "brought to the owner on Telegram")
-            return (f"{ack}\n\n{item_text(it, sum(1 for x in q['entries'][: i + 1] if x['state'] != 'gone'), sum(1 for x in q['entries'] if x['state'] != 'gone'), today)}".strip(), _buttons(it.kind, it.fixed, _tag(q["id"]), i))
-        q["status"] = "done"
+        q["status"] = "active"
+        last = (q.get("shown") or {}).get("last")
+        undo = last if isinstance(last, int) and 0 <= last < len(q["entries"]) and q["entries"][last]["state"] in (DONE, MOVED, SKIPPED) and q["entries"][last].get("cs") and last != index else None
         await self._save(who, q)
-        counts = {s: sum(1 for x in q["entries"] if x["state"] == s) for s in ("done", "moved", "skipped")}
-        bits = [f"{n} {w}" for w, n in (("done", counts["done"]), ("moved", counts["moved"]), ("skipped", counts["skipped"])) if n]
-        return (f"{ack}\n\n✅ That's everything for now" + (f" ({', '.join(bits)})." if bits else ".")).strip(), None
+        pos, total = position(q["entries"], index)
+        return (f"{ack}\n\n{item_text(it, pos, total, today, e.get('note'))}".strip(), _buttons("review" if e.get("review") else it.kind, it.fixed, _tag(q["id"]), index, undo=undo))
 
-    async def _save(self, who: Who, q: dict[str, Any]) -> None:
-        q["updatedAt"] = self._now()
-        await self._repo.save_queue(who.user_id, q)
+    async def _settle(self, who: Who, token: str, q: dict[str, Any], index: int, action: str) -> str:
+        """Does what a button or a word says to the item in front of the owner and returns what to say. A failure leaves the item skipped, never stuck."""
+        e = q["entries"][index]
+        ref = e["ref"]
+        try:
+            if e.get("review"):  # only looked at: skipping is all there is
+                ack, e["state"] = "⏭ Next.", SKIPPED
+            elif action == "d":
+                if ref.split(":")[0] in FIXED_KINDS:
+                    await self._actions.note(who, ref, "resolved", "owner", ref, "noted on Telegram")
+                    ack = "✔️ Noted."
+                else:
+                    out = await self._actions.command(who, token, ref, "complete", actor="owner", reason="done on Telegram")
+                    e["cs"], ack = out.get("changesetId"), f"✅ {out['item']}: done."
+                e["state"] = DONE
+            elif action == "t":
+                out = await self._actions.command(who, token, ref, "snooze" if ref.startswith("mail:") else "move", to="tomorrow", actor="owner", reason="moved to tomorrow on Telegram")
+                e["cs"], ack, e["state"] = out.get("changesetId"), f"🔁 {out['item']}: tomorrow.", MOVED
+            else:
+                await self._actions.note(who, ref, "skipped", "owner", ref, "skipped on Telegram")
+                ack, e["state"] = "⏭ Skipped.", SKIPPED
+        except Exception as exc:  # noqa: BLE001  a button must always answer, and the list must move on
+            log.warning("could not settle %s from Telegram: %s", ref, exc)
+            ack, e["state"] = f"⚠️ {getattr(exc, 'message', None) or 'That did not work.'} Skipping it for now.", SKIPPED
+        q["shown"] = {**(q.get("shown") or {}), "last": index}
+        return ack
 
-    async def press(self, who: Who, token: str, action: str, rest: str) -> str | tuple[str, list[list[dict[str, str]]] | None]:
-        """A button under one of Chittu's messages: start, later, done, tomorrow, skip, stop, keep going. Returns what to say next."""
+    async def _undo(self, who: Who, token: str, q: dict[str, Any], index: int) -> tuple[str, list[list[dict[str, str]]] | None]:
+        """Puts back what was done to an entry (the item itself, from the change set) and makes the entry the next to show again."""
+        e = q["entries"][index]
+        ack = "↩️ Put back."
+        if e.get("cs"):
+            try:
+                out = await self._actions.undo_changeset(who, token, e["cs"], actor="owner")
+                ack = f"↩️ Put back: {out['title']}."
+            except Exception as exc:  # noqa: BLE001
+                return f"⚠️ {getattr(exc, 'message', None) or 'I could not undo that.'}", None
+        e["state"], e["cs"] = PENDING, None
+        # (anything shown now goes back to waiting so the undone entry comes first)
+        for other in q["entries"]:
+            if other["state"] == SHOWN:
+                other["state"] = PENDING
+        q["cursor"] = index - 1
+        q["shown"] = {**(q.get("shown") or {}), "last": None}
+        return await self._show(who, token, q, ack)
+
+    async def press(self, who: Who, token: str, action: str, rest: str) -> Any:
+        """A button under one of Chittu's messages: start, later, done, tomorrow, skip, stop, keep going, undo. Returns what to say next."""
         tag, _, idx = rest.partition(":")
-        q = await self._repo.queue(who.user_id, statuses=["waiting", "active", "paused"])
+        q = await self.current(who)
         if q is None or _tag(q["id"]) != tag:
-            return "That was from an earlier list. Ask me what's on today and I'll start again."
+            return "That was from an earlier list, and I've moved on. Ask me what's on and I'll start again."
         index = int(idx) if idx.isdigit() else 0
-        if action == "s":
-            q["status"] = "active"
-            q["shown"] = {"sitting": 0}
+        if action in ("s", "g"):
+            q["status"], q["shown"] = "active", {**(q.get("shown") or {}), "sitting": 0}
             return await self._show(who, token, q)
         if action == "l":
             q["status"] = "paused"
             await self._save(who, q)
             return "Okay, I'll be here. Say start when you're ready.", [[{"text": "▶️ Start", "callback_data": f"aq:s:{tag}:0"}]]
         if action == "x":
-            q["status"] = "done"
-            await self._save(who, q)
-            return "Stopping here. Anything left stays on your list. I'm around whenever you want to go on."
-        if action == "g":
-            q["status"], q["shown"] = "active", {"sitting": 0}
-            return await self._show(who, token, q)
+            return await self._stop(who, q, tag)
         if not 0 <= index < len(q["entries"]):
             return "I can't find that one."
+        if action == "u":
+            return await self._undo(who, token, q, index)
         e = q["entries"][index]
-        if e["state"] != "shown":
+        if e["state"] != SHOWN:
             return "That one is already settled."  # an old button, or a second tap
-        ref, ack = e["ref"], ""
-        loaded_title = ref
-        try:
-            if action == "d":
-                if ref.split(":")[0] in FIXED_KINDS:
-                    await self._actions.note(who, ref, "resolved", "owner", ref, "noted on Telegram")
-                    ack = "✔️ Noted."
-                else:
-                    out = await self._actions.command(who, token, ref, "complete", actor="owner", reason="done on Telegram")
-                    ack = f"✅ {out['item']}: done."
-                e["state"] = "done"
-            elif action == "t":
-                out = await self._actions.command(who, token, ref, "snooze" if ref.startswith("mail:") else "move", to="tomorrow", actor="owner", reason="moved to tomorrow on Telegram")
-                ack = f"🔁 {out['item']}: tomorrow."
-                e["state"] = "moved"
-            elif action == "k":
-                await self._actions.note(who, ref, "skipped", "owner", loaded_title, "skipped on Telegram")
-                ack = "⏭ Skipped."
-                e["state"] = "skipped"
-            else:
-                return "I don't know that button."
-        except Exception as exc:  # noqa: BLE001  a button must always answer, and the item stays to try again
-            log.warning("could not settle %s from Telegram: %s", ref, exc)
-            e["state"] = "pending"
-            ack = f"⚠️ {getattr(exc, 'message', None) or 'That did not work.'} Skipping it for now."
-            e["state"] = "skipped"
+        if action not in ("d", "t", "k"):
+            return "I don't know that button."
+        ack = await self._settle(who, token, q, index, action)
         return await self._show(who, token, q, ack)
+
+    async def _stop(self, who: Who, q: dict[str, Any], tag: str) -> Any:
+        q["status"] = "paused"
+        await self._save(who, q)
+        left = counts(q["entries"])["left"]
+        return f"Stopping here. {left} still on your list; it stays until you ask for something else. Say continue whenever you like.", [[{"text": "▶️ Continue", "callback_data": f"aq:s:{tag}:0"}]]
+
+    # --- words instead of buttons: no model ---------------------------------------------------------------------------------------------
+
+    async def command(self, who: Who, token: str, text: str) -> Any:
+        """A plain word from the owner while a list is in force (next, done, tomorrow, stop, continue, how many left, undo): handled here, without a model.
+        None when it is not one, or there is no list: the message then goes to Chittu as usual."""
+        word = classify_words(text)
+        if word is None:
+            return None
+        q = await self.current(who)
+        if q is None:
+            return None
+        tag = _tag(q["id"])
+        front = next((i for i, e in enumerate(q["entries"]) if e["state"] == SHOWN), None)
+        if word == "left":
+            c = counts(q["entries"])
+            if c["left"] == 0:
+                return "Everything on your list is settled."
+            return f"{c['left']} left of {c['total']} on {q.get('title') or 'your list'}: {c[DONE]} done, {c[MOVED]} moved, {c[SKIPPED]} skipped.", [[{"text": "▶️ Continue", "callback_data": f"aq:s:{tag}:0"}]]
+        if word == "resume":
+            if counts(q["entries"])["left"] == 0:
+                return None
+            q["status"], q["shown"] = "active", {**(q.get("shown") or {}), "sitting": 0}
+            return await self._show(who, token, q)
+        if word == "stop":
+            return await self._stop(who, q, tag)
+        if word == "undo":
+            last = (q.get("shown") or {}).get("last")
+            if isinstance(last, int) and 0 <= last < len(q["entries"]) and q["entries"][last]["state"] in (DONE, MOVED, SKIPPED):
+                return await self._undo(who, token, q, last)
+            return None
+        if front is None or q["status"] != "active":
+            return None  # nothing is in front of the owner (or the list is paused): "done" means something else, and Chittu can work out what
+        ack = await self._settle(who, token, q, front, {"skip": "k", "done": "d", "tomorrow": "t"}[word])
+        return await self._show(who, token, q, ack)
+
+    # --- things that arrive while a list is in force ---------------------------------------------------------------------------------------
+
+    async def add(self, who: Who, ref: str, where: str = "append") -> bool:
+        """A new item that needs the owner (a mail judged "now") joins the list in force, at its end, so it is not lost behind the rest. Nothing is sent: the alert
+        for it goes out on its own. False when there is no list."""
+        q = await self.current(who)
+        if q is None:
+            return False
+        q["entries"] = merge(q["entries"], [entry(ref, "new")], where, q["cursor"])
+        if q["status"] == "done":
+            q["status"] = "paused"
+        await self._save(who, q)
+        return True
+
+    async def view(self, who: Who, token: str) -> dict[str, Any]:
+        """The list in force, for the app: what it is, where it came from, where it is, and what is next."""
+        q = await self.current(who)
+        if q is None:
+            return {"queue": None}
+        loaded = await self._actions.load(who, token)
+        self._revalidate(q, loaded)
+        c = counts(q["entries"])
+        rows = [{"ref": e["ref"], "state": e["state"], "title": (loaded.get(e["ref"]).title if loaded.get(e["ref"]) else None), "note": e.get("note")} for e in q["entries"]]  # type: ignore[union-attr]
+        return {"queue": {"id": q["id"], "title": q.get("title") or "", "source": q.get("source") or "ask", "status": q["status"], "counts": c, "entries": rows, "createdAt": q["createdAt"].isoformat() if q.get("createdAt") else None}}
+
+
+def parse_spec_for(raw: Any, loaded: Any) -> Spec:
+    from app.domain.worklist import parse_spec
+
+    return parse_spec(raw, {i.ref: i for i in loaded.items})

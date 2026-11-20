@@ -19,17 +19,18 @@ CLOSES = "22:00"
 SITTING = 10
 
 
-def good_morning(owner: str, day: str, count: int, first: str | None = None) -> str:
-    """The first message of the day. Short; it says how many things want the owner, and asks whether to start."""
+def good_morning(owner: str, day: str, count: int, first: str | None = None, carried: int = 0) -> str:
+    """The first message of the day. Short; it says how many things want the owner (and how many are still on the list from before), and asks whether to start."""
     when = date.fromisoformat(day).strftime("%A %-d %B")
     hello = f"☀️ Good morning, {owner}. It's {when}."
     if count <= 0:
         return f"{hello} Nothing needs you today. I'll keep an eye on things."
     many = "one thing" if count == 1 else f"{count} things"
-    return f"{hello}\nThere {'is' if count == 1 else 'are'} {many} I need your attention on today" + (f", starting with {first}." if first else ".") + " Shall we start?"
+    kept = f" ({carried} still on the list from before)" if carried else ""
+    return f"{hello}\nThere {'is' if count == 1 else 'are'} {many} I need your attention on today{kept}" + (f", starting with {first}." if first else ".") + " Shall we start?"
 
 
-def good_night(owner: str, done: int, moved: int, left: int, tomorrow_first: str | None = None) -> str:
+def good_night(owner: str, done: int, moved: int, left: int, tomorrow_first: str | None = None, kept: int = 0) -> str:
     """The last message of the day: what got done, what moved, what is still open, and what tomorrow opens with."""
     parts = [f"🌙 Good night, {owner}."]
     bits = []
@@ -40,6 +41,8 @@ def good_night(owner: str, done: int, moved: int, left: int, tomorrow_first: str
     if left:
         bits.append(f"{left} still open")
     parts.append("Today: " + ", ".join(bits) + "." if bits else "A quiet day.")
+    if kept:
+        parts.append(f"Your list is still here with {kept} left: I'll pick it up where we stopped.")
     if tomorrow_first:
         parts.append(f"Tomorrow opens with {tomorrow_first}.")
     parts.append("I'll be here at six. Rest well.")

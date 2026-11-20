@@ -288,7 +288,7 @@ async def test_chittu_says_good_morning_brings_one_thing_at_a_time_and_says_good
         data = next(b["callback_data"] for b in (board or []) if b["callback_data"].split(":")[1] in ("d", "k"))
         await press(rig, c, data, update=10 + n)
         seen.append(rig.telegram.edits[-1][2])
-    assert any("That's everything for now" in t for t in seen) or "That's everything for now" in rig.telegram.edits[-1][2]
+    assert any("That's everything on the list" in t for t in seen) or "That's everything on the list" in rig.telegram.edits[-1][2]
     assert (await rig.client.get(f"{PLANNER}/runs", headers=headers())).status_code == 200
     await chittu_run(rig.app, WHO, "night")()
     night = rig.telegram.sent[-1][1]
@@ -363,7 +363,7 @@ async def test_on_telegram_a_question_about_many_items_is_answered_one_at_a_time
     rig.script += [ChatResult("", [ToolCall("c1", "walk_through", {})]), ChatResult("Say stop whenever you like.")]
     await send(rig, c, "What's on today?", chat=555, update=2)
     texts = [t for _, t in rig.telegram.sent]
-    assert texts[0].startswith("Here's your day, ") and "6 things. One at a time." in texts[0]
+    assert texts[0].startswith("Your day: 6 things. One at a time.")
     assert texts[1].startswith("1/6 · ")  # the first, numbered, with its buttons: not a list
     assert [b["text"] for row in rig.telegram.keyboards[1] for b in row][0] in ("✔️ Noted", "✅ Done")
     assert texts[2] == "Say stop whenever you like." and len(texts) == 3
@@ -375,4 +375,4 @@ async def test_on_telegram_a_question_about_many_items_is_answered_one_at_a_time
     rig.data.tables["tasks"].append({"id": "late", "title": "Pay the registry fee", "priority": "normal", "dueDate": (TODAY - timedelta(days=2)).isoformat(), "outcome": {"status": "open"}})
     rig.script += [ChatResult("", [ToolCall("c2", "walk_through", {"overdue_only": True, "label": "what is late"})]), ChatResult("Say stop whenever you like.")]
     await send(rig, c, "what's overdue?", chat=555, update=4)
-    assert any("what is late" in t and "one thing. One at a time." in t for _, t in rig.telegram.sent) and any(t.startswith("1/1 · ") and "registry fee" in t for _, t in rig.telegram.sent)
+    assert any(t.startswith("What is late: one thing. One at a time.") for _, t in rig.telegram.sent) and any(t.startswith("1/1 · ") and "registry fee" in t for _, t in rig.telegram.sent)

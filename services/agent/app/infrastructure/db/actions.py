@@ -26,7 +26,7 @@ def _changeset(r: ActionChangesetModel) -> dict[str, Any]:
 
 
 def _queue(r: ActionQueueModel) -> dict[str, Any]:
-    return {"id": r.id, "day": r.day, "status": r.status, "entries": list(r.entries or []), "cursor": r.cursor, "shown": dict(r.shown or {}), "createdAt": r.created_at, "updatedAt": r.updated_at}
+    return {"id": r.id, "day": r.day, "status": r.status, "entries": list(r.entries or []), "cursor": r.cursor, "shown": dict(r.shown or {}), "title": r.title or "", "source": r.source or "ask", "createdAt": r.created_at, "updatedAt": r.updated_at}
 
 
 class SqlActionRepository:
@@ -116,7 +116,8 @@ class SqlActionRepository:
     async def save_queue(self, user_id: str, row: dict[str, Any]) -> None:
         r = await self._s.get(ActionQueueModel, row["id"])
         if r is None:
-            self._s.add(ActionQueueModel(id=row["id"], user_id=user_id, day=row["day"], status=row["status"], entries=row["entries"], cursor=row["cursor"], shown=row.get("shown") or {}, created_at=row["createdAt"], updated_at=row["updatedAt"]))
+            self._s.add(ActionQueueModel(id=row["id"], user_id=user_id, day=row["day"], status=row["status"], entries=row["entries"], cursor=row["cursor"], shown=row.get("shown") or {}, title=row.get("title", "")[:80], source=row.get("source", "ask"), created_at=row["createdAt"], updated_at=row["updatedAt"]))
         else:
             r.status, r.entries, r.cursor, r.shown, r.updated_at = row["status"], row["entries"], row["cursor"], row.get("shown") or {}, row["updatedAt"]
+            r.title, r.source = row.get("title", r.title)[:80], row.get("source", r.source)
         await self._s.flush()

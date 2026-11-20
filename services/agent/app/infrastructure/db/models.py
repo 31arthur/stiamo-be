@@ -392,8 +392,11 @@ class ActionQueueModel(Base):
     #: [{ref, state}] state: pending, shown, done, moved, skipped, snoozed.
     entries: Mapped[list[dict[str, Any]]] = mapped_column(Json, default=list)
     cursor: Mapped[int] = mapped_column(default=0)
-    #: The message the current item is in, so its buttons can be taken off when it is settled.
+    #: Where it stands: the entry in front of the owner, how many were shown in this sitting, whether it was nudged, and what replaced it.
     shown: Mapped[dict[str, Any]] = mapped_column(Json, default=dict)
+    #: What the list is ("Your calls") and where it came from: morning, ask (a question) or ai (a list a model gave as JSON).
+    title: Mapped[str] = mapped_column(String(80), default="", server_default="")
+    source: Mapped[str] = mapped_column(String(12), default="ask", server_default="ask")
     created_at: Mapped[datetime] = mapped_column(UTCDateTime)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime)
 

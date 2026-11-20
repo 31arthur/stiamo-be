@@ -59,6 +59,9 @@ class ActionsPack(ToolPack):
                 found, free = await svc.find(who, token, day=day, until=until, kinds=kinds, workspace=scope or (text(a.get("workspace")) or None), priority_below=text(a.get("less_important_than")) or None, include_overdue=overdue, with_free=True)
             except ValidationFailed as exc:
                 return ToolOutput({"error": str(getattr(exc, "message", None) or exc)})
+            word = text(a.get("query")).lower()
+            if word:  # find one by a word in its title, its summary (a mail's subject and what it says), its case or its contact
+                found = [i for i in found if word in " ".join(str(x or "") for x in (i.title, i.notes, i.case_ref, i.contact)).lower()]
             rows = [i.view(today) for i in found]
             most = limit(a.get("max"), 40, 100)
             out: dict[str, Any] = {"count": len(rows), "range": {"from": day, "to": until or day}, "items": clip(rows, most), "truncated": len(rows) > most}
@@ -125,12 +128,21 @@ class ActionsPack(ToolPack):
                 if (text(a.get("day")) and when is None) or (text(a.get("until")) and last is None):
                     return ToolOutput({"error": "I can't read that day. Ask the owner which day they mean."})
                 kinds = [k for k in (a.get("kinds") or []) if k in KINDS] or None
-                out = await ctx.queue.begin(who, token, day=when, until=last, kinds=kinds, workspace=scope or (text(a.get("workspace")) or None), priority_below=text(a.get("less_important_than")) or None, priority_at_least=text(a.get("at_least")) or None, overdue_only=bool(a.get("overdue_only")), label=text(a.get("label"))[:40])
+                out = await ctx.queue.begin(who, token, day=when, until=last, kinds=kinds, workspace=scope or (text(a.get("workspace")) or None), priority_below=text(a.get("less_important_than")) or None, priority_at_least=text(a.get("at_least")) or None, overdue_only=bool(a.get("overdue_only")), or_overdue=bool(a.get("or_overdue")), changeset_id=text(a.get("changeset_id")) or None, label=text(a.get("label"))[:40])
             except (ValidationFailed, NotFound, Conflict) as exc:
                 return ToolOutput({"error": str(getattr(exc, "message", None) or exc)})
             if not out.get("started"):
                 return ToolOutput({"started": False, "count": 0, "next": "Nothing is waiting. Say the day is clear, in one line."})
             return ToolOutput({**out, "next": "The first item has ALREADY been sent to the owner's phone with its buttons. Reply with one short line only (for example: Say stop whenever you like). Do not list or repeat any item."})
+
+        async def set_queue(a: dict[str, Any]) -> ToolOutput:
+            try:
+                out = await ctx.queue.set_from_json(who, token, {"title": a.get("title"), "mode": a.get("mode"), "items": a.get("items")})
+            except (ValidationFailed, NotFound, Conflict) as exc:
+                return ToolOutput({"error": str(getattr(exc, "message", None) or exc)})
+            if not out.get("started"):
+                return ToolOutput({"started": False, "count": 0, "dropped": out.get("dropped"), "next": "Nothing valid was on the list. Look the items up with find_items and use their refs."})
+            return ToolOutput({**out, "next": "The list is made and the first item has ALREADY been sent with its buttons. From here the app walks it by itself: do NOT call any tool per item. Reply with one short line only, and mention anything in dropped."})
 
         async def undo_last(a: dict[str, Any]) -> ToolOutput:
             try:
@@ -145,6 +157,7 @@ class ActionsPack(ToolPack):
             "workspace": {"type": "string", "enum": ["personal", "sb", "fsa", "media"], "description": "Only this workspace. Leave out for all (ignored when you already work inside one workspace)."},
             "less_important_than": {"type": "string", "enum": ["urgent", "high", "normal"], "description": "Only items strictly less important than this. “Non-urgent” is urgent (everything but urgent). “The small stuff” is high (normal and low). “Only the low ones” is normal."},
             "include_overdue": {"type": "boolean", "description": "Also items that were due before the first day and are still open. On by default when the day is today or earlier; pass false to leave them out."},
+            "query": {"type": "string", "description": "Only items with this word in their title, summary, case or contact (to find “the RTI mail” or “the Ramesh call”)."},
         }
         return [
             Tool(
@@ -161,15 +174,28 @@ class ActionsPack(ToolPack):
                 find_items,
             ),
             *([Tool(
+                ToolSpec("set_queue", card(
+                    "Gives the app a list of action items, as JSON, in the order you chose and with a few words on why each is there. The app then walks the owner through it one at a time, numbered (1/10), by itself: no model call per item. The list stays in force (through pauses, nights and restarts) until the owner asks for something else.",
+                    use=["On Telegram, when YOU decide which items and in what order: “who should I call first?” (order the calls by judgement), “what should I do before the hearing?”, “line up my morning”, “put the RTI mail first”.", "To add something to the list in force: mode append (at the end) or next (right after the item in front of the owner)."],
+                    avoid=["For a plain filter (today, overdue, calls, urgent): use walk_through, which picks and orders by itself and is cheaper.", "Never call it once per item, and never call any tool while the list is being walked: the app does that.", "Do not invent refs: take them from find_items."],
+                    args={"title": "What the list is, in a few words (“Your calls”).", "mode": "replace (default: this list takes over), append, or next.", "items": "The entries in the order to show them: each {ref, note}. ref is an item's ref from find_items. note is a few words on why it is on the list (at most 140 characters), shown under the item."},
+                    returns="{started, mode, count, added?, dropped: [{ref, why}], next}. Items that do not exist, are already settled, or are listed twice are dropped and named: mention them in your one line. started=true means the first item has already been sent.",
+                    fails=["started=false with dropped: nothing valid was on the list; use find_items again."],
+                    effect="Sends the opening line and the first item to the owner's Telegram and keeps the list. Changes no items.",
+                ), {"type": OBJ, "properties": {"title": S, "mode": {"type": "string", "enum": ["replace", "append", "next"]}, "items": {"type": "array", "items": {"type": OBJ, "properties": {"ref": S, "note": S}, "required": ["ref"]}}}, "required": ["items"]}),
+                lambda a: "Made the list",
+                set_queue,
+            )] if ctx.queue is not None and ctx.channel == "Telegram" else []),
+            *([Tool(
                 ToolSpec("walk_through", card(
                     "Shows the owner ANY set of their action items on Telegram, one at a time and numbered (1/10): a short line says how many there are, then the first item arrives with buttons (Done, Tomorrow, Skip, Stop), and each one they settle brings the next. This is the only way to show more than one item on Telegram.",
                     use=["On Telegram, whenever the owner's question would be answered by more than one action item: what is on today, tomorrow or this week, what is overdue, who to call, which tasks are pending, what is urgent, what is for one workspace or one case, what is next, or “start”.", "Use the filters to match the question: “who should I call?” is kinds=[call, message]; “what's overdue?” is overdue_only=true; “what's due this week?” is day=today, until=“next week”… as the owner said it; “what's urgent?” is at_least=urgent; “what matters most?” is at_least=high."],
                     avoid=["Never list or enumerate several items in a message or a card on Telegram, in any form: it is always this tool.", "For a count or a yes/no (“how many calls do I have?”, “is the hearing today?”): answer in one sentence from find_items.", "Not on the web app: show a card there with present_plan."],
-                    args={"day": "The first day, in the owner's words. Default today (with what is overdue).", "until": "The last day of a range (“Friday”, “open”).", "kinds": "Only these kinds.", "workspace": "Only this workspace.", "less_important_than": "Only items below this priority.", "at_least": "Only items at least this important: urgent, or high (high and urgent).", "overdue_only": "Only items that are late.", "label": "A few words for what this is, for the opening line (“your calls”, “what is overdue”)."},
+                    args={"day": "The first day, in the owner's words. Default today (with what is overdue).", "until": "The last day of a range (“Friday”, “open”).", "kinds": "Only these kinds.", "workspace": "Only this workspace.", "less_important_than": "Only items below this priority.", "at_least": "Only items at least this important: urgent, or high (high and urgent).", "overdue_only": "Only items that are late.", "or_overdue": "Filters are combined with AND; this ALSO adds what is overdue (“overdue and urgent” is at_least=urgent with or_overdue=true).", "changeset_id": "Look at the items of a change you previewed, one by one (for “which ones?”): they come with where each would go, and nothing is changed by looking.", "label": "A few words for what this is, for the opening line (“your calls”, “what is overdue”)."},
                     returns="{started, count, first, next}. started=true means the first item has already been sent with its buttons; reply with one short line only. started=false means nothing matches.",
                     fails=["{error} for a day it cannot read: ask for a date."],
                     effect="Sends the opening line and the first item to the owner's Telegram and starts a list that moves on as items are settled. Changes no items.",
-                ), {"type": OBJ, "properties": {"day": S, "until": S, "kinds": filters["kinds"], "workspace": filters["workspace"], "less_important_than": filters["less_important_than"], "at_least": {"type": "string", "enum": ["urgent", "high"]}, "overdue_only": {"type": "boolean"}, "label": S}}),
+                ), {"type": OBJ, "properties": {"day": S, "until": S, "kinds": filters["kinds"], "workspace": filters["workspace"], "less_important_than": filters["less_important_than"], "at_least": {"type": "string", "enum": ["urgent", "high"]}, "overdue_only": {"type": "boolean"}, "or_overdue": {"type": "boolean"}, "changeset_id": S, "label": S}}),
                 lambda a: "Started the list",
                 walk_through,
             )] if ctx.queue is not None and ctx.channel == "Telegram" else []),

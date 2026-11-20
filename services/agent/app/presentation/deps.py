@@ -92,6 +92,7 @@ def build_services(app: FastAPI, session: AsyncSession) -> tuple[AgentService, C
     plans = DayPlanService(SqlDayPlanRepository(session), SqlSettingsRepository(session, s.box), agent, s.data_factory, lambda who, text, workspace, plan_id, calls=(): channels.announce_plan(who, text, workspace, plan_buttons(plan_id) + call_rows(s.settings.app_url, list(calls))))
     channels.plan_actions = plans
     agent.queue = channels.queue_actions = QueueService(SqlActionRepository(session), agent.actions, lambda who, text, buttons: channels.announce(who, text, kind="chittu", summary=text[:60], buttons=buttons), lambda: s.clock())
+    agent.actions.on_created = lambda who, ref: channels.queue_actions.add(who, ref)
     channels.availability_actions = AvailabilityService(SqlSettingsRepository(session, s.box), s.data_factory, lambda who, text, workspace, buttons: channels.announce_plan(who, text, workspace, buttons), plans)
     channels.editor_actions = EditorService(SqlSettingsRepository(session, s.box), s.data_factory, s.llm_factory, lambda who, text, workspace, buttons: channels.announce_plan(who, text, workspace, buttons), lambda: s.clock())
     channels.voice_notes = VoiceNotes(SqlSettingsRepository(session, s.box), s.voice)
@@ -335,7 +336,12 @@ def build_workflow_service(app: FastAPI, session: AsyncSession) -> WorkflowServi
     s = app.state
     _, channels = build_services(app, session)
     svc = WorkflowService(SqlWorkflowRepository(session), SqlSettingsRepository(session, s.box), s.runs, s.llm_factory, s.decision_factory, s.data_factory, s.running, s.sweeps.is_active, channels.alerts)
-    svc.record_item = lambda who, **kw: ActionService(SqlActionRepository(session), s.data_factory, lambda: s.clock()).record_mail(who, **kw)
+    def record_item(who, **kw):
+        actions = ActionService(SqlActionRepository(session), s.data_factory, lambda: s.clock())
+        actions.on_created = lambda w, ref: channels.queue_actions.add(w, ref)  # a mail that needs the owner joins the list in force
+        return actions.record_mail(who, **kw)
+
+    svc.record_item = record_item
     return svc
 
 

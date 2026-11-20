@@ -46,6 +46,7 @@ from app.presentation.routers import (
     mailwatch,
     news,
     proposals,
+    queue as queue_routes,
     reminders,
     secrets,
     stories,
@@ -238,6 +239,7 @@ def create_app(settings: Settings | None = None, *, mail_events=None, registry=N
     app.include_router(themes.router)
     app.include_router(alerts.router)
     app.include_router(mailwatch.router)
+    app.include_router(queue_routes.router)
     app.include_router(insights.router)
     app.include_router(deliveries.router)
     app.include_router(health.router)
