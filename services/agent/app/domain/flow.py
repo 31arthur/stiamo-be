@@ -26,6 +26,7 @@ CATALOG: dict[str, tuple[str, str, str]] = {
     "trigger.telegram": ("Triggers", "On a Telegram message", "Starts the workflow when a message arrives on a Telegram bot linked to this agent. Without one, the chat trigger answers Telegram too."),
     "trigger.orchestrator": ("Triggers", "When called by the orchestrator", "Starts the workflow when the master assistant hands it a message. Without one, the chat trigger answers it."),
     "trigger.schedule": ("Triggers", "On a schedule", "Starts the workflow at a set time of day (the evening plan uses this)."),
+    "trigger.mail": ("Triggers", "On new mail", "Starts the workflow the moment mail arrives in the mailboxes of this agent's workspace (the mailbox is held open with IMAP IDLE, so there is no timer). Only the new mail goes through; set \"accounts\" to listen to some mailboxes only."),
     "trigger.manual": ("Triggers", "Run it by hand", "Starts the workflow when you press Run."),
     "core.if": ("Flow", "If", "Sends each item to “true” or “false” by a condition."),
     "core.switch": ("Flow", "Switch", "Sends each item to the first rule it matches, or to the fallback."),
@@ -67,7 +68,7 @@ CATALOG: dict[str, tuple[str, str, str]] = {
     "ai.agent": ("AI", "AI agent", "A model that reads, calls the tools you give it and answers."),
     "respond": ("Output", "Answer", "Ends the run with the answer to give."),
 }
-TRIGGERS = ("trigger.chat", "trigger.telegram", "trigger.orchestrator", "trigger.schedule", "trigger.manual")
+TRIGGERS = ("trigger.chat", "trigger.telegram", "trigger.orchestrator", "trigger.schedule", "trigger.mail", "trigger.manual")
 
 
 def clean_settings(raw: Any) -> dict[str, Any]:
@@ -93,9 +94,9 @@ def clean_settings(raw: Any) -> dict[str, Any]:
 def entry_order(trigger: str, source: str = "") -> list[str]:
     """Which trigger types a run starts from, best first: where the message came from decides, and a workflow with only some of them still runs
     (from the first that is there, a schedule trigger last)."""
-    first = {"orchestrator": ["trigger.orchestrator"], "telegram": ["trigger.telegram"], "schedule": ["trigger.schedule"], "manual": ["trigger.manual"]}
+    first = {"orchestrator": ["trigger.orchestrator"], "telegram": ["trigger.telegram"], "schedule": ["trigger.schedule"], "mail": ["trigger.mail"], "manual": ["trigger.manual"]}
     wanted = first.get(source) or first.get(trigger) or []
-    return [*wanted, "trigger.chat", "trigger.manual", "trigger.telegram", "trigger.orchestrator", "trigger.schedule"] if trigger != "schedule" else ["trigger.schedule", "trigger.chat", "trigger.manual", "trigger.telegram", "trigger.orchestrator"]
+    return [*wanted, "trigger.chat", "trigger.manual", "trigger.telegram", "trigger.orchestrator", "trigger.mail", "trigger.schedule"] if trigger != "schedule" else ["trigger.schedule", "trigger.chat", "trigger.manual", "trigger.telegram", "trigger.orchestrator", "trigger.mail"]
 
 
 @dataclass

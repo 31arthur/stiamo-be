@@ -58,9 +58,11 @@ from app.domain.workflows import (
     parse_decision,
     parse_feedback,
     parse_manual,
+    discarded_by,
     protected_by,
     render_batch,
     system_prompt,
+    with_context,
     uid_of,
     wrap_item,
 )
@@ -288,7 +290,7 @@ class WorkflowService:
         scanned = total = remaining = 0
         try:
             for account in cfg.source.account_ids:
-                friends = set(await data.mail_correspondents(account)) if cfg.rules.protect_correspondents else set()
+                friends = set(await data.mail_correspondents(account)) if (cfg.rules.protect_correspondents or cfg.rules.note_correspondents) else set()
                 listing = await data.mail_uids(account, cfg.source.folder, since, f.before)
                 validity, everything = listing.get("uidValidity", 0), listing.get("uids", [])
                 total += len(everything)
@@ -300,11 +302,11 @@ class WorkflowService:
                     for m in await data.mail_summaries(account, cfg.source.folder, chunk):
                         scanned += 1
                         item = item_from_mail(m, validity, account)
-                        why = protected_by(item, cfg.rules, friends)
+                        why = protected_by(item, cfg.rules, friends) or discarded_by(item, cfg.rules)
                         if why:
                             protected.append((item, why))
                         else:
-                            items.append(item)
+                            items.append(with_context(item, cfg.rules, friends))
                 remaining += len(todo) - i
         except AiError as exc:
             raise ValidationFailed(str(exc)) from exc
@@ -361,9 +363,10 @@ class WorkflowService:
         batch_system = system_prompt(cfg, who.name, True)
         single_system = system_prompt(cfg, who.name)
 
-        if cfg.decider == "jev":
-            if "openrouter" not in s.keys:
-                raise ValidationFailed("The decision model runs through OpenRouter. Add an OpenRouter key first, or switch this agent to its own model.")
+        # A mail watch is never left deaf: without an OpenRouter key it judges with the agent's own chat model instead of failing.
+        if cfg.decider == "jev" and "openrouter" not in s.keys and not (workflow_id or "").startswith("watch-"):
+            raise ValidationFailed("The decision model runs through OpenRouter. Add an OpenRouter key first, or switch this agent to its own model.")
+        if cfg.decider == "jev" and "openrouter" in s.keys:
             jev = self._decisions(s.keys["openrouter"])
             jev_model = cfg.decision_model or (s.decision or {}).get("modelId") or DECISION_MODELS[0]["id"]
             criteria = {lb.name: lb.description for lb in cfg.labels}

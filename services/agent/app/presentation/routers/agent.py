@@ -136,6 +136,7 @@ async def flow_catalog() -> dict[str, Any]:
 async def create_agent(body: NewAgentBody, agent: deps.Agent, me: deps.Me, token: deps.Token, request: Request) -> dict[str, Any]:
     out = await agent.create_agent(me, token, body.name, body.description, body.template_id, body.flow.model_dump() if body.flow else None, body.packs)
     deps.apply_schedules(request.app, me, await agent.schedules(me))
+    await deps.apply_mail_triggers(request.app, me, await agent.mail_triggers(me))
     return out
 
 
@@ -143,6 +144,7 @@ async def create_agent(body: NewAgentBody, agent: deps.Agent, me: deps.Me, token
 async def delete_agent(agent_id: str, agent: deps.Agent, me: deps.Me, request: Request) -> Response:
     await agent.delete_agent(me, agent_id)
     deps.apply_schedules(request.app, me, await agent.schedules(me))
+    await deps.apply_mail_triggers(request.app, me, await agent.mail_triggers(me))
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -155,6 +157,7 @@ async def get_flow(agent_id: str, agent: deps.Agent, me: deps.Me, token: deps.To
 async def put_flow(agent_id: str, body: FlowBody, agent: deps.Agent, me: deps.Me, token: deps.Token, request: Request) -> dict[str, Any]:
     out = await agent.set_flow(me, token, agent_id, body.model_dump())
     deps.apply_schedules(request.app, me, await agent.schedules(me))
+    await deps.apply_mail_triggers(request.app, me, await agent.mail_triggers(me))
     return out
 
 
@@ -198,6 +201,7 @@ async def run_flow_node(agent_id: str, body: RunNodeBody, agent: deps.Agent, me:
 async def reset_flow(agent_id: str, agent: deps.Agent, me: deps.Me, token: deps.Token, request: Request) -> dict[str, Any]:
     out = await agent.reset_flow(me, token, agent_id)
     deps.apply_schedules(request.app, me, await agent.schedules(me))
+    await deps.apply_mail_triggers(request.app, me, await agent.mail_triggers(me))
     return out
 
 

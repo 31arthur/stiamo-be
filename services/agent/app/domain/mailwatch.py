@@ -9,52 +9,98 @@ from __future__ import annotations
 from typing import Any
 
 from app.domain.agents import WORKSPACES
+from app.domain.mailrules import DISCARD_ORDER_COPY, DISCARD_SUBJECT, DISCARD_TEXT, PRIORITY_DOMAINS
+from app.domain.prompting import brief
 
 PREFIX = "watch-"
 NAMES = {"personal": "Personal", "sb": "S&B", "fsa": "FSA", "media": "Media"}
 
+# --- the first wordings, kept only so a watch the owner never edited can be recognised and brought up to date --------------------------------
+
 _URGENT = "Something is urgent when someone needs the owner to {ask} by a deadline that is close, or when {who} is waiting on them. When unsure whether it is urgent, choose the label that tells the owner."
+_V1 = {
+    "sb": "You watch the inbox of S&B Consultants, a legal and advocacy practice, for mail that cannot wait. " + _URGENT.format(ask="share, send, register, confirm, pay, attend or answer", who="a client, court, government office or funder"),
+    "fsa": "You watch the inbox of FSA, a software and technology consultancy, for mail that cannot wait. " + _URGENT.format(ask="reply, approve, pay, fix, deliver or confirm", who="a client is blocked or unhappy, a payment or contract is at stake, something is down, or a partner"),
+    "media": "You watch the inbox for the owner's media work for mail that cannot wait. " + _URGENT.format(ask="reply, send, confirm or appear", who="an editor, a producer, a journalist or a publication"),
+    "personal": "You watch the owner's personal inbox for mail that cannot wait. " + _URGENT.format(ask="pay, renew, confirm, reply or turn up", who="a bank, a tax or government office, a doctor, an airline or family"),
+}
+_V2_SB = (
+    "You watch the inbox of S&B Consultants, a legal and advocacy practice. Only a few kinds of mail are worth interrupting the owner for, and nothing else is. Notify (urgent) ONLY for: (1) mail from or about BWI"
+)
+_V2_PERSONAL = "You watch the owner's personal inbox. Almost nothing here deserves an interruption. "
 
-#: What the S&B watch tells the phone about, and what it never does.
-_SB_PRIORITY = (
-    "Notify (urgent) ONLY for: (1) mail from or about BWI (Building and Wood Workers' International); (2) mail from MFA (Migrants Forum in Asia); "
-    "(3) mail from the United Nations or any of its bodies and agencies (UN, ILO, OHCHR, UNDP, UNICEF, UNHCR, IOM, UN Women, UNESCO and the like); "
-    "(4) mail from a government agency, ministry, department, court, tribunal or other public authority; (5) a reply to a Right to Information (RTI) application "
-    "or any RTI correspondence, including first-appeal and information-commission mail; (6) a reply to something the owner sent, that is, a message answering the owner's own mail "
-    "(\"Re:\" in the subject, or a person writing back in a thread the owner started). "
-    "Never notify for one-time passwords (OTP), verification or login codes, sign-in or security alerts, password resets, account or balance statements, order or payment receipts, "
-    "newsletters, promotions, webinars, marketing, social-media notifications or automated notifications from apps and services, even when they look urgent or mention a deadline. "
-    "Mail that does not clearly match one of the six kinds above is routine. When unsure whether something matches, choose routine."
+#: What each kind of work needs to hear about. The one thing every inbox shares: replies to the owner's own mail.
+_REPLY = "A reply to the owner's own mail: \"Re:\" in the subject, the owner's words quoted, \"in response to your\", \"as discussed\", or the facts say the owner has written to this sender before."
+_NOT = (
+    "One-time passwords, verification, login and security codes, sign-in alerts, password resets, account and balance statements, order copies and confirmations, shipping, receipts, invoices from shops, "
+    "newsletters, promotions, webinars, social and app notifications."
 )
 
-#: Personal mail: only a person answering the owner, or someone offering business.
-_PERSONAL_PRIORITY = (
-    "Notify (urgent) ONLY for: (1) a reply to something the owner sent, that is, a person answering the owner's own mail (\"Re:\" in the subject, or someone writing back in a thread the owner started); "
-    "(2) a real person or company writing to the owner to do business with them: an enquiry, a proposal, a collaboration, an offer of work, a request for a quote or a meeting. "
-    "Never notify for one-time passwords (OTP), verification or login codes, sign-in or security alerts, password resets, bank or card statements, account balance mail, order confirmations, "
-    "order copies, invoices and receipts, shipping updates, newsletters, promotions, offers, mass marketing, cold sales mail, social-media or app notifications. "
-    "These are routine even if they look urgent. Anything that is not clearly one of the two kinds above is routine. When unsure, choose routine."
-)
-
-#: What each kind of work watches for. Everything else about the setup is the same for every workspace.
-FOCUS: dict[str, tuple[str, str]] = {
-    "sb": (
-        "You watch the inbox of S&B Consultants, a legal and advocacy practice. Only a few kinds of mail are worth interrupting the owner for, and nothing else is. ",
-        _SB_PRIORITY,
+FOCUS: dict[str, str] = {
+    "sb": brief(
+        persona="You are the intake clerk of S&B Consultants, a legal and advocacy practice for trade unions and migrant workers. You are blunt. Silence is the default; the owner is interrupted rarely and only for the list below.",
+        tasks=["Read the sender and the subject first, the start of the text second.", "Decide: needed or discarded.", "Choose needed only if the email is one of the kinds in Context."],
+        context=[
+            "Needed, kind 1: BWI (Building and Wood Workers' International).",
+            "Needed, kind 2: MFA (Migrants Forum in Asia).",
+            "Needed, kind 3: the United Nations or any UN body or agency (ILO, OHCHR, UNDP, UNICEF, UNHCR, IOM, UN Women, UNESCO and the like).",
+            "Needed, kind 4: a government agency, ministry, department, court, tribunal or commission.",
+            "Needed, kind 5: Right to Information (RTI) mail: a reply, a fee demand, a transfer, a first-appeal or information-commission notice.",
+            "Needed, kind 6: " + _REPLY,
+            "Judge by who sent it or signed it, not by words in the subject. A promotional mail that mentions the UN is discarded.",
+            "A line starting \"[Facts from the system: ...]\" is established by code. Believe it. A sender on the priority list is usually kind 1 to 4, but a circular or newsletter from them is still discarded.",
+            "Discarded: " + _NOT + " Also clients and general correspondence that are not one of the six kinds.",
+        ],
+        output=["One label: needed or discarded.", "Unsure: discarded, with low confidence. A person reviews low-confidence mail."],
     ),
-    "fsa": (
-        "You watch the inbox of FSA, a software and technology consultancy, for mail that cannot wait. ",
-        _URGENT.format(ask="reply, approve, pay, fix, deliver or confirm", who="a client is blocked or unhappy, a payment or contract is at stake, something is down, or a partner"),
+    "fsa": brief(
+        persona="You are the intake clerk of FSA, a software and technology consultancy. You are blunt. Silence is the default; the owner is interrupted rarely.",
+        tasks=["Read the sender and the subject first, the start of the text second.", "Decide: needed or discarded.", "Choose needed only for the kinds in Context."],
+        context=[
+            "Needed: a client who is blocked, unhappy or waiting on a reply, approval, fix or delivery.",
+            "Needed: a payment, invoice dispute, contract or renewal with a client or partner that needs the owner.",
+            "Needed: a person or monitoring service reporting that a client's system is down, breached or failing.",
+            "Needed: a real person or company asking FSA to build, quote or partner.",
+            "Needed: " + _REPLY,
+            "A line starting \"[Facts from the system: ...]\" is established by code. Believe it.",
+            "Discarded: " + _NOT + " Also cold sales pitches, recruiters' bulk mail and vendor marketing.",
+        ],
+        output=["One label: needed or discarded.", "Unsure: discarded, with low confidence. A person reviews low-confidence mail."],
     ),
-    "media": (
-        "You watch the inbox for the owner's media work for mail that cannot wait. ",
-        _URGENT.format(ask="reply, send, confirm or appear", who="an editor, a producer, a journalist or a publication"),
+    "media": brief(
+        persona="You are the intake clerk for the owner's media work. You are blunt. Silence is the default; the owner is interrupted rarely.",
+        tasks=["Read the sender and the subject first, the start of the text second.", "Decide: needed or discarded.", "Choose needed only for the kinds in Context."],
+        context=[
+            "Needed: an editor, producer, journalist or publication asking for a piece, an interview, a comment, a correction or a deadline.",
+            "Needed: a commission, a booking or an invitation to appear that names a date.",
+            "Needed: " + _REPLY,
+            "A line starting \"[Facts from the system: ...]\" is established by code. Believe it.",
+            "Discarded: " + _NOT + " Also press releases and mass pitches sent to a list.",
+        ],
+        output=["One label: needed or discarded.", "Unsure: discarded, with low confidence. A person reviews low-confidence mail."],
     ),
-    "personal": (
-        "You watch the owner's personal inbox. Almost nothing here is worth interrupting them for. ",
-        _PERSONAL_PRIORITY,
+    "personal": brief(
+        persona="You are the gatekeeper of the owner's personal inbox. You are blunt. Almost nothing here deserves an interruption. Silence is the default.",
+        tasks=["Read the sender and the subject first, the start of the text second.", "Decide: needed or discarded.", "Choose needed only for the two kinds in Context."],
+        context=[
+            "Needed, kind 1: " + _REPLY,
+            "Needed, kind 2: a real person or company writing to the owner personally to do business: an enquiry, a request for a quote or a meeting, a proposal, a collaboration, an offer of work.",
+            "A mass-mailed pitch, a template, a recruiter's bulk mail or \"grow your business\" mail is not kind 2.",
+            "A line starting \"[Facts from the system: ...]\" is established by code. Believe it.",
+            "Discarded, always, even if it looks urgent: " + _NOT + " Also bank and card mail of any kind, and anything else that is not kind 1 or 2.",
+        ],
+        output=["One label: needed or discarded.", "Unsure: discarded, with low confidence. A person reviews low-confidence mail."],
     ),
 }
+
+#: The pre-model rules per workspace (see domain/mailrules.py). Only personal drops "order copy": in a law practice an order is often a court order.
+def _rules(workspace: str) -> dict[str, Any]:
+    subject = list(DISCARD_SUBJECT.values()) + (list(DISCARD_ORDER_COPY.values()) if workspace == "personal" else [])
+    return {
+        "protectedDomains": [], "protectedPhrases": [], "protectCorrespondents": False,
+        "discardPatterns": subject, "discardTextPatterns": list(DISCARD_TEXT.values()),
+        "priorityDomains": list(PRIORITY_DOMAINS) if workspace in ("sb", "media") else [], "noteCorrespondents": True,
+    }
 
 
 def watch_id(workspace: str, user_id: str) -> str:
@@ -78,57 +124,44 @@ def watch_description(workspace: str) -> str:
 
 
 def labels_for(workspace: str) -> list[dict[str, str]]:
-    if workspace == "sb":
-        return [
-            {"name": "urgent", "description": "From BWI, MFA, the United Nations or its organisations, a government agency or court, an RTI reply, or a reply to the owner's own mail. Tell the phone.", "route": "alert"},
-            {"name": "important", "description": "Genuinely relevant to the practice (a client, a case, a funder) but not one of the priority senders. Keep it for Attention without calling the phone.", "route": "attention"},
-            {"name": "routine", "description": "One-time passwords, verification and login codes, security alerts, statements, receipts, order mail, newsletters, promotions, notifications and anything else.", "route": "none"},
-        ]
-    if workspace == "personal":
-        return [
-            {"name": "urgent", "description": "A reply to something the owner sent, or a real person or company approaching the owner to do business. Tell the phone.", "route": "alert"},
-            {"name": "routine", "description": "One-time passwords, verification and login codes, security alerts, bank statements and balances, order copies and confirmations, receipts, newsletters, promotions and anything else.", "route": "none"},
-        ]
+    """Two labels, for every workspace: the decision model chooses between them, and only "needed" reaches the phone."""
     return [
-        {"name": "urgent", "description": "Needs the owner to act, answer or decide soon: a close deadline, or someone important is waiting on them.", "route": "alert"},
-        {"name": "important", "description": "Matters and should be seen, but can wait a day or more: updates, notices, invitations with time to spare.", "route": "attention"},
-        {"name": "routine", "description": "Newsletters, receipts, promotions, notifications and anything that needs nothing from the owner.", "route": "none"},
+        {"name": "needed", "description": "One of the kinds listed in the instructions for this inbox. The owner is told now.", "route": "alert"},
+        {"name": "discarded", "description": "Anything else, including every code, login, statement, order, receipt, newsletter and promotion. Nothing happens.", "route": "none"},
     ]
 
 
 #: Bumped when the default setup of a watch changes. A watch the owner never edited is brought up to it; an edited one is left alone.
-FOCUS_VERSION = 2
+FOCUS_VERSION = 3
 
-#: The prompts the first version made, so an unedited watch can be recognised and upgraded.
-LEGACY_PROMPTS = {
-    "sb": "You watch the inbox of S&B Consultants, a legal and advocacy practice, for mail that cannot wait. "
-    + _URGENT.format(ask="share, send, register, confirm, pay, attend or answer", who="a client, court, government office or funder"),
-    "personal": "You watch the owner's personal inbox for mail that cannot wait. "
-    + _URGENT.format(ask="pay, renew, confirm, reply or turn up", who="a bank, a tax or government office, a doctor, an airline or family"),
-}
+
+def _is_default(workspace: str, prompt: Any) -> bool:
+    """Whether the prompt is one an earlier version of this app wrote, so the owner never changed it."""
+    p = str(prompt or "")
+    return p == _V1.get(workspace) or (workspace == "sb" and p.startswith(_V2_SB)) or (workspace == "personal" and p.startswith(_V2_PERSONAL)) or p == FOCUS.get(workspace)
 
 
 def upgraded(workspace: str, config: dict[str, Any]) -> dict[str, Any] | None:
-    """The newer setup for a watch still on the first version's wording, or None when it is current or the owner changed the wording."""
-    if config.get("focusVersion", 1) >= FOCUS_VERSION or workspace not in LEGACY_PROMPTS or config.get("prompt") != LEGACY_PROMPTS[workspace]:
+    """The newer setup for a watch still on an earlier default wording, or None when it is current or the owner changed the wording."""
+    if config.get("focusVersion", 1) >= FOCUS_VERSION or workspace not in FOCUS or not _is_default(workspace, config.get("prompt")):
         return None
     fresh = watch_config(workspace, [])
-    return {**config, "prompt": fresh["prompt"], "labels": fresh["labels"], "focusVersion": FOCUS_VERSION}
+    return {**config, "prompt": fresh["prompt"], "labels": fresh["labels"], "decider": fresh["decider"], "defaultThreshold": fresh["defaultThreshold"], "rules": fresh["rules"], "focusVersion": FOCUS_VERSION}
 
 
 def watch_config(workspace: str, account_ids: list[str]) -> dict[str, Any]:
-    """The setup of a workspace's watch, as the agent service stores it."""
-    who, urgent = FOCUS.get(workspace, FOCUS["personal"])
+    """The setup of a workspace's watch, as the agent service stores it. It listens to the mailbox (IMAP IDLE): each new mail is judged the moment
+    it arrives, first by the rules in code, then by the decision model."""
     return {
         "focusVersion": FOCUS_VERSION,
         "source": {"kind": "mail", "accountIds": sorted(account_ids), "folder": "INBOX"},
         # Only the last day, so a watch that has just started doesn't raise alarms about old mail.
         "filters": {"sinceDays": 1, "newOnly": True, "contains": None, "limit": 50},
-        "prompt": who + urgent,
+        "prompt": FOCUS.get(workspace, FOCUS["personal"]),
         "labels": labels_for(workspace),
-        "decider": "model",
-        "defaultThreshold": 0.6,
-        "rules": {"protectedDomains": [], "protectedPhrases": [], "protectCorrespondents": False},
+        "decider": "jev",
+        "defaultThreshold": 0.7,
+        "rules": _rules(workspace),
         "action": {"trashLabel": None, "auto": False},
         "listen": True,
         "notify": {"telegram": True, "call": False},

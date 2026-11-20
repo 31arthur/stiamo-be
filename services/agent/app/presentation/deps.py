@@ -185,6 +185,57 @@ def apply_schedules(app: FastAPI, who: Who, schedules: list[dict[str, Any]]) -> 
         mgr.ensure(key, s["time"], s["timezone"], flow_run(app, who, s["agent"], s["node"], s.get("days"), s["timezone"]))
 
 
+def flow_mail_run(app: FastAPI, who: Who, agent_id: str, node_id: str):
+    """One run of a workflow from its "On new mail" trigger: its own session and a fresh token for the owner. Runs never overlap, so a mail that
+    arrives during a run is picked up by the next one (the workflow's Only new items node makes sure each mail is judged once)."""
+    busy = {"on": False}
+
+    async def run_once() -> None:
+        if busy["on"]:
+            app.state.listeners.nudge(f"flowmail|{who.user_id}|{agent_id}|{node_id}")
+            return
+        busy["on"] = True
+        try:
+            async with app.state.session_factory() as session:
+                try:
+                    agent, _ = build_services(app, session)
+                    await agent.chat(who, app.state.tokens.mint(who.user_id, who.email), agent_id, "New mail", [], "new mail", trigger="mail", entry=node_id)
+                    await session.commit()
+                except Exception:
+                    await session.rollback()
+                    raise
+        finally:
+            busy["on"] = False
+
+    return run_once
+
+
+async def apply_mail_triggers(app: FastAPI, who: Who, triggers: list[dict[str, Any]]) -> None:
+    """Starts, changes or stops the mailbox listeners behind each workflow's "On new mail" trigger, to match what the workflows say."""
+    listeners = app.state.listeners
+    prefix = f"flowmail|{who.user_id}|"
+    wanted = {f"{prefix}{t['agent']}|{t['node']}": t for t in triggers}
+    for key in listeners.keys(prefix):
+        if key not in wanted:
+            listeners.stop(key)
+    if not wanted:
+        return
+    try:
+        accounts = await app.state.data_factory(app.state.tokens.mint(who.user_id, who.email)).mail_accounts()
+    except Exception:  # noqa: BLE001  the mail service is away: the next check starts them
+        logging.getLogger(__name__).warning("could not list mailboxes for the mail triggers")
+        return
+    for key, t in wanted.items():
+        mine = [str(a["id"]) for a in accounts if a.get("id") and (str(a["id"]) in t["accounts"] if t["accounts"] else a.get("workspace") in t["workspaces"])]
+        if not mine:
+            listeners.stop(key)
+            continue
+        if listeners.listens(key, mine, "INBOX"):
+            continue
+        run = flow_mail_run(app, who, t["agent"], t["node"])
+        listeners.ensure(key, mine, "INBOX", lambda: app.state.tokens.mint(who.user_id, who.email), run)
+
+
 def sync_reminders(app: FastAPI, who: Who, enabled: bool) -> None:
     """Starts or stops the minute-by-minute check to match whether the reminders are on."""
     if enabled:
@@ -215,6 +266,8 @@ async def watch_everyone(app: FastAPI) -> None:
                 who = Who(s.user_id, s.email)
                 try:
                     await build_mailwatch(app, session).ensure(who, app.state.tokens.mint(who.user_id, who.email))
+                    if s.flows:  # workflows with an "On new mail" trigger pick up a mailbox connected since
+                        await apply_mail_triggers(app, who, await build_services(app, session)[0].mail_triggers(who))
                 except Exception:  # noqa: BLE001  one person's trouble is not everyone's
                     logging.getLogger(__name__).exception("could not set up the mail watch for %s", s.user_id)
             await session.commit()

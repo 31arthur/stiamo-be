@@ -1,7 +1,7 @@
 import json
 
 from app.domain.llm import ChatResult
-from app.domain.mailwatch import FOCUS, LEGACY_PROMPTS, upgraded, watch_config, watch_id, workspace_of
+from app.domain.mailwatch import FOCUS, _V1, upgraded, watch_config, watch_id, workspace_of
 from app.main import watch_everyone
 
 from .conftest import headers
@@ -29,7 +29,7 @@ async def agents(rig):
 def test_a_watch_is_made_for_each_kind_of_work_and_knows_which_workspace_it_is_for():
     cfg = watch_config("sb", ["b", "a"])
     assert cfg["source"] == {"kind": "mail", "accountIds": ["a", "b"], "folder": "INBOX"} and cfg["listen"] is True and cfg["notify"] == {"telegram": True, "call": False}
-    assert [(lb["name"], lb["route"]) for lb in cfg["labels"]] == [("urgent", "alert"), ("important", "attention"), ("routine", "none")] and "legal and advocacy" in cfg["prompt"]
+    assert [(lb["name"], lb["route"]) for lb in cfg["labels"]] == [("needed", "alert"), ("discarded", "none")] and "legal and advocacy" in cfg["prompt"]
     assert set(FOCUS) == {"sb", "fsa", "media", "personal"} and all(watch_config(w, ["a"])["prompt"] for w in FOCUS)
     assert watch_id("sb", "abcdef1234567") == "watch-sb-abcdef12" and workspace_of("watch-sb-abcdef12") == "sb" and workspace_of("wf-123") is None and workspace_of("watch-nope-1") is None
 
@@ -104,7 +104,7 @@ async def test_an_urgent_email_reaches_the_phone_with_nothing_built_by_hand(rig)
     await choose(rig, agent=f"/v1/agent/agents/{wid}")
     general = await telegram(rig)
     await send(rig, general, f"/start {general['pairingCode']}", chat=555, update=1)
-    rig.script += [answer("urgent"), ChatResult(json.dumps({"summary": "A client needs the details by Friday.", "priority": "high", "action": "Send details", "due": None, "event": None, "replies": [{"label": "Will do", "intent": "Say the details follow today."}]}))]
+    rig.script += [answer("needed"), ChatResult(json.dumps({"summary": "A client needs the details by Friday.", "priority": "high", "action": "Send details", "due": None, "event": None, "replies": [{"label": "Will do", "intent": "Say the details follow today."}]}))]
     me = next(x for x in await agents(rig) if x["id"] == wid)  # the fake mail is old: let the watch look further back than a day
     cfg = {**me["config"], "filters": {**me["config"]["filters"], "sinceDays": 365, "contains": "Partnership"}}
     await rig.client.put(f"{WF}/{wid}", json={"name": me["name"], "description": me["description"], "config": cfg}, headers=headers())
@@ -114,19 +114,44 @@ async def test_an_urgent_email_reaches_the_phone_with_nothing_built_by_hand(rig)
     assert any("Will do" in b.get("text", "") for b in last_keyboard(rig)) and alert_id_of(rig)
 
 
-def test_sb_and_personal_only_notify_for_what_matters_and_never_for_codes_or_statements():
+def test_every_watch_is_two_labels_decided_by_the_decision_model_with_rules_before_it():
+    for ws in FOCUS:
+        cfg = watch_config(ws, ["a"])
+        assert cfg["decider"] == "jev" and [(x["name"], x["route"]) for x in cfg["labels"]] == [("needed", "alert"), ("discarded", "none")]
+        assert all(h in cfg["prompt"] for h in ("## Persona", "## Tasks", "## Context", "## Output", "## Guardrails"))
+        assert cfg["rules"]["discardPatterns"] and cfg["rules"]["discardTextPatterns"] and cfg["rules"]["noteCorrespondents"] is True
     sb, personal = watch_config("sb", ["a"]), watch_config("personal", ["a"])
-    for word in ("BWI", "Migrants Forum in Asia", "United Nations", "government", "RTI", "reply"):
+    for word in ("BWI", "MFA", "United Nations", "government", "RTI", "reply"):
         assert word in sb["prompt"]
-    assert "OTP" in sb["prompt"] and "OTP" in personal["prompt"] and "statements" in personal["prompt"] and "order" in personal["prompt"]
-    assert [lb["name"] for lb in personal["labels"]] == ["urgent", "routine"] and [lb["route"] for lb in personal["labels"]] == ["alert", "none"]
-    assert "do business" in personal["prompt"] and sb["focusVersion"] == 2
+    assert "do business" in personal["prompt"] and "OTP" not in sb["prompt"] and "One-time passwords" in personal["prompt"]
+    assert len(sb["rules"]["discardPatterns"]) == 4 and len(personal["rules"]["discardPatterns"]) == 5  # only personal drops "order copy"
+    assert sb["rules"]["priorityDomains"] and not personal["rules"]["priorityDomains"]
 
 
-def test_a_watch_still_on_the_first_wording_is_upgraded_and_an_edited_one_is_left_alone():
-    old = {**watch_config("sb", ["a"]), "prompt": LEGACY_PROMPTS["sb"], "focusVersion": 1}
+def test_a_watch_still_on_an_earlier_wording_is_upgraded_and_an_edited_one_is_left_alone():
+    old = {**watch_config("sb", ["a"]), "prompt": _V1["sb"], "focusVersion": 1, "decider": "model"}
     new = upgraded("sb", old)
-    assert new is not None and "BWI" in new["prompt"] and new["focusVersion"] == 2 and new["source"] == old["source"]
+    assert new is not None and "BWI" in new["prompt"] and new["focusVersion"] == 3 and new["decider"] == "jev" and new["source"] == old["source"]
     assert upgraded("sb", new) is None
     assert upgraded("sb", {**old, "prompt": "My own words."}) is None
-    assert upgraded("fsa", {**old, "prompt": LEGACY_PROMPTS["sb"]}) is None
+    assert upgraded("sb", {**old, "prompt": "You watch the inbox of S&B Consultants, a legal and advocacy practice. Only a few kinds of mail are worth interrupting the owner for, and nothing else is. Notify (urgent) ONLY for: (1) mail from or about BWI x"}) is not None
+
+
+def test_the_rules_drop_codes_before_any_model_and_never_drop_a_priority_sender_and_tell_the_model_what_they_know():
+    from app.domain.mailwatch import watch_config as wc
+    from app.domain.workflows import Rules, discarded_by, item_from_mail, with_context
+
+    def mail(subject, address, text="hello"):
+        return item_from_mail({"uid": 1, "subject": subject, "sender": {"address": address}, "snippet": text}, 1, "a")
+
+    sb = Rules.model_validate(wc("sb", ["a"])["rules"])
+    personal = Rules.model_validate(wc("personal", ["a"])["rules"])
+    assert discarded_by(mail("Your OTP is 481516", "no-reply@bank.com"), sb) and discarded_by(mail("Welcome", "x@y.com", "Your verification code is 1234"), sb)
+    assert discarded_by(mail("Account statement for October", "alerts@bank.com"), personal) and discarded_by(mail("Order copy attached", "shop@x.com"), personal)
+    assert discarded_by(mail("Certified order copy in WP 12/2026", "registry@court.gov.in"), sb) is None  # an order is a court order here, and gov.in is a priority sender
+    assert discarded_by(mail("Verification code for the consultation", "desk@un.org"), sb) is None  # a priority sender is never dropped by a rule
+    assert discarded_by(mail("Re: workshop", "friend@elsewhere.org"), personal) is None
+    told = with_context(mail("Consultation", "desk@ilo.org"), sb, set())
+    assert "priority list" in told.text and "Facts from the system" in told.text
+    known = with_context(mail("Re: quote", "lead@client.io"), personal, {"lead@client.io"})
+    assert "written to this sender before" in known.text and with_context(mail("Hi", "z@z.io"), personal, set()).text == mail("Hi", "z@z.io").text
