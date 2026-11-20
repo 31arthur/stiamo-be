@@ -42,6 +42,7 @@ from app.infrastructure.db.workflows import SqlWorkflowRepository
 from app.infrastructure.db.actions import SqlActionRepository
 from app.application.actions import ActionService
 from app.application.queue import QueueService
+from app.domain.chittu import saved_name
 
 current_principal = make_principal_dependency(lambda: get_settings().token_settings())
 CurrentPrincipal = Annotated[Principal, Depends(current_principal)]
@@ -91,7 +92,11 @@ def build_services(app: FastAPI, session: AsyncSession) -> tuple[AgentService, C
     channels.reminder_actions = ReminderActions(SqlSettingsRepository(session, s.box), s.data_factory, lambda: s.clock())
     plans = DayPlanService(SqlDayPlanRepository(session), SqlSettingsRepository(session, s.box), agent, s.data_factory, lambda who, text, workspace, plan_id, calls=(): channels.announce_plan(who, text, workspace, plan_buttons(plan_id) + call_rows(s.settings.app_url, list(calls))))
     channels.plan_actions = plans
-    agent.queue = channels.queue_actions = QueueService(SqlActionRepository(session), agent.actions, lambda who, text, buttons: channels.announce(who, text, kind="chittu", summary=text[:60], buttons=buttons), lambda: s.clock())
+    async def owner_name(who) -> str:
+        row = await SqlSettingsRepository(session, s.box).get(who.user_id)
+        return saved_name(row.planner) if row else ""
+
+    agent.queue = channels.queue_actions = QueueService(SqlActionRepository(session), agent.actions, lambda who, text, buttons, channel_id=None: channels.send_to_channel(who, channel_id, text, buttons) if channel_id else channels.announce(who, text, kind="chittu", summary=text[:60], buttons=buttons), lambda: s.clock(), owner_name)
     agent.actions.on_created = lambda who, ref: channels.queue_actions.add(who, ref)
     channels.availability_actions = AvailabilityService(SqlSettingsRepository(session, s.box), s.data_factory, lambda who, text, workspace, buttons: channels.announce_plan(who, text, workspace, buttons), plans)
     channels.editor_actions = EditorService(SqlSettingsRepository(session, s.box), s.data_factory, s.llm_factory, lambda who, text, workspace, buttons: channels.announce_plan(who, text, workspace, buttons), lambda: s.clock())

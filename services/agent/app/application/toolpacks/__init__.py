@@ -42,6 +42,8 @@ class PackContext:
     #: Chittu's one-at-a-time list on Telegram (application/queue.py), and where the message came from ("Telegram", "the web app", …).
     queue: Any = None
     channel: str = ""
+    #: The bot the message came in through, so what Chittu sends goes back to the same chat (a workspace's own bot as much as the general one).
+    channel_id: str | None = None
 
 
 class ToolPack(ABC):

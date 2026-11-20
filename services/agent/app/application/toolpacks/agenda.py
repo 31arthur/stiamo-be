@@ -197,6 +197,12 @@ class AgendaPack(ToolPack):
             if not blocks:
                 return ToolOutput({"ok": False, "problems": ["No blocks were given."]})
             ordered = sorted(blocks, key=lambda b: b["start"])
+            if ctx.queue is not None and ctx.channel == "Telegram" and ctx.who is not None:
+                # On Telegram a plan is not shown as a list: its blocks are walked one at a time (1/5 · 08:00–09:30 …), each kept, dropped or moved 30 minutes by a button,
+                # and what was kept becomes one change to approve.
+                started = await ctx.queue.review_schedule(ctx.who, ctx.token, day, ordered, channel_id=ctx.channel_id)
+                if started.get("started"):
+                    return ToolOutput({"ok": True, "date": day, "blocks": len(ordered), "walking": True, "note": "The first block has ALREADY been sent to the owner's phone with buttons (Keep, Drop, 30 minutes earlier or later). The app walks the rest by itself and asks the owner to book what they keep. Reply with one short line only; do not list the blocks."})
             shown = [{**b, "from": clock(b["start"]), "to": clock(b["start"] + b["duration"])} for b in ordered]
             card: dict[str, Any] = {"kind": "schedule", "id": f"schedule:{day}", "date": day, "blocks": shown}
             if ctx.propose is not None and ctx.interactive:

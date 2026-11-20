@@ -269,8 +269,27 @@ async def cmd_replay(path: str) -> None:
         if shown:
             print("buttons:", [x["text"] for row in shown[-1] for x in row])
         for j, word in enumerate(turn.get("then") or []):  # plain words typed afterwards: the code handles these, so no model answer is scripted
-            b.telegram.sent.clear()
-            b.telegram.keyboards.clear()
+            if not word.startswith("[tap] "):
+                b.telegram.sent.clear()
+                b.telegram.keyboards.clear()
+            if word.startswith("[tap] "):  # a button pressed, by its label, under the latest message that has one
+                from tests.test_alerts import press
+
+                label = word[6:]
+                boards = [kb for kb in b.telegram.edit_buttons_shown if kb] + [kb for kb in b.telegram.keyboards if kb]
+                board = [x for kb in ([b.telegram.edit_buttons_shown[-1]] if b.telegram.edit_buttons_shown and b.telegram.edit_buttons_shown[-1] else []) + ([b.telegram.keyboards[-1]] if b.telegram.keyboards and b.telegram.keyboards[-1] else []) for row in kb for x in row]
+                pick = next((x for x in board if x["text"] == label), None) or next((x for kb in reversed(boards) for row in kb for x in row if x["text"] == label), None)
+                print(f"\n▶ You tap: {label}")
+                edits_before = len(b.telegram.edits)
+                await press(r, c, pick["callback_data"], update=100 + k * 10 + j)
+                for _, _, text in b.telegram.edits[edits_before:]:
+                    print("┌" + "─" * 58)
+                    print("\n".join("│ " + line for line in text.splitlines()))
+                    print("└" + "─" * 58)
+                kb = [x for x in b.telegram.edit_buttons_shown if x]
+                if kb:
+                    print("buttons:", [x["text"] for row in kb[-1] for x in row])
+                continue
             print(f"\n▶ You: {word}   (handled by the app, no model)")
             await send(r, c, word, chat=555, update=100 + k * 10 + j)
             for _, text in b.telegram.sent:

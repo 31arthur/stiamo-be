@@ -19,6 +19,11 @@ CLOSES = "22:00"
 SITTING = 10
 
 
+def saved_name(planner: dict | None) -> str:
+    """The name the owner set for what Chittu calls them (the planner settings' chittu.name), or "" when none was set."""
+    return " ".join(str(((planner or {}).get("chittu") or {}).get("name") or "").split())[:40]
+
+
 def good_morning(owner: str, day: str, count: int, first: str | None = None, carried: int = 0) -> str:
     """The first message of the day. Short; it says how many things want the owner (and how many are still on the list from before), and asks whether to start."""
     when = date.fromisoformat(day).strftime("%A %-d %B")

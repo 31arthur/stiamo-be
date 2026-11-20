@@ -282,3 +282,92 @@ async def test_a_move_to_a_weekend_day_says_so(rig):
         assert any("is a Saturday" in w for w in out["warnings"])
     finally:
         await finish(s, session)
+
+
+# --- buttons under a preview, a plan looked at block by block, and what Chittu calls the owner ---------------------------------------
+
+
+async def preview_on_telegram(rig, c, update=2):
+    rig.script += [ChatResult("", [ToolCall("p1", "preview_move", {"from_day": "today", "to": "tomorrow"})]), ChatResult("That's 4 things to tomorrow. Go ahead?")]
+    rig.telegram.keyboards.clear()
+    await send(rig, c, "Clear out today and move everything to tomorrow", chat=555, update=update)
+    return [b for row in rig.telegram.keyboards[-1] for b in row]
+
+
+async def test_a_preview_comes_with_buttons_to_apply_leave_look_and_undo_and_a_second_tap_does_nothing(rig):
+    c = await ready(rig)
+    buttons = await preview_on_telegram(rig, c)
+    assert [b["text"] for b in buttons] == ["✅ Apply", "✖️ Not this", "🔍 Which ones?"] and all(len(b["callback_data"].encode()) <= 64 for b in buttons)
+    apply_, leave, which = (b["callback_data"] for b in buttons)
+    # look first: one by one, and the preview's own buttons stay
+    await press(rig, c, which, update=3)
+    assert any(t.startswith("What I'd change: 4 things. One at a time.") for _, t in rig.telegram.sent) and ids(rig)["t1"]["dueDate"] == T
+    await press(rig, c, apply_, update=4)
+    assert rig.telegram.edits[-1][2].startswith("✅ Move 4 items to") and ids(rig)["t1"]["dueDate"] == TOMORROW
+    undo = [b["callback_data"] for row in rig.telegram.edit_buttons_shown[-1] for b in row][0]
+    assert undo.startswith("ac:u:")
+    await press(rig, c, apply_, update=5)  # a second tap
+    assert rig.telegram.edits[-1][2] == "That was already done."
+    await press(rig, c, undo, update=6)
+    assert rig.telegram.edits[-1][2].startswith("↩️ Put back: ") and ids(rig)["t1"]["dueDate"] == T
+
+
+async def test_not_this_leaves_everything_as_it_was_and_a_dropped_preview_cannot_be_applied(rig):
+    c = await ready(rig)
+    buttons = await preview_on_telegram(rig, c)
+    await press(rig, c, buttons[1]["callback_data"], update=3)
+    assert rig.telegram.edits[-1][2] == "👍 Left as it was. Nothing changed."
+    await press(rig, c, buttons[0]["callback_data"], update=4)
+    assert rig.telegram.edits[-1][2].startswith("⚠️") and ids(rig)["t1"]["dueDate"] == T  # it was dropped: applying says so and changes nothing
+
+
+async def test_a_plan_on_telegram_is_walked_block_by_block_each_kept_dropped_or_nudged_and_booked_with_one_tap(rig):
+    c = await ready(rig)
+    blocks = [{"kind": "task", "id": "t1", "start": 540, "duration": 60}, {"kind": "followUp", "id": "f1", "start": 660, "duration": 15}, {"kind": "task", "id": "t2", "start": 720, "duration": 30}]
+    rig.telegram.sent.clear()
+    rig.telegram.keyboards.clear()
+    rig.script += [ChatResult("", [ToolCall("s1", "propose_schedule", {"date": TOMORROW, "blocks": blocks})]), ChatResult("Here's tomorrow's plan, block by block.")]
+    await send(rig, c, "Plan tomorrow", chat=555, update=2)
+    texts = [t for _, t in rig.telegram.sent]
+    assert texts[0].startswith("Plan for ") and "3 things. One at a time." in texts[0]
+    assert texts[1].startswith("1/3 · 📝 Draft the rejoinder\n🕐 09:00–10:00") and not any("2/3" in t for t in texts)  # a block, not the plan
+    first = [b for row in rig.telegram.keyboards[1] for b in row]
+    assert [b["text"] for b in first] == ["✅ Keep", "✖️ Drop", "⏪ 30 min earlier", "30 min later ⏩", "⏹ Stop"]
+    await press(rig, c, first[3]["callback_data"], update=3)  # later: 09:30–10:30
+    assert "🕐 Moved to 09:30–10:30." in rig.telegram.edits[-1][2] and "1/3 · " in rig.telegram.edits[-1][2]
+    for _ in range(40):  # 10:00 is the hearing's neighbour only on today; tomorrow the board call is not in this day: keep nudging until it would clash with the next block
+        board = [b for row in rig.telegram.edit_buttons_shown[-1] for b in row]
+        await press(rig, c, next(b for b in board if b["text"].startswith("30 min later"))["callback_data"], update=10 + _)
+        if rig.telegram.edits[-1][2].startswith("⚠️") or "⚠️" in rig.telegram.edits[-1][2]:
+            break
+    assert "clash" in rig.telegram.edits[-1][2] or "overlaps" in rig.telegram.edits[-1][2]  # refused, in words, and it stays where it was
+    board = [b for row in rig.telegram.edit_buttons_shown[-1] for b in row]
+    await press(rig, c, next(b for b in board if b["text"] == "✅ Keep")["callback_data"], update=60)
+    assert "2/3 · " in rig.telegram.edits[-1][2] and "Call Ramesh" in rig.telegram.edits[-1][2]
+    board = [b for row in rig.telegram.edit_buttons_shown[-1] for b in row]
+    await press(rig, c, next(b for b in board if b["text"] == "✖️ Drop")["callback_data"], update=61)
+    board = [b for row in rig.telegram.edit_buttons_shown[-1] for b in row]
+    await press(rig, c, next(b for b in board if b["text"] == "✅ Keep")["callback_data"], update=62)
+    last = rig.telegram.edits[-1][2]
+    assert "That's all of them. Book the 2 you kept on" in last and "(1 dropped.)" in last
+    book = [b for row in rig.telegram.edit_buttons_shown[-1] for b in row]
+    assert [b["text"] for b in book] == ["✅ Book them", "✖️ Not now"] and ids(rig)["t1"]["slot"]["date"] == T
+    await press(rig, c, book[0]["callback_data"], update=63)
+    assert ids(rig)["t1"]["slot"]["date"] == TOMORROW and ids(rig)["t2"]["slot"]["date"] == TOMORROW and ids(rig)["f1"]["due"]["date"] == T  # what was kept is booked; the call that was dropped is untouched
+    assert rig.telegram.edits[-1][2].startswith("✅ Book 2 blocks on")
+
+
+async def test_what_chittu_calls_the_owner_is_set_once_and_used_everywhere(rig):
+    from app.presentation.deps import chittu_run
+
+    from .test_actions import WHO
+
+    await ready(rig)
+    r = await rig.client.put("/v1/agent/day-plans/settings", json={"enabled": False, "time": "22:00", "timezone": "Asia/Kolkata", "workspaces": ["sb"], "chittu": {"name": "  Arjun   Kumar "}}, headers=headers())
+    assert r.json()["settings"]["chittu"]["name"] == "Arjun Kumar"
+    await chittu_run(rig.app, WHO, "morning")()
+    assert rig.telegram.sent[-1][1].startswith("☀️ Good morning, Arjun.")  # the first name, not what the email gives
+    system = (await rig.client.post(f"{PLANNER}/prompt/preview", json={"question": "x"}, headers=headers())).json()["system"]
+    assert "Arjun Kumar" in system
+    r = await rig.client.put("/v1/agent/day-plans/settings", json={"enabled": False, "time": "22:00", "timezone": "Asia/Kolkata", "workspaces": ["sb"], "chittu": {"name": ""}}, headers=headers())
+    assert r.json()["settings"]["chittu"]["name"] == ""  # back to the email's

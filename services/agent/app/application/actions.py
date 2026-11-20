@@ -142,7 +142,7 @@ class ActionService:
                 continue
             ops.append({"ref": m.ref, "table": table, "id": m.ref.split(":", 1)[1], "title": m.title, "before": {k: it.record.get(k) for k in patch}, "after": patch, "from": m.view()["from"], "to": m.view()["to"]})
         plan.moves = [m for m in plan.moves if any(o["ref"] == m.ref for o in ops)]
-        what = f"{len(ops)} item{'s' if len(ops) != 1 else ''} to {target}"
+        what = f"{len(ops)} item{'s' if len(ops) != 1 else ''} to {label_day(target)}"
         warnings = []
         urgent = [loaded.get(m.ref).title for m in plan.moves if loaded.get(m.ref) and loaded.get(m.ref).priority == "urgent"]  # type: ignore[union-attr]
         due_moves = [loaded.get(m.ref).title for m in plan.moves if loaded.get(m.ref) and loaded.get(m.ref).priority != "urgent" and loaded.get(m.ref).due and loaded.get(m.ref).due < target]  # type: ignore[union-attr,operator]
@@ -189,6 +189,32 @@ class ActionService:
         if ops:
             await self._repo.add_changeset(who.user_id, cs)
         return {"changesetId": cs["id"] if ops else None, "title": cs["title"], "willChange": len(ops), "items": [{"ref": o["ref"], "title": o["title"]} for o in ops], "staying": stays, "warnings": [f"“{i.title}” is urgent." for i in chosen if i.priority == "urgent" and i.ref in {o["ref"] for o in ops}]}
+
+    async def schedule_changeset(self, who: Who, token: str, day: str, blocks: list[dict[str, Any]], *, actor: str = "chittu", why: str = "") -> dict[str, Any]:
+        """A plan for a day (blocks of {kind: task|followUp, id, start, duration}) as a pending change set: applying it puts a time on each task and call. The blocks
+        the owner kept after looking at them one by one are what arrive here. Nothing is changed until it is applied; it can be undone."""
+        loaded = await self.load(who, token)
+        ops = []
+        for b in blocks:
+            ref = f"{b['kind']}:{b['id']}"
+            it = loaded.get(ref)
+            if it is None or it.status != "open" or it.table not in ("tasks", "follow-ups"):
+                continue
+            if it.table == "tasks":
+                patch = {"slot": {"date": day, "start": int(b["start"]), "duration": int(b.get("duration") or it.duration or 30)}}
+            else:
+                patch = {"due": {"date": day, "time": int(b["start"])}, "duration": int(b.get("duration") or it.duration or 15)}
+            ops.append({"ref": ref, "table": it.table, "id": b["id"], "title": it.title, "before": {k: it.record.get(k) for k in patch}, "after": patch, "from": it.when, "to": f"{label_day(day)} {clock(int(b['start']))}", "event": "moved"})
+        title = f"Book {len(ops)} block{'s' if len(ops) != 1 else ''} on {label_day(day)}"
+        cs = {"id": str(uuid.uuid4()), "title": title, "status": "pending", "ops": ops, "summary": {"why": why or "the day's plan"}, "actor": actor, "channelId": None, "createdAt": self._now()}
+        if ops:
+            await self._repo.add_changeset(who.user_id, cs)
+        return {"changesetId": cs["id"] if ops else None, "title": title, "count": len(ops)}
+
+    def busy_around(self, loaded: Loaded, day: str, skip: set[str]) -> list[tuple[int, int, str]]:
+        """What is already fixed on a day (hearings, meetings, events, items with a time) apart from the items named in `skip`."""
+        r = loaded.records
+        return busy_on(day, r["hearings"], r["meetings"], r["tasks"], r["follow-ups"], loaded.calendar, skip)
 
     async def apply_changeset(self, who: Who, token: str, changeset_id: str, *, actor: str = "owner") -> dict[str, Any]:
         cs = await self._repo.changeset(who.user_id, changeset_id)

@@ -29,6 +29,7 @@ from app.application.registry import AgentRegistry
 from app.application.runner import AgentRun, Tool, run_agent
 from app.application.scope import PlannerData, ScopedData
 from app.application.toolpacks.cards import enrich
+from app.domain.chittu import saved_name
 from app.application.toolpacks import PackContext
 from app.application.usage_totals import Bucket
 from app.domain.agents import WORKSPACES, AgentDefinition, UnknownAgent, clean_workspaces
@@ -457,10 +458,10 @@ class AgentService:
         elif scope:
             data = ScopedData(data, scope)  # a workspace's assistant sees that workspace's data only
         ctx = PackContext(data, today, decisions, decision.get("modelId") or DECISION_MODELS[0]["id"], lambda: self._waiting(who, scope), self._proposer(who, agent.id, channel_id), channel != "the evening plan", scope,
-                          jobs=self.job_runners(s), actions=self.actions, who=who, token=token, actor="chittu" if agent.id == "daily-planner" else agent.id, queue=self.queue, channel=channel)
+                          jobs=self.job_runners(s), actions=self.actions, who=who, token=token, actor="chittu" if agent.id == "daily-planner" else agent.id, queue=self.queue, channel=channel, channel_id=channel_id)
         tools: list[Tool] = []
         tool_packs: dict[str, str] = {}
-        context: dict[str, Any] = {"today": today, "user": who.name, "channel": channel}
+        context: dict[str, Any] = {"today": today, "user": saved_name(s.planner) or who.name, "channel": channel}
         for name in agent.packs:
             pack = self._registry.packs.get(name)
             made = [Tool(enrich(t.spec), t.label, t.run) for t in await pack.tools(ctx)]  # every tool carries its full card

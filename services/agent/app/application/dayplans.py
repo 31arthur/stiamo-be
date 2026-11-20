@@ -53,12 +53,12 @@ def chittu_settings(raw: dict[str, Any] | None) -> dict[str, Any]:
     """When Chittu says good morning and good night, and whether he does. On unless switched off: the day opens at six and closes at ten."""
     c = (raw or {}).get("chittu") or {}
     after = c.get("remindAfter", 45)
-    return {"enabled": c.get("enabled", True) is not False, "morning": c.get("morning") or "06:00", "night": c.get("night") or DEFAULT_TIME, "remindAfter": after if isinstance(after, int) and 0 <= after <= 240 else 45}
+    return {"enabled": c.get("enabled", True) is not False, "morning": c.get("morning") or "06:00", "night": c.get("night") or DEFAULT_TIME, "remindAfter": after if isinstance(after, int) and 0 <= after <= 240 else 45, "name": " ".join(str(c.get("name") or "").split())[:40]}
 
 
 def plan_buttons(plan_id: str) -> list[list[dict[str, str]]]:
     """Under a day plan on the phone: approve it (books the times, and Google's calendar gets them too) or drop it. 64 bytes is Telegram's limit."""
-    return [[{"text": "✅ Approve", "callback_data": f"pl:a:{plan_id}"}, {"text": "✖️ Not this", "callback_data": f"pl:x:{plan_id}"}]]
+    return [[{"text": "🔎 Block by block", "callback_data": f"pl:r:{plan_id}"}], [{"text": "✅ Approve", "callback_data": f"pl:a:{plan_id}"}, {"text": "✖️ Not this", "callback_data": f"pl:x:{plan_id}"}]]
 
 
 def approval_text(out: dict[str, Any]) -> str:
@@ -150,6 +150,8 @@ class DayPlanService:
             for k in ("morning", "night"):
                 if chittu.get(k) is not None:
                     parse_time(chittu[k])
+            if chittu.get("name") is not None and len(str(chittu["name"]).strip()) > 40:
+                raise ValidationFailed("The name is at most 40 characters.")
             if chittu.get("remindAfter") is not None and not 0 <= int(chittu["remindAfter"]) <= 240:
                 raise ValidationFailed("Remind after is between 0 (never) and 240 minutes.")
         if workspaces is not None and any(w not in WORKSPACES for w in workspaces):
@@ -293,6 +295,13 @@ class DayPlanService:
         # Booked in Stiamo; now Google's calendar for this workspace should hold it too, without waiting for the next background sync.
         calendar = await data.calendar_sync() if booked else None
         return {"plan": self._view(p), "booked": booked, "skipped": skipped, "calendar": calendar}
+
+    async def blocks_of(self, who: Who, plan_id: str) -> tuple[str, list[dict[str, Any]]]:
+        """A plan's day and its proposed blocks, for looking at them one at a time."""
+        p = await self._mine(who, plan_id)
+        if p.status != "proposed":
+            raise Conflict("That plan has been decided already.")
+        return p.day, [{"kind": b["kind"], "id": b["id"], "start": b["start"], "duration": b["duration"]} for b in sorted(p.blocks, key=lambda b: b["start"])]
 
     async def dismiss(self, who: Who, plan_id: str) -> dict[str, Any]:
         p = await self._mine(who, plan_id)
