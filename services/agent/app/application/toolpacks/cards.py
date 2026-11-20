@@ -62,9 +62,9 @@ CARDS: dict[str, dict[str, Any]] = {
     "propose_schedule": dict(
         use=["Planning a day: putting open tasks and calls into free time. The tool checks the blocks against what is fixed and against each other."],
         avoid=["To move items to another day: use preview_move. Do not use it to move a single item: use change_item."],
-        returns="{ok, blocks} when it fits, or {problems: [...]} in words you can act on (an overlap, a time outside 06:00–22:00, a task inside a calls-only window). Fix the blocks and call again.",
+        returns="{ok, blocks, schedule, freeAfter} when it fits, or {problems: [...]} in words you can act on (an overlap, a time outside 06:00–22:00, a task inside a calls-only window). Fix the blocks and call again. On Telegram it returns walking=true: the first block has already been sent, and the app walks the rest and asks the owner to book what they keep (reply with one short line).",
         fails=["Repeat until it passes or tell the owner what does not fit and what you left out."],
-        effect="Keeps a proposed schedule the owner can approve. Nothing is booked until they approve it.",
+        effect="On the web app: keeps a proposed schedule the owner can approve. On Telegram: starts a one-block-at-a-time review. Nothing is booked until the owner approves.",
     ),
     "search_cases": dict(
         use=["The owner names a case, a client, an opposing party or a court, or asks which cases are active, stayed or closed."],

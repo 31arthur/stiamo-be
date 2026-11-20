@@ -23,6 +23,8 @@ class ChittuBody(DomainModel):
     #: Hours and minutes, like 06:00 and 22:00.
     morning: Annotated[str | None, Field(min_length=4, max_length=5)] = None
     night: Annotated[str | None, Field(min_length=4, max_length=5)] = None
+    #: What Chittu calls the owner (their first name, say). Left out: unchanged; empty: back to the name their email gives.
+    name: Annotated[str | None, Field(max_length=40)] = None
     #: Minutes after the good morning to ask once more if there was no answer (0: never).
     remind_after: Annotated[int | None, Field(ge=0, le=240)] = None
 

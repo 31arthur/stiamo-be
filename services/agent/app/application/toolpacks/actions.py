@@ -87,8 +87,8 @@ class ActionsPack(ToolPack):
                 )
             except ValidationFailed as exc:
                 return ToolOutput({"error": str(getattr(exc, "message", None) or exc)})
-            out["next"] = "Tell the owner what would move and what stays, then ask them to confirm. Only after they say yes, call apply_change with this changesetId." if out.get("changesetId") else "Nothing would move. Say why (see staying) and do not call apply_change."
-            return ToolOutput(out)
+            out["next"] = "Tell the owner what would move and what stays, then ask them to confirm (on Telegram the message comes with Apply, Not this and Which ones? buttons, and a typed yes works too). Only after they say yes or press Apply, the change is applied: call apply_change with this changesetId only if they typed yes." if out.get("changesetId") else "Nothing would move. Say why (see staying) and do not call apply_change."
+            return ToolOutput(out, [{"kind": "changeset", "id": out["changesetId"], "title": out["title"]}] if out.get("changesetId") else [])
 
         async def preview_close(a: dict[str, Any]) -> ToolOutput:
             try:
@@ -99,8 +99,8 @@ class ActionsPack(ToolPack):
                 )
             except ValidationFailed as exc:
                 return ToolOutput({"error": str(getattr(exc, "message", None) or exc)})
-            out["next"] = "Tell the owner exactly which items, then ask them to confirm. Only after they say yes, call apply_change with this changesetId." if out.get("changesetId") else "Nothing would change. Say why (see staying)."
-            return ToolOutput(out)
+            out["next"] = "Tell the owner how many and which kind, then ask them to confirm (on Telegram the message comes with Apply, Not this and Which ones? buttons, and a typed yes works too). Call apply_change only if they typed yes." if out.get("changesetId") else "Nothing would change. Say why (see staying)."
+            return ToolOutput(out, [{"kind": "changeset", "id": out["changesetId"], "title": out["title"]}] if out.get("changesetId") else [])
 
         async def apply_change(a: dict[str, Any]) -> ToolOutput:
             try:
@@ -128,7 +128,7 @@ class ActionsPack(ToolPack):
                 if (text(a.get("day")) and when is None) or (text(a.get("until")) and last is None):
                     return ToolOutput({"error": "I can't read that day. Ask the owner which day they mean."})
                 kinds = [k for k in (a.get("kinds") or []) if k in KINDS] or None
-                out = await ctx.queue.begin(who, token, day=when, until=last, kinds=kinds, workspace=scope or (text(a.get("workspace")) or None), priority_below=text(a.get("less_important_than")) or None, priority_at_least=text(a.get("at_least")) or None, overdue_only=bool(a.get("overdue_only")), or_overdue=bool(a.get("or_overdue")), changeset_id=text(a.get("changeset_id")) or None, label=text(a.get("label"))[:40])
+                out = await ctx.queue.begin(who, token, day=when, until=last, kinds=kinds, workspace=scope or (text(a.get("workspace")) or None), priority_below=text(a.get("less_important_than")) or None, priority_at_least=text(a.get("at_least")) or None, overdue_only=bool(a.get("overdue_only")), or_overdue=bool(a.get("or_overdue")), changeset_id=text(a.get("changeset_id")) or None, label=text(a.get("label"))[:40], channel_id=ctx.channel_id)
             except (ValidationFailed, NotFound, Conflict) as exc:
                 return ToolOutput({"error": str(getattr(exc, "message", None) or exc)})
             if not out.get("started"):
@@ -137,7 +137,7 @@ class ActionsPack(ToolPack):
 
         async def set_queue(a: dict[str, Any]) -> ToolOutput:
             try:
-                out = await ctx.queue.set_from_json(who, token, {"title": a.get("title"), "mode": a.get("mode"), "items": a.get("items")})
+                out = await ctx.queue.set_from_json(who, token, {"title": a.get("title"), "mode": a.get("mode"), "items": a.get("items")}, channel_id=ctx.channel_id)
             except (ValidationFailed, NotFound, Conflict) as exc:
                 return ToolOutput({"error": str(getattr(exc, "message", None) or exc)})
             if not out.get("started"):

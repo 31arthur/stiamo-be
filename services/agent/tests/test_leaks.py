@@ -279,6 +279,22 @@ async def propose(rig, bot, chat, update, task, start):
     return "\n".join(e["everything"] for e in rig.llm_log[start_at:]), "\n".join(t for _, t in rig.telegram.sent[sent:])
 
 
+async def tap(rig, bot, chat, data, update):
+    """A button pressed under a message of one particular bot."""
+    secret = next(sec for url, sec in reversed(rig.telegram.webhooks) if bot["id"] in url)
+    body = {"update_id": update, "callback_query": {"id": f"cb{update}", "data": data, "message": {"message_id": 101, "chat": {"id": chat}}}}
+    r = await rig.client.post(f"/v1/agent/webhooks/telegram/{bot['id']}", json=body, headers={"X-Telegram-Bot-Api-Secret-Token": secret})
+    assert r.status_code == 200
+
+
+async def book_what_was_proposed(rig, bot, chat):
+    """On Telegram a plan is walked block by block: keep the one block, then book what was kept (two taps, as the owner would)."""
+    keep = next(b for kb in reversed(rig.telegram.keyboards) if kb for row in kb for b in row if b["text"] == "✅ Keep")
+    await tap(rig, bot, chat, keep["callback_data"], 900)
+    book = next(b for row in rig.telegram.edit_buttons_shown[-1] for b in row if b["text"] == "✅ Book them")
+    await tap(rig, bot, chat, book["callback_data"], 901)
+
+
 async def test_planner_bots_for_two_workspaces_plan_around_each_others_calendar_but_show_only_their_own_tasks(rig):
     await team_ready(rig)
     seed(rig)  # S&B: hearing 10:00-11:00, meeting 13:00; FSA: call 12:10, meeting 13:40; Google events at 15:00 (S&B), 15:40 (FSA), 16:20 (personal)
@@ -311,7 +327,7 @@ async def test_what_one_workspace_books_becomes_busy_time_for_the_next(rig):
     sb = await planner_bot(rig, "111:sbp", 601, "sb")
     fsa = await planner_bot(rig, "222:fsap", 602, "fsa")
     await propose(rig, sb, 601, 2, "t-sb", 1020)
-    await say(rig, sb, "yes", 601, 3)  # S&B's plan is approved: its task now has a time (17:00)
+    await book_what_was_proposed(rig, sb, 601)  # S&B's plan is looked at block by block and booked: its task now has a time (17:00)
     assert any(t == "tasks" and r["id"] == "t-sb" and r["slot"]["start"] == 1020 for t, r in rig.data.saved)
     # the stored task is what the next workspace reads: apply the approved slot to the data, as the practice service would
     for t in rig.data.tables["tasks"]:

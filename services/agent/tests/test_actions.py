@@ -325,7 +325,7 @@ async def test_chittu_asks_once_more_if_the_good_morning_is_not_answered_and_nev
     # their times, and whether he greets at all, are the owner's to set
     base = {"enabled": False, "time": "22:00", "timezone": "Asia/Kolkata", "workspaces": ["sb"]}
     r = await rig.client.put("/v1/agent/day-plans/settings", json={**base, "chittu": {"morning": "05:30", "remindAfter": 0}}, headers=headers())
-    assert r.status_code == 200 and r.json()["settings"]["chittu"] == {"enabled": True, "morning": "05:30", "night": "22:00", "remindAfter": 0}
+    assert r.status_code == 200 and r.json()["settings"]["chittu"] == {"enabled": True, "morning": "05:30", "night": "22:00", "remindAfter": 0, "name": ""}
     keys = rig.app.state.daily.keys(f"{WHO.user_id}#chittu-")
     assert sorted(k.rsplit("-", 1)[1] for k in keys) == ["morning", "night"]  # no reminder when it is set to 0
     r = await rig.client.put("/v1/agent/day-plans/settings", json={**base, "chittu": {"enabled": False}}, headers=headers())

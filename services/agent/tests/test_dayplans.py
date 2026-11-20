@@ -39,7 +39,7 @@ def test_the_next_nine_pm_in_india_is_found_whatever_the_server_clock_says():
 
 async def test_the_evening_plan_is_off_until_it_is_set_and_checks_what_it_is_given(rig):
     first = (await rig.client.get(PLANS, headers=headers())).json()
-    assert first["settings"] == {"enabled": False, "time": "22:00", "timezone": "Asia/Kolkata", "channels": True, "workspaces": ["personal", "sb", "fsa"], "chittu": {"enabled": True, "morning": "06:00", "night": "22:00", "remindAfter": 45}} and first["plans"] == []
+    assert first["settings"] == {"enabled": False, "time": "22:00", "timezone": "Asia/Kolkata", "channels": True, "workspaces": ["personal", "sb", "fsa"], "chittu": {"enabled": True, "morning": "06:00", "night": "22:00", "remindAfter": 45, "name": ""}} and first["plans"] == []
     for bad in ({"time": "9pm"}, {"time": "25:00"}, {"timezone": "Mars/Base"}):
         r = await rig.client.put(f"{PLANS}/settings", json={"enabled": True, "time": "21:00", "timezone": "Asia/Kolkata", **bad}, headers=headers())
         assert r.status_code == 422

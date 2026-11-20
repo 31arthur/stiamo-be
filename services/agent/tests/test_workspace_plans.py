@@ -103,7 +103,14 @@ async def test_the_evening_sends_each_workspaces_plan_to_its_own_bot_with_approv
     assert "FSA plan ·" in where[555] and 555 in where and 888 in where  # FSA has no bot: the general one carries it
     assert "Tap" in where[888] and "Approve" in where[888]
     keys = [b["callback_data"] for k in rig.telegram.keyboards if k for row in k for b in row if b["callback_data"].startswith("pl:")]
-    assert sorted(k.split(":")[1] for k in keys) == ["a", "a", "x", "x"]
+    assert sorted(k.split(":")[1] for k in keys) == ["a", "a", "r", "r", "x", "x"]  # approve all, drop, or go through it block by block
+    # block by block: the first block arrives on its own, numbered, and the plan's own buttons stay
+    review = next(k for k in keys if k.startswith("pl:r:") and True)
+    from .test_alerts import press
+
+    rig.telegram.sent.clear()
+    await press(rig, sb, review, update=50, chat=888)
+    assert any(t.startswith("1/") and "🕐" in t for _, t in rig.telegram.sent)
 
 
 async def test_approving_on_the_phone_books_the_times_and_updates_google(rig):

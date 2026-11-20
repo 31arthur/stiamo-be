@@ -42,6 +42,12 @@ def role_of(c: Channel) -> str:
 
 #: What a button says the moment it is pressed (the first two parts of its data).
 PRESS_ACKS = {
+    "ac:a": "Doing it…",
+    "ac:x": "Leaving it as it is…",
+    "ac:w": "One moment…",
+    "ac:u": "Putting it back…",
+    "aq:m": "Moving it earlier…",
+    "aq:p": "Moving it later…",
     "aq:s": "Here we go…",
     "aq:l": "Okay…",
     "aq:d": "Marking it done…",
@@ -49,6 +55,7 @@ PRESS_ACKS = {
     "aq:k": "Skipping it…",
     "aq:x": "Stopping…",
     "aq:g": "Carrying on…",
+    "pl:r": "One moment…",
     "pl:a": "Putting it on your planner…",
     "pl:x": "Dropping the plan…",
     "rm:d": "Marking it done…",
@@ -76,6 +83,17 @@ PRESS_ACKS = {
 NOT_LINKED = "This chat isn't linked to Stiamo. In the app, open Assistant → On your phone to connect it."
 #: What a button's result is when the action has already said everything itself: the "⏳ …" message is then taken back out of the chat.
 QUIET = ""
+
+
+def change_buttons(found: list[dict[str, Any]], style: str) -> list[list[dict[str, str]]] | None:
+    """Under a previewed change on Telegram: apply it, leave it, or look at what it would do one by one. (A typed yes still works.)"""
+    if style != "telegram":
+        return None
+    card = next((f for f in reversed(found) if f.get("kind") == "changeset" and f.get("id")), None)
+    if card is None:
+        return None
+    cid = str(card["id"])
+    return [[{"text": "✅ Apply", "callback_data": f"ac:a:{cid}"}, {"text": "✖️ Not this", "callback_data": f"ac:x:{cid}"}], [{"text": "🔍 Which ones?", "callback_data": f"ac:w:{cid}"}]]
 
 
 def format_reply(run: AgentRun, limit: int, style: Style = "plain") -> str:
@@ -391,6 +409,20 @@ class ChannelService:
             sent += 1
         return sent
 
+    async def send_to_channel(self, who: Who, channel_id: str, text: str, buttons: list[list[dict[str, str]]] | None = None) -> int:
+        """A message with buttons to the chats of one named bot: the bot the owner is talking to. Returns how many chats it reached."""
+        c = await self._repo.get(channel_id)
+        if c is None or c.kind != "telegram" or c.user_id != who.user_id:
+            return 0
+        sent = 0
+        for p in c.public.get("paired", []):
+            try:
+                await self._tg.send_message(c.secrets["botToken"], p["id"], clip(text, TELEGRAM_MAX), buttons=buttons)
+                sent += 1
+            except Exception:  # noqa: BLE001  one chat that fails doesn't stop the rest
+                log.warning("could not send to chat %s of channel %s", p.get("id"), c.id)
+        return sent
+
     async def tell(self, who: Who, workspace: str, text: str, kind: str = "message", buttons: list[list[dict[str, str]]] | None = None) -> int:
         """A plain message about a workspace to the phone it belongs to (its own bot, else the master bot). Returns how many chats it reached."""
         import html as _html
@@ -497,7 +529,9 @@ class ChannelService:
         except (ValidationFailed, AiError) as exc:
             return words(str(getattr(exc, "message", None) or exc))
         self._memory[key] = [m.to_json() for m in run.messages][-REMEMBER:]
-        return format_reply(run, limit, style)
+        text = format_reply(run, limit, style)
+        buttons = change_buttons(run.found, style)
+        return (text, buttons) if buttons else text
 
     async def _ask_in(self, c: Channel, who: Who, key: str, text: str, ws: str, channel_name: str, limit: int, style: Style, master: bool = False) -> str:
         """One message to the assistant, in the thread of one workspace ("all": every workspace together)."""
@@ -507,7 +541,9 @@ class ChannelService:
             return Writer(style).text(str(getattr(exc, "message", None) or exc))
         if master and name:
             name = f"{name} · {WORKSPACE_NAMES.get(ws, 'All workspaces')}"  # signed with the workspace it worked in
-        return format_answer(answer, found, limit, name, style)
+        text = format_answer(answer, found, limit, name, style)
+        buttons = change_buttons(found, style)
+        return (text, buttons) if buttons else text
 
     async def _ask_workspace(self, c: Channel, sender: str, text: str) -> tuple[str, list[list[dict[str, str]]]]:
         """The message doesn't say which workspace it is about: keep it, and ask with buttons. Pressing one answers it, in that workspace."""
@@ -665,6 +701,10 @@ class ChannelService:
         kind, action = data.split(":")[0], (data.split(":") + [""])[1]
         if kind == "rm" and self.reminder_actions is not None:
             return await self._reminder_press(c, chat, message, data, who, access)
+        if kind == "pl" and action == "r" and self.plan_actions is not None and self.queue_actions is not None:  # the evening plan, one block at a time
+            day, blocks = await self.plan_actions.blocks_of(who, rest)
+            out = await self.queue_actions.review_schedule(who, access, day, blocks, channel_id=c.id)
+            return QUIET if out.get("started") else "There is nothing in that plan to go through."
         if kind == "pl" and self.plan_actions is not None:
             await self._strip(token, chat, message)
             if action == "a":
@@ -681,6 +721,10 @@ class ChannelService:
             await self._strip(token, chat, message)
             reply = await self._ask_in(c, who, f"{c.kind}:{c.id}:{pending['sender']}:{action}", pending["text"], action, "Telegram", TELEGRAM_MAX, "telegram", master=True)
             return reply, None, True
+        if kind == "ac" and self.queue_actions is not None:  # a previewed change: apply, leave, look at, undo
+            if action != "w":
+                await self._strip(token, chat, message)
+            return await self.queue_actions.change_press(who, access, action, rest, channel_id=c.id)
         if kind == "aq" and self.queue_actions is not None:  # Chittu's list, one thing at a time
             await self._strip(token, chat, message)
             return await self.queue_actions.press(who, access, action, rest)
