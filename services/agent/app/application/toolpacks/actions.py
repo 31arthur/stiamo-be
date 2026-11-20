@@ -118,6 +118,20 @@ class ActionsPack(ToolPack):
             except (NotFound, Conflict, ValidationFailed) as exc:
                 return ToolOutput({"error": str(getattr(exc, "message", None) or exc)})
 
+        async def walk_through(a: dict[str, Any]) -> ToolOutput:
+            try:
+                when = resolve_day(text(a.get("day")), today) if text(a.get("day")) else None
+                last = ("2999-12-31" if text(a.get("until")).lower() in ("open", "forever", "no limit", "any") else resolve_day(text(a.get("until")), today)) if text(a.get("until")) else None
+                if (text(a.get("day")) and when is None) or (text(a.get("until")) and last is None):
+                    return ToolOutput({"error": "I can't read that day. Ask the owner which day they mean."})
+                kinds = [k for k in (a.get("kinds") or []) if k in KINDS] or None
+                out = await ctx.queue.begin(who, token, day=when, until=last, kinds=kinds, workspace=scope or (text(a.get("workspace")) or None), priority_below=text(a.get("less_important_than")) or None, priority_at_least=text(a.get("at_least")) or None, overdue_only=bool(a.get("overdue_only")), label=text(a.get("label"))[:40])
+            except (ValidationFailed, NotFound, Conflict) as exc:
+                return ToolOutput({"error": str(getattr(exc, "message", None) or exc)})
+            if not out.get("started"):
+                return ToolOutput({"started": False, "count": 0, "next": "Nothing is waiting. Say the day is clear, in one line."})
+            return ToolOutput({**out, "next": "The first item has ALREADY been sent to the owner's phone with its buttons. Reply with one short line only (for example: Say stop whenever you like). Do not list or repeat any item."})
+
         async def undo_last(a: dict[str, Any]) -> ToolOutput:
             try:
                 return ToolOutput(await svc.undo_changeset(who, token, text(a.get("changeset_id")) or None, actor=actor))
@@ -146,6 +160,19 @@ class ActionsPack(ToolPack):
                 lambda a: f"Looked up items{' for ' + text(a.get('day')) if text(a.get('day')) else ''}",
                 find_items,
             ),
+            *([Tool(
+                ToolSpec("walk_through", card(
+                    "Shows the owner ANY set of their action items on Telegram, one at a time and numbered (1/10): a short line says how many there are, then the first item arrives with buttons (Done, Tomorrow, Skip, Stop), and each one they settle brings the next. This is the only way to show more than one item on Telegram.",
+                    use=["On Telegram, whenever the owner's question would be answered by more than one action item: what is on today, tomorrow or this week, what is overdue, who to call, which tasks are pending, what is urgent, what is for one workspace or one case, what is next, or “start”.", "Use the filters to match the question: “who should I call?” is kinds=[call, message]; “what's overdue?” is overdue_only=true; “what's due this week?” is day=today, until=“next week”… as the owner said it; “what's urgent?” is at_least=urgent; “what matters most?” is at_least=high."],
+                    avoid=["Never list or enumerate several items in a message or a card on Telegram, in any form: it is always this tool.", "For a count or a yes/no (“how many calls do I have?”, “is the hearing today?”): answer in one sentence from find_items.", "Not on the web app: show a card there with present_plan."],
+                    args={"day": "The first day, in the owner's words. Default today (with what is overdue).", "until": "The last day of a range (“Friday”, “open”).", "kinds": "Only these kinds.", "workspace": "Only this workspace.", "less_important_than": "Only items below this priority.", "at_least": "Only items at least this important: urgent, or high (high and urgent).", "overdue_only": "Only items that are late.", "label": "A few words for what this is, for the opening line (“your calls”, “what is overdue”)."},
+                    returns="{started, count, first, next}. started=true means the first item has already been sent with its buttons; reply with one short line only. started=false means nothing matches.",
+                    fails=["{error} for a day it cannot read: ask for a date."],
+                    effect="Sends the opening line and the first item to the owner's Telegram and starts a list that moves on as items are settled. Changes no items.",
+                ), {"type": OBJ, "properties": {"day": S, "until": S, "kinds": filters["kinds"], "workspace": filters["workspace"], "less_important_than": filters["less_important_than"], "at_least": {"type": "string", "enum": ["urgent", "high"]}, "overdue_only": {"type": "boolean"}, "label": S}}),
+                lambda a: "Started the list",
+                walk_through,
+            )] if ctx.queue is not None and ctx.channel == "Telegram" else []),
             Tool(
                 ToolSpec("which_day", card(
                     "Turns the owner's words for a day into a calendar date, in code, using today's date and the owner's time zone.",

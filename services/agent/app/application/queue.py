@@ -54,7 +54,7 @@ def item_text(it: ActionItem, position: int, total: int, today: str) -> str:
     elif it.due:
         when = f"Due {'today' if it.due == today else day_label(it.due)}"
     bits = [b for b in (when, it.priority if it.priority in ("urgent", "high") else None, it.case_ref, it.contact) if b]
-    lines = [f"{position} of {total} · {EMOJI.get(it.kind, '•')} {it.title}"]
+    lines = [f"{position}/{total} · {EMOJI.get(it.kind, '•')} {it.title}"]
     if bits:
         lines.append(" · ".join(str(b) for b in bits))
     if it.kind == "mail" and it.notes:
@@ -95,6 +95,39 @@ class QueueService:
         buttons = [[{"text": "▶️ Start", "callback_data": f"aq:s:{_tag(row['id'])}:0"}, {"text": "⏰ Later", "callback_data": f"aq:l:{_tag(row['id'])}:0"}]] if entries else None
         await self._send(who, good_morning(self._owner(who), today, len(entries), first), buttons)
         return {"queueId": row["id"], "count": len(entries)}
+
+    async def begin(self, who: Who, token: str, *, day: str | None = None, until: str | None = None, kinds: list[str] | None = None, workspace: str | None = None, priority_below: str | None = None,
+                    priority_at_least: str | None = None, overdue_only: bool = False, label: str = "") -> dict[str, Any]:
+        """Whatever the owner asked to see (today, a day, a week, only calls, only what is overdue): never a list, always the same one-at-a-time walk as the
+        morning, numbered 1/10. A short line says how many, then the first item comes with its buttons, and each one settled brings the next. Replaces a list that
+        was waiting or paused."""
+        today = self._today()
+        old = await self._repo.queue(who.user_id, statuses=["waiting", "active", "paused"])
+        if old:
+            old["status"], old["updatedAt"] = "done", self._now()
+            await self._repo.save_queue(who.user_id, old)
+        loaded = await self._actions.load(who, token)
+        from app.domain.actionitems import pick
+
+        base = pick(loaded.items, kinds=kinds, workspace=workspace, priority_below=priority_below, priority_at_least=priority_at_least)
+        through = until or day or today
+        if overdue_only:
+            items = queue_order([i for i in base if (i.day or i.due) and (i.day or i.due) < today], today)  # type: ignore[operator]
+        else:
+            items = queue_order(base, today, through)
+            if day and day > today:  # a day or a week ahead: not what was left over from before
+                items = [i for i in items if (i.day or i.due or "") >= day]
+        when = through
+        if not items:
+            return {"started": False, "count": 0}
+        row = {"id": str(uuid.uuid4()), "day": today, "status": "active", "entries": [{"ref": i.ref, "state": "pending"} for i in items], "cursor": 0, "shown": {"sitting": 0}, "createdAt": self._now(), "updatedAt": self._now()}
+        await self._repo.save_queue(who.user_id, row)
+        many = "one thing" if len(items) == 1 else f"{len(items)} things"
+        scope = label or ("your day" if when == today and not kinds and not priority_below and not priority_at_least else day_label(when) if when != today else "today")
+        await self._send(who, f"Here's {scope}, {self._owner(who)}: {many}. One at a time.", None)
+        text, buttons = await self._show(who, token, row)
+        await self._send(who, text, buttons)
+        return {"started": True, "count": len(items), "first": items[0].title}
 
     async def remind(self, who: Who, token: str) -> dict[str, Any]:
         """If the owner has not answered the good morning, ask once more, gently. Never a third time."""

@@ -91,7 +91,7 @@ def build_services(app: FastAPI, session: AsyncSession) -> tuple[AgentService, C
     channels.reminder_actions = ReminderActions(SqlSettingsRepository(session, s.box), s.data_factory, lambda: s.clock())
     plans = DayPlanService(SqlDayPlanRepository(session), SqlSettingsRepository(session, s.box), agent, s.data_factory, lambda who, text, workspace, plan_id, calls=(): channels.announce_plan(who, text, workspace, plan_buttons(plan_id) + call_rows(s.settings.app_url, list(calls))))
     channels.plan_actions = plans
-    channels.queue_actions = QueueService(SqlActionRepository(session), agent.actions, lambda who, text, buttons: channels.announce(who, text, kind="chittu", summary=text[:60], buttons=buttons), lambda: s.clock())
+    agent.queue = channels.queue_actions = QueueService(SqlActionRepository(session), agent.actions, lambda who, text, buttons: channels.announce(who, text, kind="chittu", summary=text[:60], buttons=buttons), lambda: s.clock())
     channels.availability_actions = AvailabilityService(SqlSettingsRepository(session, s.box), s.data_factory, lambda who, text, workspace, buttons: channels.announce_plan(who, text, workspace, buttons), plans)
     channels.editor_actions = EditorService(SqlSettingsRepository(session, s.box), s.data_factory, s.llm_factory, lambda who, text, workspace, buttons: channels.announce_plan(who, text, workspace, buttons), lambda: s.clock())
     channels.voice_notes = VoiceNotes(SqlSettingsRepository(session, s.box), s.voice)

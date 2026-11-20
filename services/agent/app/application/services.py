@@ -194,6 +194,8 @@ class AgentService:
     notify: Any = None
     #: Chittu's action items (see application/actions.py), set by the app when it builds the service.
     actions: Any = None
+    #: Chittu's one-at-a-time list on Telegram, set by the app once the channels exist.
+    queue: Any = None
     #: Asks a question with buttons on the phone: (who, workspace, text, buttons) -> how many chats it reached. For an Ask me node.
     ask_phone: Any = None
     #: Sends text with one named Telegram bot for a Telegram node: (who, workspace, channel id, chat id or None, text) -> how many chats it reached.
@@ -455,7 +457,7 @@ class AgentService:
         elif scope:
             data = ScopedData(data, scope)  # a workspace's assistant sees that workspace's data only
         ctx = PackContext(data, today, decisions, decision.get("modelId") or DECISION_MODELS[0]["id"], lambda: self._waiting(who, scope), self._proposer(who, agent.id, channel_id), channel != "the evening plan", scope,
-                          jobs=self.job_runners(s), actions=self.actions, who=who, token=token, actor="chittu" if agent.id == "daily-planner" else agent.id)
+                          jobs=self.job_runners(s), actions=self.actions, who=who, token=token, actor="chittu" if agent.id == "daily-planner" else agent.id, queue=self.queue, channel=channel)
         tools: list[Tool] = []
         tool_packs: dict[str, str] = {}
         context: dict[str, Any] = {"today": today, "user": who.name, "channel": channel}
