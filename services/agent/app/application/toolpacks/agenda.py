@@ -136,6 +136,12 @@ class AgendaPack(ToolPack):
                 # Inside these the person can take calls and follow-ups (but not do heavy work): put calls there.
                 "callWindows": [{"from": clock(s), "to": clock(e), "during": n, "minutes": e - s} for s, e, n in call_only_blocks(day, meetings, calendar)],
             }
+            if day > today:  # planning a later day: what is still open from today is carried over, not "overdue"
+                for key, carried in (("overdueTasks", "stillOpenFromToday"), ("overdueFollowUps", "stillOpenCallsFromToday")):
+                    stay = [x for x in out[key] if x.get("due") == today]
+                    out[key] = [x for x in out[key] if x.get("due") != today]
+                    if stay:
+                        out[carried] = stay
             return ToolOutput(out)
 
         async def free_time(a: dict[str, Any]) -> ToolOutput:
@@ -201,7 +207,7 @@ class AgendaPack(ToolPack):
                     for b in ordered
                 ]
                 card["proposalId"] = await ctx.propose("schedule.apply", f"Put {len(ordered)} {'item' if len(ordered) == 1 else 'items'} on the planner for {day}", [f"{b['from']}–{b['to']} {b['title']}" for b in shown], ops)
-            return ToolOutput({"ok": True, "date": day, "blocks": len(ordered), "note": "Shown to the person as a schedule they can approve. Nothing is booked until they do."}, [card])
+            return ToolOutput({"ok": True, "date": day, "blocks": len(ordered), "schedule": [f"{b['from']}–{b['to']} {b['title']}" for b in shown], "freeAfter": [f"{clock(s)}–{clock(e)}" for s, e in free_windows(busy_blocks(day, hearings, meetings, tasks, follow_ups, skip={f"{b['kind']}:{b['id']}" for b in ordered}, calendar=calendar) + [(b["start"], b["start"] + b["duration"], b["title"]) for b in ordered])], "note": "Shown to the person as a schedule they can approve. Nothing is booked until they do."}, [card])
 
         async def present_plan(a: dict[str, Any]) -> ToolOutput:
             day = _day(a, tomorrow(today))
@@ -237,7 +243,7 @@ class AgendaPack(ToolPack):
                 return ToolOutput({"ok": False, "problems": ["Nothing to show: every section was empty."]})
             free = free_windows(busy_blocks(day, hearings, meetings, tasks, follow_ups, calendar=calendar))
             card = {"kind": "briefing", "id": f"briefing:{day}", "date": day, "headline": text(a.get("headline"))[:160], "summary": text(a.get("summary"))[:400] or None, "sections": sections, "free": [{"from": clock(s), "to": clock(e), "minutes": e - s} for s, e in free]}
-            return ToolOutput({"ok": True, "note": "The person sees this as a card with each task and call ready to complete or move. Do not repeat its items in your answer: write one or two sentences at most."}, [_compact(card)])
+            return ToolOutput({"ok": True, "date": day, "shown": {s["title"]: len(s["items"]) for s in sections}, "freeTime": card["free"] and [f"{f['from']}–{f['to']}" for f in card["free"]], "note": "The person sees this as a card with each task and call ready to complete or move. Do not repeat its items in your answer: write one or two sentences at most."}, [_compact(card)])
 
         item_schema = {"type": OBJ, "properties": {"type": {"type": "string", "enum": ["hearing", "meeting", "task", "followUp", "calendar", "note"]}, "id": {"type": "string", "description": "The id from day_agenda. Not for a note."}, "text": {"type": "string", "description": "Why it matters or what to do, a short phrase. For a note, the note itself."}}, "required": ["type"]}
         section_schema = {"type": OBJ, "properties": {"kind": {"type": "string", "enum": list(SECTION_TITLES)}, "title": {"type": "string", "description": "Optional heading; a sensible one is used by default."}, "items": {"type": "array", "items": item_schema}}, "required": ["kind", "items"]}

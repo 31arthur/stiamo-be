@@ -28,7 +28,7 @@ _VAR = re.compile(r"\{\{\s*([a-z_]+)\s*\}\}")
 class ToolOverride(BaseModel):
     enabled: bool = True
     #: Replaces the description the model is shown for this tool.
-    description: str | None = Field(default=None, max_length=1000)
+    description: str | None = Field(default=None, max_length=6000)
 
 
 class PromptConfig(BaseModel):
@@ -69,7 +69,9 @@ class Package:
 
 
 def tool_lines(tools: list[ToolSpec]) -> str:
-    return "\n".join(f"- {t.name}: {t.description}" for t in tools) or "(none)"
+    """One line per tool for the prompt: its name and what it is for (the first line of its description). The whole description, with when to use it and what
+    it returns, travels with the tool itself, so it is not said twice."""
+    return "\n".join(f"- {t.name}: {t.description.split(chr(10), 1)[0]}" for t in tools) or "(none)"
 
 
 def build_package(config: PromptConfig, tools: list[ToolSpec], context: dict[str, Any], question: str) -> Package:

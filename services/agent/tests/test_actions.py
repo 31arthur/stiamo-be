@@ -75,9 +75,9 @@ def test_a_move_keeps_fixed_things_where_they_are_and_reports_what_does_not_fit(
     due_only = from_task({"id": "d", "title": "File", "dueDate": "2026-11-20", "outcome": {"status": "open"}})
     meeting = from_meeting({"id": "m", "title": "Union", "counterpart": "Mr Rao", "slot": {"date": "2026-11-20", "start": 900, "duration": 60}})
     hearing = from_hearing({"id": "h", "date": "2026-11-20", "time": 660, "duration": 60, "purpose": "Arguments"})
-    plan = plan_move([task, due_only, meeting, hearing], "2026-11-21", [(540, 700, "clash")])
+    plan = plan_move([task, due_only, meeting, hearing], "2026-11-21", [(540, 700, "the board call")])
     moved = {m.ref: m for m in plan.moves}
-    assert moved["task:t"].to_start != 600 and "taken" in moved["task:t"].note  # its usual time was busy: it takes the first free window
+    assert moved["task:t"].to_start != 600 and "clashes with the board call" in moved["task:t"].note  # its usual time was busy: it takes the first free window
     assert moved["task:d"].to_start is None  # only its day changes
     stays = {r: why for r, _, why in plan.stays}
     assert "fixed" in stays["meeting:m"] and "court" in stays["hearing:h"]
@@ -235,7 +235,7 @@ async def test_every_tool_of_chittu_is_described_in_full_and_his_prompt_is_a_ful
         tools = await ActionsPack().tools(PackContext(rig.data, T, actions=svc, who=WHO, token=""))
     finally:
         await finish(s, session)
-    assert [t.spec.name for t in tools] == ["find_items", "which_day", "preview_move", "apply_change", "drop_change", "change_item", "undo_last", "item_history"]
+    assert [t.spec.name for t in tools] == ["find_items", "which_day", "preview_move", "preview_close", "apply_change", "drop_change", "change_item", "undo_last", "item_history"]
     for t in tools:
         d = t.spec.description
         assert all(part in d for part in ("USE IT WHEN:", "RETURNS:", "EFFECT:")) and len(d.split()) >= 60, t.spec.name  # what it is for, when, what comes back, what it changes
@@ -332,3 +332,14 @@ async def test_chittu_asks_once_more_if_the_good_morning_is_not_answered_and_nev
     assert r.json()["settings"]["chittu"]["enabled"] is False and r.json()["settings"]["chittu"]["morning"] == "05:30"  # what was set before is kept
     assert rig.app.state.daily.keys(f"{WHO.user_id}#chittu-") == []
     assert (await rig.client.put("/v1/agent/day-plans/settings", json={**base, "chittu": {"morning": "25:00"}}, headers=headers())).status_code == 422
+
+
+async def test_every_tool_an_agent_has_carries_a_full_card_and_the_prompt_lists_each_once_in_a_line(rig):
+    from .conftest import headers
+
+    out = (await rig.client.post(f"{PLANNER}/prompt/preview", json={"question": "x"}, headers=headers())).json()
+    assert len(out["tools"]) >= 30
+    for t in out["tools"]:
+        d = t["description"]
+        assert all(part in d for part in ("USE IT WHEN:", "RETURNS:", "EFFECT:")) and len(d.split()) >= 45, t["name"]
+    assert "USE IT WHEN" not in out["system"]  # the prompt names each tool with a line; the card travels with the tool, not twice
