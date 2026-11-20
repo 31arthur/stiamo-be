@@ -304,3 +304,97 @@ class ConversationModel(Base):
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime)
 
     __table_args__ = (Index("ix_agent_conversations_user", "user_id", "updated_at"), Index("ix_agent_conversations_channel", "user_id", "channel_key"))
+
+
+
+class ActionItemModel(Base):
+    """An action item Chittu keeps himself: an email that needs the owner, something the owner told him. (Tasks, calls, meetings and hearings stay in the
+    practice service and are read as items; see domain/actionitems.py.)"""
+
+    __tablename__ = "action_items"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(36))
+    kind: Mapped[str] = mapped_column(String(12))
+    title: Mapped[str] = mapped_column(String(300))
+    workspace: Mapped[str] = mapped_column(String(16), default="personal")
+    day: Mapped[str | None] = mapped_column(String(10))
+    start: Mapped[int | None] = mapped_column()
+    duration: Mapped[int | None] = mapped_column()
+    due: Mapped[str | None] = mapped_column(String(10))
+    status: Mapped[str] = mapped_column(String(10), default="open")
+    priority: Mapped[str] = mapped_column(String(8), default="normal")
+    source: Mapped[str] = mapped_column(String(24), default="chittu")
+    #: What it points at: the mail (account, uid, agent), the case, the contact.
+    links: Mapped[dict[str, Any]] = mapped_column(Json, default=dict)
+    notes: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime)
+
+    __table_args__ = (Index("ix_action_items_user", "user_id", "status", "day"),)
+
+
+class ActionEventModel(Base):
+    """The history of every action item, one row per change, never edited: who did what to which item, what it was before and after, and why."""
+
+    __tablename__ = "action_events"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(36))
+    #: The item's ref ("task:ab12", "mail:cd34").
+    item_ref: Mapped[str] = mapped_column(String(80))
+    #: created, moved, completed, reopened, snoozed, cancelled, updated, queued, resolved, undone.
+    event: Mapped[str] = mapped_column(String(16))
+    #: Who: "owner", "chittu", an agent's name, or "system".
+    actor: Mapped[str] = mapped_column(String(40))
+    title: Mapped[str] = mapped_column(String(300), default="")
+    before: Mapped[dict[str, Any] | None] = mapped_column(Json)
+    after: Mapped[dict[str, Any] | None] = mapped_column(Json)
+    reason: Mapped[str] = mapped_column(String(400), default="")
+    changeset_id: Mapped[str | None] = mapped_column(String(36))
+    run_id: Mapped[str | None] = mapped_column(String(36))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime)
+
+    __table_args__ = (Index("ix_action_events_item", "user_id", "item_ref", "created_at"), Index("ix_action_events_changeset", "changeset_id"))
+
+
+class ActionChangesetModel(Base):
+    """A group of changes made together (move everything on Friday to Monday): previewed, then applied once, and undone as a whole."""
+
+    __tablename__ = "action_changesets"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(36))
+    title: Mapped[str] = mapped_column(String(300))
+    #: pending (previewed), applied, undone, dropped.
+    status: Mapped[str] = mapped_column(String(10))
+    #: [{ref, table, id, before, after}]: what each change was and what it becomes.
+    ops: Mapped[list[dict[str, Any]]] = mapped_column(Json, default=list)
+    summary: Mapped[dict[str, Any]] = mapped_column(Json, default=dict)
+    actor: Mapped[str] = mapped_column(String(40), default="chittu")
+    channel_id: Mapped[str | None] = mapped_column(String(36))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime)
+    decided_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+
+    __table_args__ = (Index("ix_action_changesets_user", "user_id", "status"),)
+
+
+class ActionQueueModel(Base):
+    """What Chittu is bringing to the owner on Telegram, one thing at a time: the order, where he is in it, and how it is going."""
+
+    __tablename__ = "action_queues"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(36))
+    day: Mapped[str] = mapped_column(String(10))
+    #: waiting (the hello was sent, the owner has not said start), active, paused, done.
+    status: Mapped[str] = mapped_column(String(10))
+    #: [{ref, state}] state: pending, shown, done, moved, skipped, snoozed.
+    entries: Mapped[list[dict[str, Any]]] = mapped_column(Json, default=list)
+    cursor: Mapped[int] = mapped_column(default=0)
+    #: The message the current item is in, so its buttons can be taken off when it is settled.
+    shown: Mapped[dict[str, Any]] = mapped_column(Json, default=dict)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime)
+
+    __table_args__ = (Index("ix_action_queues_user", "user_id", "status"),)

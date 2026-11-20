@@ -42,6 +42,13 @@ def role_of(c: Channel) -> str:
 
 #: What a button says the moment it is pressed (the first two parts of its data).
 PRESS_ACKS = {
+    "aq:s": "Here we go…",
+    "aq:l": "Okay…",
+    "aq:d": "Marking it done…",
+    "aq:t": "Moving it to tomorrow…",
+    "aq:k": "Skipping it…",
+    "aq:x": "Stopping…",
+    "aq:g": "Carrying on…",
     "pl:a": "Putting it on your planner…",
     "pl:x": "Dropping the plan…",
     "rm:d": "Marking it done…",
@@ -108,6 +115,8 @@ class ChannelService:
         self.reminder_actions: Any = None
         #: What the Approve and Not this buttons under a day plan do: a DayPlanService.
         self.plan_actions: Any = None
+        #: Chittu's list on Telegram, one thing at a time (application/queue.py).
+        self.queue_actions: Any = None
         #: What the buttons under a question about time inside an event do: an AvailabilityService.
         self.availability_actions: Any = None
         self.editor_actions: Any = None
@@ -664,6 +673,9 @@ class ChannelService:
             await self._strip(token, chat, message)
             reply = await self._ask_in(c, who, f"{c.kind}:{c.id}:{pending['sender']}:{action}", pending["text"], action, "Telegram", TELEGRAM_MAX, "telegram", master=True)
             return reply, None, True
+        if kind == "aq" and self.queue_actions is not None:  # Chittu's list, one thing at a time
+            await self._strip(token, chat, message)
+            return await self.queue_actions.press(who, access, action, rest)
         if kind == "fw":
             await self._strip(token, chat, message)
             return await self._agent.resume_flow(who, access, rest, int(action))

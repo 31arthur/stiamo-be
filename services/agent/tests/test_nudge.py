@@ -25,7 +25,7 @@ def test_a_reminder_is_due_only_when_the_time_has_come_something_is_still_open_a
     assert due_run(579, "2026-11-06", f, {}) is None and due_run(580, "2026-11-06", f, {})["pending"] == [f[0]]
     assert due_run(700, "2026-11-06", [call("a", 540, status="done")], {}) is None  # all done: nothing to say
     assert due_run(580, "2026-11-06", f, {"a": {"step": 1, "last": 580}}) is None  # one was just sent
-    assert due_run(8 * 60, "2026-11-06", [call("a", 6 * 60)], {}) is None and due_run(21 * 60 + 5, "2026-11-06", [call("a", 20 * 60)], {}) is None  # not before nine or after nine at night
+    assert due_run(5 * 60, "2026-11-06", [call("a", 4 * 60)], {}) is None and due_run(22 * 60 + 5, "2026-11-06", [call("a", 21 * 60)], {}) is None  # not before six or after ten at night
 
 
 def test_it_waits_while_something_else_is_on_but_the_calls_themselves_do_not_count():

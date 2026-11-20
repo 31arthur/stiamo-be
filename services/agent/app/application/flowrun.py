@@ -751,6 +751,14 @@ async def node_attention(run: Run, n: FNode, inputs: list[Item]) -> list[list[It
             data = {"summary": j.get("summary") or j.get("subject"), "priority": j.get("priority") or "normal", "action": j.get("action"), "due": j.get("due"), "event": event, "note": j.get("note"), "folder": j.get("folder") or "INBOX", "account": j.get("account"), "uid": j.get("uid")}
             excerpt = f"From: {j.get('senderName') or j.get('from') or ''} <{j.get('senderAddress') or j.get('fromAddress') or ''}>\nSubject: {j.get('subject') or ''}\n\n{str(j.get('snippet') or '')[:600]}"
             await repo.record([LedgerEntry(str(uuid.uuid4()), run.agent.id, run.who.user_id, key, str(j.get("subject") or "(no subject)")[:200], excerpt[:1500], str(j.get("label") or "") or None, float(j.get("confidence") or 0), str(j.get("reason") or ""), "event_proposed" if event else "queued", run.record.id if run.record else "", 1, None, None, data)])
+        if added and run.trigger != "manual" and run.svc.actions is not None and j.get("account") and j.get("uid") is not None:  # kept as an action item too, with its own history
+            try:
+                await run.svc.actions.record_mail(
+                    run.who, agent_name=run.agent.name, workflow_id=run.agent.id, item_id=key, account=str(j["account"]), uid=int(j["uid"]), folder=str(j.get("folder") or "INBOX"), subject=str(j.get("subject") or ""),
+                    sender=str(j.get("senderAddress") or j.get("fromAddress") or ""), summary=j.get("summary"), priority=str(j.get("priority") or "normal"), label=str(j.get("label") or ""), due=j.get("due"), workspace=str(j.get("workspace") or run.workspace or "personal"),
+                )
+            except Exception:  # noqa: BLE001  keeping the history must never undo the judging
+                log.exception("could not keep %s as an action item", key)
         out.append({"json": {**j, "queued": added}})
     return [out]
 

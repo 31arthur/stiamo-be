@@ -124,13 +124,13 @@ class MailWatchService:
             mine = [e for e in entries if e.agent_id == wid and e.status != "seen"]
             if not mine:
                 continue
-            by_rule = [e for e in mine if e.status == "protected" and "a rule dropped it" in (e.reason or "")]
+            by_rule = [e for e in mine if "a rule dropped it" in (e.reason or "")]
             by_label = lambda name: [e for e in mine if e.label == name and e not in by_rule]  # noqa: E731
             dropped = by_label("drop")
             out.append({
                 "workspace": ws, "name": NAMES.get(ws, ws), "agentId": wid, "hours": hours, "total": len(mine),
                 "droppedByRule": len(by_rule), "droppedByModel": len(dropped), "digest": len(by_label("digest")), "now": len(by_label("now")),
-                "samples": [{"title": e.title, "why": e.reason or "", "by": "rule" if e in by_rule else "model"} for e in [*by_rule[:3], *dropped[:3]]],
+                "samples": [{"title": e.title, "why": e.reason or "", "by": "rule" if e in by_rule else "model", "inTrash": e.status == "applied"} for e in [*by_rule[:3], *dropped[:3]]],
                 "line": f"{NAMES.get(ws, ws)}: {len(mine)} mails: {len(by_label('now'))} to the phone, {len(by_label('digest'))} for the evening, {len(dropped)} dropped by the model, {len(by_rule)} by a rule.",
             })
         return {"workspaces": out}

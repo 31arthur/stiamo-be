@@ -331,10 +331,11 @@ async def test_an_agent_is_shown_as_its_workflow_and_a_run_records_its_workspace
     assert [n["type"] for n in f["nodes"]] == ["trigger.chat", "ai.agent", "respond"] and f["custom"] is False
     tools = {t["name"]: t for t in f["tools"]}
     assert {"day_agenda", "propose_schedule"} <= set(tools) and tools["day_agenda"]["pack"] == "agenda" and tools["day_agenda"]["enabled"] is True
-    assert "Daily Planner" in f["defaults"]["system"] and "tomorrow" in f["variables"]
+    assert "Chittu" in f["defaults"]["system"] and "tomorrow" in f["variables"]
     # a tool switched off in the prompt settings shows as off: the workflow's tools are the agent's real ones
     saved = (await rig.client.get("/v1/agent/agents/daily-planner", headers=headers())).json()["prompt"]
-    await rig.client.put("/v1/agent/agents/daily-planner/prompt", json={**saved, "tools": {"free_time": {"enabled": False}}}, headers=headers())
+    r = await rig.client.put("/v1/agent/agents/daily-planner/prompt", json={**saved, "tools": {"free_time": {"enabled": False}}}, headers=headers())
+    assert r.status_code in (200, 204), r.text
     f = (await rig.client.get("/v1/agent/agents/daily-planner/flow", headers=headers())).json()
     assert next(t for t in f["tools"] if t["name"] == "free_time")["enabled"] is False
 
@@ -372,7 +373,7 @@ async def test_one_master_bot_works_in_the_workspace_each_message_is_about_and_n
     assert CANARY["fsa"] in fsa_saw
     assert_clean(fsa_saw, "fsa", "the master, asked about FSA")  # not even from the S&B talk just before: its context is S&B's thread
     assert "SBX-" not in fsa_saw
-    reply = [t for _, t in rig.telegram.sent if "Daily planner" in t or "Follow-up" in t]
+    reply = [t for _, t in rig.telegram.sent if "Chittu" in t or "Follow-up" in t]
     assert any("· S&amp;B" in t for t in reply) and any("· FSA" in t for t in reply)  # each answer says which workspace it worked in
     threads = (await rig.client.get("/v1/agent/conversations", headers=headers())).json()["items"]
     assert sorted(t["workspace"] for t in threads) == ["fsa", "sb"]  # a thread per workspace under the one chat

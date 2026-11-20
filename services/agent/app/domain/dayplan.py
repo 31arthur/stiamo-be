@@ -8,10 +8,10 @@ from __future__ import annotations
 from datetime import date, timedelta
 from typing import Any
 
-#: The working day the planner fits things into: it starts at 9 and, for most days, ends at 9 in the evening.
-DAY_START = 9 * 60
-DAY_END = 21 * 60
-#: Earliest and latest a block may be proposed, for the odd early or late job.
+#: The day Chittu keeps: it starts with a good morning at 6 and ends with a good night at 10 in the evening. Everything is fitted between them.
+DAY_START = 6 * 60
+DAY_END = 22 * 60
+#: Earliest and latest a block may be proposed (the same: nothing is planned outside the day).
 EARLIEST = 6 * 60
 LATEST = 22 * 60
 #: How long a hearing or meeting with no length is taken to take.

@@ -132,7 +132,7 @@ def test_every_watch_has_three_outcomes_decided_by_the_decision_model_with_rules
 def test_a_watch_still_on_an_earlier_wording_is_upgraded_and_an_edited_one_is_left_alone():
     old = {**watch_config("sb", ["a"]), "prompt": _V1["sb"], "focusVersion": 1, "decider": "model"}
     new = upgraded("sb", old)
-    assert new is not None and "BWI" in new["prompt"] and new["focusVersion"] == 4 and new["decider"] == "jev" and new["source"] == old["source"]
+    assert new is not None and "BWI" in new["prompt"] and new["focusVersion"] == 5 and new["decider"] == "jev" and new["source"] == old["source"]
     assert upgraded("sb", new) is None
     assert upgraded("sb", {**old, "prompt": "My own words."}) is None
     assert upgraded("sb", {**old, "prompt": "You watch the inbox of S&B Consultants, a legal and advocacy practice. Only a few kinds of mail are worth interrupting the owner for, and nothing else is. Notify (urgent) ONLY for: (1) mail from or about BWI x"}) is not None
@@ -175,3 +175,21 @@ async def test_the_audit_shows_what_each_watch_dropped_so_a_wrong_drop_can_be_se
     out = (await rig.client.get(f"{MW}/audit", headers=headers())).json()["workspaces"][0]
     assert out["workspace"] == "sb" and (out["now"], out["digest"], out["droppedByModel"], out["droppedByRule"]) == (1, 1, 1, 1)
     assert {x["by"] for x in out["samples"]} == {"rule", "model"} and "1 dropped by the model" in out["line"]
+
+
+async def test_what_a_watch_drops_goes_to_trash_and_what_is_needed_is_stored(rig):
+    await connect(rig)
+    await watches(rig)
+    wid = watch_id("sb", "u1")
+    await choose(rig, agent=f"/v1/agent/agents/{wid}")
+    me = next(x for x in await agents(rig) if x["id"] == wid)
+    assert me["config"]["action"] == {"trashLabel": "drop", "auto": True}
+    cfg = {**me["config"], "batchSize": 1, "filters": {**me["config"]["filters"], "sinceDays": 365}}
+    await rig.client.put(f"{WF}/{wid}", json={"name": me["name"], "description": me["description"], "config": cfg}, headers=headers())
+    reading = ChatResult(json.dumps({"summary": "A friend answers.", "priority": "normal", "action": None, "due": None, "event": None, "replies": []}))
+    # the shop's "50% off" is dropped by a rule (no model); the three others are judged in order: the lead is dropped, the friend goes to the evening list, BWI's newsletter is dropped
+    rig.script += [answer("drop"), answer("digest"), answer("drop"), reading]
+    out = (await rig.client.post(f"{WF}/{wid}/run", json={}, headers=headers())).json()
+    assert sorted(rig.data.trashed) == [1, 3, 4], out["summary"]  # moved to Trash, never deleted
+    queue = (await rig.client.get("/v1/agent/attention", headers=headers())).json()
+    assert queue["count"] == 1 and queue["items"][0]["title"] == "Re: workshop"  # the one that matters is stored

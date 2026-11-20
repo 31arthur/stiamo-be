@@ -47,6 +47,7 @@ async def list_plans(plans: Plans, me: deps.Me, request: Request, workspace: str
 async def set_settings(body: SettingsBody, plans: Plans, me: deps.Me, request: Request) -> dict[str, Any]:
     out = await plans.set_settings(me, body.enabled, body.time, body.timezone, body.channels, body.workspaces)
     deps.sync_evening(request.app, me, out)
+    deps.sync_chittu(request.app, me, out)
     return {"settings": out, "schedule": request.app.state.daily.status(me.user_id)}
 
 

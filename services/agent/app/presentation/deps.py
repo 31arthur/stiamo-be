@@ -39,6 +39,9 @@ from app.infrastructure.db.repositories import (
     SqlSettingsRepository,
 )
 from app.infrastructure.db.workflows import SqlWorkflowRepository
+from app.infrastructure.db.actions import SqlActionRepository
+from app.application.actions import ActionService
+from app.application.queue import QueueService
 
 current_principal = make_principal_dependency(lambda: get_settings().token_settings())
 CurrentPrincipal = Annotated[Principal, Depends(current_principal)]
@@ -73,6 +76,7 @@ def build_services(app: FastAPI, session: AsyncSession) -> tuple[AgentService, C
     s = app.state
     agent = AgentService(SqlSettingsRepository(session, s.box), s.registry, s.runs, SqlWorkflowRepository(session), s.llm_factory, s.decision_factory, s.data_factory, s.settings.max_steps, SqlProposalRepository(session))
     agent.engine = s.settings.engine
+    agent.actions = ActionService(SqlActionRepository(session), s.data_factory, lambda: s.clock())
     box: list[ChannelService] = []  # (the channels are made after the agent, and the agent sends through them)
     agent.notify = lambda who, workspace, text: box[0].tell(who, workspace, text)
     agent.sorter = lambda: WorkflowService(SqlWorkflowRepository(session), SqlSettingsRepository(session, s.box), s.runs, s.llm_factory, s.decision_factory, s.data_factory, s.running, s.sweeps.is_active, box[0].alerts)
@@ -87,6 +91,7 @@ def build_services(app: FastAPI, session: AsyncSession) -> tuple[AgentService, C
     channels.reminder_actions = ReminderActions(SqlSettingsRepository(session, s.box), s.data_factory, lambda: s.clock())
     plans = DayPlanService(SqlDayPlanRepository(session), SqlSettingsRepository(session, s.box), agent, s.data_factory, lambda who, text, workspace, plan_id, calls=(): channels.announce_plan(who, text, workspace, plan_buttons(plan_id) + call_rows(s.settings.app_url, list(calls))))
     channels.plan_actions = plans
+    channels.queue_actions = QueueService(SqlActionRepository(session), agent.actions, lambda who, text, buttons: channels.announce(who, text, kind="chittu", summary=text[:60], buttons=buttons), lambda: s.clock())
     channels.availability_actions = AvailabilityService(SqlSettingsRepository(session, s.box), s.data_factory, lambda who, text, workspace, buttons: channels.announce_plan(who, text, workspace, buttons), plans)
     channels.editor_actions = EditorService(SqlSettingsRepository(session, s.box), s.data_factory, s.llm_factory, lambda who, text, workspace, buttons: channels.announce_plan(who, text, workspace, buttons), lambda: s.clock())
     channels.voice_notes = VoiceNotes(SqlSettingsRepository(session, s.box), s.voice)
@@ -121,6 +126,36 @@ def evening_run(app: FastAPI, who: Who):
                 raise
 
     return run_once
+
+
+def chittu_run(app: FastAPI, who: Who, which: str):
+    """Good morning (06:00) or good night (22:00): its own session and a fresh token for the owner (nobody is signed in at six)."""
+
+    async def run_once() -> None:
+        async with app.state.session_factory() as session:
+            try:
+                _, channels = build_services(app, session)
+                token = app.state.tokens.mint(who.user_id, who.email)
+                await (channels.queue_actions.morning if which == "morning" else channels.queue_actions.night)(who, token)
+                await session.commit()
+            except Exception:
+                await session.rollback()
+                raise
+
+    return run_once
+
+
+def sync_chittu(app: FastAPI, who: Who, planner: dict | None) -> None:
+    """Starts, moves or stops Chittu's good morning and good night to match what is set (on, at 06:00 and 22:00, unless switched off)."""
+    from app.application.dayplans import chittu_settings
+
+    c, p = chittu_settings(planner), planner_settings(planner)
+    for which, at in (("morning", c["morning"]), ("night", c["night"])):
+        key = f"{who.user_id}#chittu-{which}"
+        if c["enabled"]:
+            app.state.daily.ensure(key, at, p["timezone"], chittu_run(app, who, which))
+        else:
+            app.state.daily.stop(key)
 
 
 def sync_evening(app: FastAPI, who: Who, planner: dict) -> None:
@@ -290,7 +325,9 @@ def build_insights(app: FastAPI, session: AsyncSession) -> InsightService:
 def build_workflow_service(app: FastAPI, session: AsyncSession) -> WorkflowService:
     s = app.state
     _, channels = build_services(app, session)
-    return WorkflowService(SqlWorkflowRepository(session), SqlSettingsRepository(session, s.box), s.runs, s.llm_factory, s.decision_factory, s.data_factory, s.running, s.sweeps.is_active, channels.alerts)
+    svc = WorkflowService(SqlWorkflowRepository(session), SqlSettingsRepository(session, s.box), s.runs, s.llm_factory, s.decision_factory, s.data_factory, s.running, s.sweeps.is_active, channels.alerts)
+    svc.record_item = lambda who, **kw: ActionService(SqlActionRepository(session), s.data_factory, lambda: s.clock()).record_mail(who, **kw)
+    return svc
 
 
 def workflow_service(request: Request, session: Session) -> WorkflowService:

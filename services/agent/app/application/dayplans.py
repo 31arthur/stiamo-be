@@ -33,8 +33,8 @@ from app.domain.phone import Style, render
 log = logging.getLogger(__name__)
 
 PLANNER = "daily-planner"
-#: Most days end at nine in the evening, so that is when tomorrow gets planned.
-DEFAULT_TIME = "21:00"
+#: The day ends at ten in the evening, with a good night: that is when tomorrow gets planned.
+DEFAULT_TIME = "22:00"
 DEFAULT_ZONE = "Asia/Kolkata"
 STATUSES = ("proposed", "applied", "dismissed")
 #: The workspaces that plan their own day each evening, unless the person chose others. An empty choice is one plan across everything.
@@ -47,6 +47,12 @@ def planner_settings(raw: dict[str, Any] | None) -> dict[str, Any]:
     chosen = p.get("workspaces")
     workspaces = [w for w in (chosen if isinstance(chosen, list) else PLAN_WORKSPACES) if w in WORKSPACES]
     return {"enabled": bool(p.get("enabled")), "time": p.get("time") or DEFAULT_TIME, "timezone": p.get("timezone") or DEFAULT_ZONE, "channels": p.get("channels", True) is not False, "workspaces": workspaces}
+
+
+def chittu_settings(raw: dict[str, Any] | None) -> dict[str, Any]:
+    """When Chittu says good morning and good night, and whether he does. On unless switched off: the day opens at six and closes at ten."""
+    c = (raw or {}).get("chittu") or {}
+    return {"enabled": c.get("enabled", True) is not False, "morning": c.get("morning") or "06:00", "night": c.get("night") or DEFAULT_TIME}
 
 
 def plan_buttons(plan_id: str) -> list[list[dict[str, str]]]:
@@ -143,7 +149,7 @@ class DayPlanService:
             raise ValidationFailed("That isn't one of your workspaces.")
         s = await self._settings.get(who.user_id) or UserSettings(who.user_id, who.email)
         keep = planner_settings(s.planner)["workspaces"] if workspaces is None else list(dict.fromkeys(workspaces))
-        s.planner = {"enabled": enabled, "time": at, "timezone": timezone, "channels": channels, "workspaces": keep}
+        s.planner = {"enabled": enabled, "time": at, "timezone": timezone, "channels": channels, "workspaces": keep, **({"chittu": s.planner["chittu"]} if s.planner and "chittu" in s.planner else {})}
         await self._settings.save(s)
         return planner_settings(s.planner)
 

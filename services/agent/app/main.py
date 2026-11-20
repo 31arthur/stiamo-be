@@ -31,7 +31,7 @@ from app.infrastructure.mailevents import HttpMailEvents
 from app.infrastructure.messaging import HttpTelegramApi, HttpTwilioApi
 from app.infrastructure.security import JwtAccessTokens, SecretBox
 from app.infrastructure.voice import DeepgramVoice
-from app.presentation.deps import apply_mail_triggers, apply_schedules, sync_evening, sync_listener, sync_reminders, watch_everyone
+from app.presentation.deps import apply_mail_triggers, apply_schedules, sync_chittu, sync_evening, sync_listener, sync_reminders, watch_everyone
 from app.presentation.routers import (
     agent,
     alerts,
@@ -77,6 +77,16 @@ async def start_evenings(app: FastAPI) -> None:
                 sync_evening(app, Who(s.user_id, s.email), s.planner)
     except Exception:  # noqa: BLE001  a problem here must not keep the service from starting
         logging.getLogger(__name__).exception("could not start the evening plans")
+
+
+async def start_chittu(app: FastAPI) -> None:
+    """After a restart, Chittu says good morning at six and good night at ten again, for everyone."""
+    try:
+        async with app.state.session_factory() as session:
+            for s in await SqlSettingsRepository(session, app.state.box).everyone():
+                sync_chittu(app, Who(s.user_id, s.email), s.planner)
+    except Exception:  # noqa: BLE001  a problem here must not keep the service from starting
+        logging.getLogger(__name__).exception("could not start Chittu's day")
 
 
 async def start_flow_schedules(app: FastAPI) -> None:
@@ -156,6 +166,7 @@ def create_app(settings: Settings | None = None, *, mail_events=None, registry=N
         await start_watches(app)
         watching = asyncio.create_task(watch_loop(app, settings.mailwatch_minutes)) if settings.mailwatch_minutes > 0 else None
         await start_evenings(app)
+        await start_chittu(app)
         await start_flow_schedules(app)
         await start_reminders(app)
         await refresh_webhooks(app)

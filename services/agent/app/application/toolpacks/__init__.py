@@ -33,6 +33,12 @@ class PackContext:
     workspace: str | None = None
     #: A runner for an AI job by its name (on that job's own model, else the one chosen last), or None when no model is usable.
     jobs: Callable[[str], Any] | None = None
+    #: Chittu's action items (application/actions.py), who he is acting for, and their token, for the actions pack.
+    actions: Any = None
+    who: Any = None
+    token: str = ""
+    #: Who is named in the history for what the agent does.
+    actor: str = "chittu"
 
 
 class ToolPack(ABC):

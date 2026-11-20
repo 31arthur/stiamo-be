@@ -5,6 +5,7 @@ from app.agents.stories import STORY_AGENT
 from app.agents.team import TEAM
 from app.application.registry import AgentRegistry
 from app.application.toolpacks import PackRegistry
+from app.application.toolpacks.actions import ActionsPack
 from app.application.toolpacks.agenda import AgendaPack
 from app.application.toolpacks.attention import AttentionPack
 from app.application.toolpacks.cases import CasesPack
@@ -18,4 +19,4 @@ AGENTS = [CASE_AGENT, *TEAM, STORY_AGENT]
 
 
 def default_registry() -> AgentRegistry:
-    return AgentRegistry(AGENTS, PackRegistry([CasesPack(), DrivePack(), DecisionsPack(), AgendaPack(), AttentionPack(), ChangesPack(), StoriesPack(), InsightPack()]))
+    return AgentRegistry(AGENTS, PackRegistry([CasesPack(), DrivePack(), DecisionsPack(), AgendaPack(), ActionsPack(), AttentionPack(), ChangesPack(), StoriesPack(), InsightPack()]))
