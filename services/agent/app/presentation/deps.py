@@ -136,7 +136,7 @@ def chittu_run(app: FastAPI, who: Who, which: str):
             try:
                 _, channels = build_services(app, session)
                 token = app.state.tokens.mint(who.user_id, who.email)
-                await (channels.queue_actions.morning if which == "morning" else channels.queue_actions.night)(who, token)
+                await getattr(channels.queue_actions, which)(who, token)
                 await session.commit()
             except Exception:
                 await session.rollback()
@@ -150,9 +150,18 @@ def sync_chittu(app: FastAPI, who: Who, planner: dict | None) -> None:
     from app.application.dayplans import chittu_settings
 
     c, p = chittu_settings(planner), planner_settings(planner)
-    for which, at in (("morning", c["morning"]), ("night", c["night"])):
+    from app.application.dayplans import parse_time
+
+    remind = None
+    if c["remindAfter"]:  # the once-only nudge, a set time after the good morning (so it survives a restart)
+        h, mi = parse_time(c["morning"])
+        m = h * 60 + mi + c["remindAfter"]
+        remind = f"{m // 60 % 24:02d}:{m % 60:02d}"
+    for which, at in (("morning", c["morning"]), ("night", c["night"]), ("remind", remind)):
         key = f"{who.user_id}#chittu-{which}"
-        if c["enabled"]:
+        if at is None:
+            app.state.daily.stop(key)
+        elif c["enabled"]:
             app.state.daily.ensure(key, at, p["timezone"], chittu_run(app, who, which))
         else:
             app.state.daily.stop(key)

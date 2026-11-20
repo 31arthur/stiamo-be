@@ -305,3 +305,30 @@ async def test_chittu_with_nothing_to_bring_says_so_and_does_not_ask_to_start(ri
     await paired(rig)
     await chittu_run(rig.app, WHO, "morning")()
     assert "Nothing needs you today" in rig.telegram.sent[-1][1] and rig.telegram.keyboards[-1] is None
+
+
+async def test_chittu_asks_once_more_if_the_good_morning_is_not_answered_and_never_a_third_time_and_his_times_can_be_set(rig):
+    from app.presentation.deps import chittu_run
+
+    from .conftest import headers
+    from .test_agent_api import connect
+
+    fill(rig)
+    await connect(rig)
+    await paired(rig)
+    await chittu_run(rig.app, WHO, "morning")()
+    assert len(rig.telegram.sent) == 1
+    await chittu_run(rig.app, WHO, "remind")()
+    assert "Still here whenever you're ready: 6 things." in rig.telegram.sent[-1][1] and len(rig.telegram.sent) == 2
+    await chittu_run(rig.app, WHO, "remind")()
+    assert len(rig.telegram.sent) == 2  # once only
+    # their times, and whether he greets at all, are the owner's to set
+    base = {"enabled": False, "time": "22:00", "timezone": "Asia/Kolkata", "workspaces": ["sb"]}
+    r = await rig.client.put("/v1/agent/day-plans/settings", json={**base, "chittu": {"morning": "05:30", "remindAfter": 0}}, headers=headers())
+    assert r.status_code == 200 and r.json()["settings"]["chittu"] == {"enabled": True, "morning": "05:30", "night": "22:00", "remindAfter": 0}
+    keys = rig.app.state.daily.keys(f"{WHO.user_id}#chittu-")
+    assert sorted(k.rsplit("-", 1)[1] for k in keys) == ["morning", "night"]  # no reminder when it is set to 0
+    r = await rig.client.put("/v1/agent/day-plans/settings", json={**base, "chittu": {"enabled": False}}, headers=headers())
+    assert r.json()["settings"]["chittu"]["enabled"] is False and r.json()["settings"]["chittu"]["morning"] == "05:30"  # what was set before is kept
+    assert rig.app.state.daily.keys(f"{WHO.user_id}#chittu-") == []
+    assert (await rig.client.put("/v1/agent/day-plans/settings", json={**base, "chittu": {"morning": "25:00"}}, headers=headers())).status_code == 422
