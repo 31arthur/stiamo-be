@@ -17,6 +17,16 @@ def _service(request: Request, session: deps.Session) -> DayPlanService:
 Plans = Annotated[DayPlanService, deps.Depends(_service)]
 
 
+class ChittuBody(DomainModel):
+    #: Chittu's good morning and good night. Left out: unchanged.
+    enabled: bool | None = None
+    #: Hours and minutes, like 06:00 and 22:00.
+    morning: Annotated[str | None, Field(min_length=4, max_length=5)] = None
+    night: Annotated[str | None, Field(min_length=4, max_length=5)] = None
+    #: Minutes after the good morning to ask once more if there was no answer (0: never).
+    remind_after: Annotated[int | None, Field(ge=0, le=240)] = None
+
+
 class SettingsBody(DomainModel):
     enabled: bool
     #: Hours and minutes, like 21:00.
@@ -26,6 +36,7 @@ class SettingsBody(DomainModel):
     channels: bool = True
     #: Which workspaces plan their own day each evening (each to its own bot). Left out: as before. Empty: one plan across everything.
     workspaces: Annotated[list[str] | None, Field(max_length=8)] = None
+    chittu: ChittuBody | None = None
 
 
 class GenerateBody(DomainModel):
@@ -45,7 +56,7 @@ async def list_plans(plans: Plans, me: deps.Me, request: Request, workspace: str
 
 @router.put("/settings", summary="Switch the evening plan on or off, and say when and where it goes")
 async def set_settings(body: SettingsBody, plans: Plans, me: deps.Me, request: Request) -> dict[str, Any]:
-    out = await plans.set_settings(me, body.enabled, body.time, body.timezone, body.channels, body.workspaces)
+    out = await plans.set_settings(me, body.enabled, body.time, body.timezone, body.channels, body.workspaces, body.chittu.model_dump(by_alias=True, exclude_none=True) if body.chittu else None)
     deps.sync_evening(request.app, me, out)
     deps.sync_chittu(request.app, me, out)
     return {"settings": out, "schedule": request.app.state.daily.status(me.user_id)}

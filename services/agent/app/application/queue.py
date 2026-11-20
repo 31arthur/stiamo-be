@@ -96,6 +96,20 @@ class QueueService:
         await self._send(who, good_morning(self._owner(who), today, len(entries), first), buttons)
         return {"queueId": row["id"], "count": len(entries)}
 
+    async def remind(self, who: Who, token: str) -> dict[str, Any]:
+        """If the owner has not answered the good morning, ask once more, gently. Never a third time."""
+        q = await self._repo.queue(who.user_id, statuses=["waiting"])
+        if q is None or q["day"] != self._today() or (q.get("shown") or {}).get("reminded"):
+            return {"reminded": False}
+        left = sum(1 for e in q["entries"] if e["state"] == "pending")
+        if not left:
+            return {"reminded": False}
+        q["shown"] = {**(q.get("shown") or {}), "reminded": True}
+        await self._save(who, q)
+        many = "one thing" if left == 1 else f"{left} things"
+        await self._send(who, f"Still here whenever you're ready: {many}.", [[{"text": "▶️ Start", "callback_data": f"aq:s:{_tag(q['id'])}:0"}, {"text": "⏰ Later", "callback_data": f"aq:l:{_tag(q['id'])}:0"}]])
+        return {"reminded": True}
+
     async def night(self, who: Who, token: str) -> dict[str, Any]:
         """Good night: what got done today, what moved, what is still open, and what tomorrow opens with. Closes the queue."""
         today = self._today()

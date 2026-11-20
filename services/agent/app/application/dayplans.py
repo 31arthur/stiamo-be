@@ -46,13 +46,14 @@ def planner_settings(raw: dict[str, Any] | None) -> dict[str, Any]:
     p = raw or {}
     chosen = p.get("workspaces")
     workspaces = [w for w in (chosen if isinstance(chosen, list) else PLAN_WORKSPACES) if w in WORKSPACES]
-    return {"enabled": bool(p.get("enabled")), "time": p.get("time") or DEFAULT_TIME, "timezone": p.get("timezone") or DEFAULT_ZONE, "channels": p.get("channels", True) is not False, "workspaces": workspaces}
+    return {"enabled": bool(p.get("enabled")), "time": p.get("time") or DEFAULT_TIME, "timezone": p.get("timezone") or DEFAULT_ZONE, "channels": p.get("channels", True) is not False, "workspaces": workspaces, "chittu": chittu_settings(p)}
 
 
 def chittu_settings(raw: dict[str, Any] | None) -> dict[str, Any]:
     """When Chittu says good morning and good night, and whether he does. On unless switched off: the day opens at six and closes at ten."""
     c = (raw or {}).get("chittu") or {}
-    return {"enabled": c.get("enabled", True) is not False, "morning": c.get("morning") or "06:00", "night": c.get("night") or DEFAULT_TIME}
+    after = c.get("remindAfter", 45)
+    return {"enabled": c.get("enabled", True) is not False, "morning": c.get("morning") or "06:00", "night": c.get("night") or DEFAULT_TIME, "remindAfter": after if isinstance(after, int) and 0 <= after <= 240 else 45}
 
 
 def plan_buttons(plan_id: str) -> list[list[dict[str, str]]]:
@@ -142,14 +143,21 @@ class DayPlanService:
         s = await self._settings.get(who.user_id)
         return planner_settings(s.planner if s else None)
 
-    async def set_settings(self, who: Who, enabled: bool, at: str, timezone: str, channels: bool, workspaces: list[str] | None = None) -> dict[str, Any]:
+    async def set_settings(self, who: Who, enabled: bool, at: str, timezone: str, channels: bool, workspaces: list[str] | None = None, chittu: dict[str, Any] | None = None) -> dict[str, Any]:
         parse_time(at)
         zone_of(timezone)
+        if chittu is not None:
+            for k in ("morning", "night"):
+                if chittu.get(k) is not None:
+                    parse_time(chittu[k])
+            if chittu.get("remindAfter") is not None and not 0 <= int(chittu["remindAfter"]) <= 240:
+                raise ValidationFailed("Remind after is between 0 (never) and 240 minutes.")
         if workspaces is not None and any(w not in WORKSPACES for w in workspaces):
             raise ValidationFailed("That isn't one of your workspaces.")
         s = await self._settings.get(who.user_id) or UserSettings(who.user_id, who.email)
         keep = planner_settings(s.planner)["workspaces"] if workspaces is None else list(dict.fromkeys(workspaces))
-        s.planner = {"enabled": enabled, "time": at, "timezone": timezone, "channels": channels, "workspaces": keep, **({"chittu": s.planner["chittu"]} if s.planner and "chittu" in s.planner else {})}
+        kept = {**((s.planner or {}).get("chittu") or {}), **{k: v for k, v in (chittu or {}).items() if v is not None}}
+        s.planner = {"enabled": enabled, "time": at, "timezone": timezone, "channels": channels, "workspaces": keep, **({"chittu": kept} if kept else {})}
         await self._settings.save(s)
         return planner_settings(s.planner)
 
