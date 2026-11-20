@@ -31,6 +31,7 @@ WORDS = {
     "resume": ("continue", "resume", "go on", "keep going", "carry on", "where were we", "start", "go", "next one", "show me"),
     "left": ("left", "how many left", "how many more", "remaining", "what's left", "whats left", "how many"),
     "undo": ("undo", "undo that", "put it back", "oops", "that was a mistake"),
+    "trash": ("trash", "trash it", "delete", "delete it", "bin", "bin it", "bin this", "trash this")
 }
 
 

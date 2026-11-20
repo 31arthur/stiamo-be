@@ -371,3 +371,32 @@ async def test_what_chittu_calls_the_owner_is_set_once_and_used_everywhere(rig):
     assert "Arjun Kumar" in system
     r = await rig.client.put("/v1/agent/day-plans/settings", json={"enabled": False, "time": "22:00", "timezone": "Asia/Kolkata", "workspaces": ["sb"], "chittu": {"name": ""}}, headers=headers())
     assert r.json()["settings"]["chittu"]["name"] == ""  # back to the email's
+
+
+# --- the mail bot ------------------------------------------------------------------------------------------------------------------------
+
+
+async def test_the_mail_bot_can_say_whats_in_the_inbox_walks_it_one_message_at_a_time_and_trash_goes_to_the_real_mailbox(rig):
+    from .test_leaks import connect_bot, tap
+
+    fill(rig)
+    await connect(rig)
+    await choose(rig, agent=PLANNER)
+    rig.data.accounts = [{"id": "acc1", "workspace": "sb", "label": "arjun@sb.example.com", "address": "arjun@sb.example.com"}]
+    bot = await connect_bot(rig, "777:mailbot", 701, agent="cases", workspace="sb", role="mail")  # (it was set to the case agent: the mail bot answers as Chittu anyway)
+    rig.telegram.sent.clear()
+    rig.telegram.keyboards.clear()
+    secret = next(sec for url, sec in reversed(rig.telegram.webhooks) if bot["id"] in url)
+    rig.script += [ChatResult("", [ToolCall("m1", "walk_mail", {"max": 3, "days": 60})]), ChatResult("Here they are, one at a time.")]
+    await send(rig, bot, "What are my current emails ?", chat=701, update=2, secret=secret)
+    texts = [t for _, t in rig.telegram.sent]
+    assert texts[0].startswith("Your inbox: 3 things. One at a time.") and texts[1].startswith("1/3 · ✉️ ") and "From " in texts[1]
+    assert "I don't have access" not in " ".join(texts) and texts[-1] == "Here they are, one at a time."
+    board = [b for kb in rig.telegram.keyboards if kb for row in kb for b in row]
+    assert [b["text"] for b in board][:5] == ["✅ Keep", "🗑 Trash", "📖 Read", "⏭ Next", "⏹ Stop"]
+    trash = next(b for b in board if b["text"] == "🗑 Trash")
+    await tap(rig, bot, 701, trash["callback_data"], 3)
+    assert rig.data.trashed == [4] or len(rig.data.trashed) == 1  # the newest message, moved to Trash in the real mailbox
+    assert rig.telegram.edits[-1][2].startswith("🗑 Moved to Trash.") and "2/3 · ✉️ " in rig.telegram.edits[-1][2]
+    await send(rig, bot, "next", chat=701, update=4, secret=secret)
+    assert rig.telegram.sent[-1][1].startswith("⏭ Next.") and "3/3 · ✉️ " in rig.telegram.sent[-1][1]

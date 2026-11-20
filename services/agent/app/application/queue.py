@@ -29,6 +29,7 @@ log = logging.getLogger(__name__)
 Send = Callable[..., Awaitable[int]]  # (who, text, buttons, channel_id=None): to the bot named, else to the general bot
 Reply = "str | tuple[str, list[list[dict[str, str]]] | None]"
 FIXED_KINDS = ("hearing", "meeting", "event")
+MAX_MAIL = 30
 OPEN = ["waiting", "active", "paused"]
 
 
@@ -51,6 +52,11 @@ def _buttons(kind: str, fixed: bool, tag: str, index: int, *, at_limit: bool = F
     if undo is not None:
         rows.append([{"text": "↩️ Undo the last one", "callback_data": d("u", undo)}])
     return rows
+
+
+def _mail_buttons(tag: str, index: int) -> list[list[dict[str, str]]]:
+    d = lambda action: f"aq:{action}:{tag}:{index}"  # noqa: E731
+    return [[{"text": "✅ Keep", "callback_data": d("d")}, {"text": "🗑 Trash", "callback_data": d("z")}], [{"text": "📖 Read", "callback_data": d("r")}, {"text": "⏭ Next", "callback_data": d("k")}], [{"text": "⏹ Stop", "callback_data": d("x")}]]
 
 
 def _plan_buttons(tag: str, index: int) -> list[list[dict[str, str]]]:
@@ -252,7 +258,7 @@ class QueueService:
     def _revalidate(q: dict[str, Any], loaded: Any) -> None:
         """Entries whose item was settled somewhere else, or deleted, since the list was made are gone: the list never shows what is not real."""
         for e in q["entries"]:
-            if e["state"] in (PENDING, SHOWN):
+            if e["state"] in (PENDING, SHOWN) and not e.get("mail"):  # (a message of the inbox is not an action item)
                 it = loaded.get(e["ref"])
                 if it is None or it.status != "open":
                     e["state"] = GONE
@@ -274,8 +280,8 @@ class QueueService:
             bits = [f"{n} {w}" for w, n in (("done", left_counts[DONE]), ("moved", left_counts[MOVED]), ("skipped", left_counts[SKIPPED]), ("snoozed", left_counts["snoozed"])) if n]
             return (f"{ack}\n\n✅ That's everything on the list" + (f" ({', '.join(bits)})." if bits else ".")).strip(), None
         e = q["entries"][index]
-        it = loaded.get(e["ref"])
-        assert it is not None
+        it = loaded.get(e["ref"]) if not e.get("mail") else None
+        assert it is not None or e.get("mail")
         if front is None and sitting >= SITTING:
             await self._save(who, q)
             left = counts(q["entries"])["left"]
@@ -283,12 +289,17 @@ class QueueService:
         if front is None:
             e["state"], q["cursor"] = SHOWN, index
             q["shown"] = {**(q.get("shown") or {}), "sitting": sitting + 1}
-            await self._actions.note(who, e["ref"], "queued", "chittu", it.title, "brought to the owner on Telegram")
+            if it is not None:
+                await self._actions.note(who, e["ref"], "queued", "chittu", it.title, "brought to the owner on Telegram")
         q["status"] = "active"
         last = (q.get("shown") or {}).get("last")
         undo = last if isinstance(last, int) and 0 <= last < len(q["entries"]) and q["entries"][last]["state"] in (DONE, MOVED, SKIPPED) and q["entries"][last].get("cs") and last != index else None
         await self._save(who, q)
         pos, total = position(q["entries"], index)
+        if e.get("mail"):  # a message of the inbox: who, what, when, the start of it
+            m = e["mail"]
+            body = f"{pos}/{total} · ✉️ {m.get('subject') or '(no subject)'}\nFrom {m.get('from') or m.get('fromAddress') or 'unknown'}" + (f" · {m['date'][:10]}" if m.get("date") else "") + ("" if m.get("seen") else " · unread") + (f"\n{m['snippet']}" if m.get("snippet") else "")
+            return f"{ack}\n\n{body}".strip(), _mail_buttons(_tag(q["id"]), index)
         if e.get("plan"):  # a block of a plan being looked at: when it would be, and what the owner can do about it
             p = e["plan"]
             body = f"{pos}/{total} · {EMOJI.get(it.kind, '•')} {it.title}\n🕐 {clock(p['start'])}–{clock(p['start'] + p['duration'])}" + (f" · {it.contact}" if it.contact else "") + (f"\n💬 {e['note']}" if e.get("note") else "")
@@ -300,7 +311,9 @@ class QueueService:
         e = q["entries"][index]
         ref = e["ref"]
         try:
-            if e.get("plan"):
+            if e.get("mail"):
+                ack = await self._settle_mail(token, e, action)
+            elif e.get("plan"):
                 ack = await self._settle_block(who, token, q, e, action)
             elif e.get("review"):  # only looked at: skipping is all there is
                 ack, e["state"] = "⏭ Next.", SKIPPED
@@ -366,8 +379,12 @@ class QueueService:
         e = q["entries"][index]
         if e["state"] != SHOWN:
             return "That one is already settled."  # an old button, or a second tap
-        if action not in ("d", "t", "k", "m", "p"):
+        if action not in ("d", "t", "k", "m", "p", "z", "r"):
             return "I don't know that button."
+        if action in ("z", "r") and not e.get("mail"):
+            return "That one is not a mail."
+        if action == "r":  # read more: the text of the message, then the same message again (nothing is settled)
+            return await self._show(who, token, q, await self._read_mail(token, e))
         if action in ("m", "p") and not e.get("plan"):
             return "That one can't be moved here."
         ack = await self._settle(who, token, q, index, action)
@@ -433,6 +450,38 @@ class QueueService:
         text = f"That's all of them. Book the {out['count']} you kept on {day_label(day)}?" + (f" ({dropped} dropped.)" if dropped else "")
         return f"{ack}\n\n{text}".strip(), [[{"text": "✅ Book them", "callback_data": f"ac:a:{out['changesetId']}"}, {"text": "✖️ Not now", "callback_data": f"ac:x:{out['changesetId']}"}]]
 
+    # --- the inbox, one message at a time ---------------------------------------------------------------------------------------------------
+
+    async def review_mail(self, who: Who, token: str, rows: list[dict[str, Any]], *, title: str = "", channel_id: str | None = None) -> dict[str, Any]:
+        """Messages of the inbox, put in front of the owner one at a time (1/10 · subject, from, the start of it), each kept, moved to the real mailbox's Trash, or
+        read in full by a button. Not action items: just the mail as it is."""
+        entries = [{**entry(f"inbox:{r['account']}:{r['uid']}"), "mail": {k: r.get(k) for k in ("account", "uid", "from", "fromAddress", "subject", "date", "snippet", "seen")} | {"folder": "INBOX"}} for r in rows[:MAX_MAIL]]
+        if not entries:
+            return {"started": False, "count": 0}
+        return await self.set(who, token, Spec((title or "Your inbox")[:60], "replace", entries), "mail", channel_id)
+
+    async def _settle_mail(self, token: str, e: dict[str, Any], action: str) -> str:
+        """Keep a message (it stays in the inbox), skip it, or move it to the Trash folder of the real mailbox (never deleted)."""
+        m = e["mail"]
+        if action == "z":
+            moved = await self._actions._data(token).mail_trash(str(m["account"]), str(m.get("folder") or "INBOX"), [int(m["uid"])])
+            e["state"] = MOVED
+            return "🗑 Moved to Trash." if moved else "🗑 It was already gone."
+        if action == "d":
+            e["state"] = DONE
+            return "✅ Kept in the inbox."
+        e["state"] = SKIPPED
+        return "⏭ Next."
+
+    async def _read_mail(self, token: str, e: dict[str, Any]) -> str:
+        m = e["mail"]
+        try:
+            full = await self._actions._data(token).mail_message(str(m["account"]), str(m.get("folder") or "INBOX"), int(m["uid"]))
+        except Exception:  # noqa: BLE001
+            return "⚠️ I couldn't open that one."
+        body = " ".join(str(full.get("text") or "").split())[:1200]
+        return f"📖 {body or '(nothing to read)'}"
+
     # --- buttons under a previewed change ---------------------------------------------------------------------------------------------------
 
     async def change_press(self, who: Who, token: str, action: str, change_id: str, channel_id: str | None = None) -> Any:
@@ -489,7 +538,12 @@ class QueueService:
             return None
         if front is None or q["status"] != "active":
             return None  # nothing is in front of the owner (or the list is paused): "done" means something else, and Chittu can work out what
-        if word == "tomorrow" and q["entries"][front].get("plan"):
+        if word == "trash":
+            if not q["entries"][front].get("mail"):
+                return None
+            ack = await self._settle(who, token, q, front, "z")
+            return await self._show(who, token, q, ack)
+        if word == "tomorrow" and (q["entries"][front].get("plan") or q["entries"][front].get("mail")):
             return None  # a plan's block is kept or dropped, not moved to another day
         ack = await self._settle(who, token, q, front, {"skip": "k", "done": "d", "tomorrow": "t"}[word])
         return await self._show(who, token, q, ack)
@@ -516,7 +570,7 @@ class QueueService:
         loaded = await self._actions.load(who, token)
         self._revalidate(q, loaded)
         c = counts(q["entries"])
-        rows = [{"ref": e["ref"], "state": e["state"], "title": (loaded.get(e["ref"]).title if loaded.get(e["ref"]) else None), "note": e.get("note")} for e in q["entries"]]  # type: ignore[union-attr]
+        rows = [{"ref": e["ref"], "state": e["state"], "title": ((e.get("mail") or {}).get("subject") if e.get("mail") else (loaded.get(e["ref"]).title if loaded.get(e["ref"]) else None)), "note": e.get("note")} for e in q["entries"]]  # type: ignore[union-attr]
         return {"queue": {"id": q["id"], "title": q.get("title") or "", "source": q.get("source") or "ask", "status": q["status"], "counts": c, "entries": rows, "createdAt": q["createdAt"].isoformat() if q.get("createdAt") else None}}
 
 
