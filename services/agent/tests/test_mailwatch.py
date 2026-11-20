@@ -29,7 +29,7 @@ async def agents(rig):
 def test_a_watch_is_made_for_each_kind_of_work_and_knows_which_workspace_it_is_for():
     cfg = watch_config("sb", ["b", "a"])
     assert cfg["source"] == {"kind": "mail", "accountIds": ["a", "b"], "folder": "INBOX"} and cfg["listen"] is True and cfg["notify"] == {"telegram": True, "call": False}
-    assert [(lb["name"], lb["route"]) for lb in cfg["labels"]] == [("needed", "alert"), ("discarded", "none")] and "legal and advocacy" in cfg["prompt"]
+    assert [(lb["name"], lb["route"]) for lb in cfg["labels"]] == [("now", "alert"), ("digest", "attention"), ("drop", "none")] and "legal and advocacy" in cfg["prompt"]
     assert set(FOCUS) == {"sb", "fsa", "media", "personal"} and all(watch_config(w, ["a"])["prompt"] for w in FOCUS)
     assert watch_id("sb", "abcdef1234567") == "watch-sb-abcdef12" and workspace_of("watch-sb-abcdef12") == "sb" and workspace_of("wf-123") is None and workspace_of("watch-nope-1") is None
 
@@ -104,7 +104,7 @@ async def test_an_urgent_email_reaches_the_phone_with_nothing_built_by_hand(rig)
     await choose(rig, agent=f"/v1/agent/agents/{wid}")
     general = await telegram(rig)
     await send(rig, general, f"/start {general['pairingCode']}", chat=555, update=1)
-    rig.script += [answer("needed"), ChatResult(json.dumps({"summary": "A client needs the details by Friday.", "priority": "high", "action": "Send details", "due": None, "event": None, "replies": [{"label": "Will do", "intent": "Say the details follow today."}]}))]
+    rig.script += [answer("now"), ChatResult(json.dumps({"summary": "A client needs the details by Friday.", "priority": "high", "action": "Send details", "due": None, "event": None, "replies": [{"label": "Will do", "intent": "Say the details follow today."}]}))]
     me = next(x for x in await agents(rig) if x["id"] == wid)  # the fake mail is old: let the watch look further back than a day
     cfg = {**me["config"], "filters": {**me["config"]["filters"], "sinceDays": 365, "contains": "Partnership"}}
     await rig.client.put(f"{WF}/{wid}", json={"name": me["name"], "description": me["description"], "config": cfg}, headers=headers())
@@ -114,16 +114,17 @@ async def test_an_urgent_email_reaches_the_phone_with_nothing_built_by_hand(rig)
     assert any("Will do" in b.get("text", "") for b in last_keyboard(rig)) and alert_id_of(rig)
 
 
-def test_every_watch_is_two_labels_decided_by_the_decision_model_with_rules_before_it():
+def test_every_watch_has_three_outcomes_decided_by_the_decision_model_with_rules_before_it():
     for ws in FOCUS:
         cfg = watch_config(ws, ["a"])
-        assert cfg["decider"] == "jev" and [(x["name"], x["route"]) for x in cfg["labels"]] == [("needed", "alert"), ("discarded", "none")]
+        assert cfg["decider"] == "jev" and [(x["name"], x["route"]) for x in cfg["labels"]] == [("now", "alert"), ("digest", "attention"), ("drop", "none")]
         assert all(h in cfg["prompt"] for h in ("## Persona", "## Tasks", "## Context", "## Output", "## Guardrails"))
         assert cfg["rules"]["discardPatterns"] and cfg["rules"]["discardTextPatterns"] and cfg["rules"]["noteCorrespondents"] is True
     sb, personal = watch_config("sb", ["a"]), watch_config("personal", ["a"])
     for word in ("BWI", "MFA", "United Nations", "government", "RTI", "reply"):
         assert word in sb["prompt"]
-    assert "do business" in personal["prompt"] and "OTP" not in sb["prompt"] and "One-time passwords" in personal["prompt"]
+    assert "do business" in personal["prompt"] and "one-time passwords" in personal["prompt"]
+    assert all(len(watch_config(w, ["a"])["prompt"].split()) >= 2000 for w in FOCUS)  # every deciding prompt is a full brief, not a sentence
     assert len(sb["rules"]["discardPatterns"]) == 4 and len(personal["rules"]["discardPatterns"]) == 5  # only personal drops "order copy"
     assert sb["rules"]["priorityDomains"] and not personal["rules"]["priorityDomains"]
 
@@ -131,7 +132,7 @@ def test_every_watch_is_two_labels_decided_by_the_decision_model_with_rules_befo
 def test_a_watch_still_on_an_earlier_wording_is_upgraded_and_an_edited_one_is_left_alone():
     old = {**watch_config("sb", ["a"]), "prompt": _V1["sb"], "focusVersion": 1, "decider": "model"}
     new = upgraded("sb", old)
-    assert new is not None and "BWI" in new["prompt"] and new["focusVersion"] == 3 and new["decider"] == "jev" and new["source"] == old["source"]
+    assert new is not None and "BWI" in new["prompt"] and new["focusVersion"] == 4 and new["decider"] == "jev" and new["source"] == old["source"]
     assert upgraded("sb", new) is None
     assert upgraded("sb", {**old, "prompt": "My own words."}) is None
     assert upgraded("sb", {**old, "prompt": "You watch the inbox of S&B Consultants, a legal and advocacy practice. Only a few kinds of mail are worth interrupting the owner for, and nothing else is. Notify (urgent) ONLY for: (1) mail from or about BWI x"}) is not None
@@ -155,3 +156,22 @@ def test_the_rules_drop_codes_before_any_model_and_never_drop_a_priority_sender_
     assert "priority list" in told.text and "Facts from the system" in told.text
     known = with_context(mail("Re: quote", "lead@client.io"), personal, {"lead@client.io"})
     assert "written to this sender before" in known.text and with_context(mail("Hi", "z@z.io"), personal, set()).text == mail("Hi", "z@z.io").text
+
+
+async def test_the_audit_shows_what_each_watch_dropped_so_a_wrong_drop_can_be_seen(rig):
+    from app.application.ports import LedgerEntry
+    from datetime import UTC, datetime
+
+    await watches(rig)
+    wid = watch_id("sb", "u1")
+    now = datetime.now(UTC)
+    async with rig.app.state.session_factory() as session:
+        from app.infrastructure.db.workflows import SqlWorkflowRepository
+
+        repo = SqlWorkflowRepository(session)
+        mk = lambda i, label, status, reason="": LedgerEntry(f"e{i}", wid, "u1", f"acc1:1:{i}", f"Mail {i}", "", label, 0.9, reason, status, "r1", 1, now)  # noqa: E731
+        await repo.record([mk(1, "now", "queued"), mk(2, "digest", "queued"), mk(3, "drop", "kept", "OTP mail"), mk(4, None, "protected", "Kept: a rule dropped it: one-time code or login mail")])
+        await session.commit()
+    out = (await rig.client.get(f"{MW}/audit", headers=headers())).json()["workspaces"][0]
+    assert out["workspace"] == "sb" and (out["now"], out["digest"], out["droppedByModel"], out["droppedByRule"]) == (1, 1, 1, 1)
+    assert {x["by"] for x in out["samples"]} == {"rule", "model"} and "1 dropped by the model" in out["line"]

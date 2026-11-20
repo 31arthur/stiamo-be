@@ -91,10 +91,14 @@ class SummaryOut(DomainModel):
     seen: bool
     flagged: bool
     has_attachments: bool
+    in_reply_to: str = ""
+    references: str = ""
+    to: list[str] = []
+    cc: list[str] = []
 
     @classmethod
     def of(cls, m: d.MessageSummary) -> "SummaryOut":
-        return cls(uid=m.uid, subject=m.subject, sender=PersonOut.of(m.sender), date=_when(m.date), snippet=m.snippet, seen=m.seen, flagged=m.flagged, has_attachments=m.has_attachments)
+        return cls(uid=m.uid, subject=m.subject, sender=PersonOut.of(m.sender), date=_when(m.date), snippet=m.snippet, seen=m.seen, flagged=m.flagged, has_attachments=m.has_attachments, in_reply_to=m.in_reply_to, references=m.references, to=list(m.to), cc=list(m.cc))
 
 
 class PageOut(DomainModel):

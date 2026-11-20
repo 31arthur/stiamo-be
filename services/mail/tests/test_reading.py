@@ -117,3 +117,15 @@ async def test_uids_and_summaries_let_a_tool_work_through_a_range(client):
     assert (await client.get(f"/v1/mail/accounts/{a}/uids", headers=other)).status_code == 404
     assert (await client.post(f"/v1/mail/accounts/{a}/messages/summaries", json={"uids": [1]}, headers=other)).status_code == 404
     assert (await client.post(f"/v1/mail/accounts/{a}/messages/summaries", json={"uids": list(range(1, 102))}, headers=headers())).status_code == 422
+
+
+async def test_the_ids_of_what_was_sent_are_for_the_owner_only_and_a_list_row_carries_the_reply_headers(client, mail):
+    from app.infrastructure.parse import message_ids, summary
+
+    a = await account(client)
+    assert (await client.get(f"/v1/mail/accounts/{a}/sent-ids", headers=headers())).json() == ["sent-1@sb.example.com", "sent-2@sb.example.com"]
+    assert (await client.get(f"/v1/mail/accounts/{a}/sent-ids", headers=headers("u2", "other@example.com"))).status_code == 404
+    raw = b"From: Ada <ada@example.com>\r\nTo: Me <me@sb.example.com>\r\nCc: Boss <boss@x.org>\r\nSubject: Re: quote\r\nIn-Reply-To: <Sent-1@sb.example.com>\r\nReferences: <a@b> <Sent-1@sb.example.com>\r\n\r\nThanks"
+    row = summary(5, raw, ())
+    assert message_ids(row.in_reply_to) == ["sent-1@sb.example.com"] and message_ids(row.references) == ["a@b", "sent-1@sb.example.com"]
+    assert row.to == ("me@sb.example.com",) and row.cc == ("boss@x.org",)

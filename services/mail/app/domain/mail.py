@@ -67,6 +67,12 @@ class MessageSummary:
     seen: bool
     flagged: bool
     has_attachments: bool
+    #: Message-IDs from the headers, so a reply can be matched to the mail it answers.
+    in_reply_to: str = ""
+    references: str = ""
+    #: Addresses it was sent to and copied to (lower case), so "only copied" can be told from "written to the owner".
+    to: tuple[str, ...] = ()
+    cc: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

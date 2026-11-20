@@ -29,3 +29,8 @@ async def watches(watch: Watch, me: deps.Me, token: deps.Token) -> dict[str, Any
 async def set_enabled(workspace: str, body: EnabledBody, watch: Watch, me: deps.Me, token: deps.Token) -> dict[str, Any]:
     await watch.set_enabled(me, workspace, body.enabled)
     return await watch.view(me, token)
+
+
+@router.get("/audit", summary="What each watch did lately: how many mails it sent to the phone or the evening list, and how many it dropped (with samples)")
+async def audit(watch: Watch, me: deps.Me, hours: int = 24) -> dict[str, Any]:
+    return await watch.audit(me, hours)

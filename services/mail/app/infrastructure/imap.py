@@ -169,6 +169,21 @@ class ImapGateway(MailGateway):
                                 found.add(f"{mailbox}@{host}".lower())
             return sorted(found)
 
+    def sent_ids(self, creds: Credentials) -> list[str]:
+        with self._open(creds) as c:
+            sent = next((name for flags, _d, name in c.list_folders() if b"\\sent" in {f.lower() for f in flags}), None)
+            if sent is None:
+                sent = next((name for _f, _d, name in c.list_folders() if name.lower().rsplit("/", 1)[-1] in ("sent", "sent items", "sent mail")), None)
+            if sent is None:
+                return []
+            _select(c, sent, readonly=True)
+            uids = sorted(c.search(["ALL"]))[-_SENT_LOOKBACK:]
+            found: set[str] = set()
+            for start in range(0, len(uids), 200):
+                for data in c.fetch(uids[start : start + 200], ["BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)]"]).values():
+                    found.update(parse.message_ids(_raw(data).decode("utf-8", "replace")))
+            return sorted(found)
+
     def move_to_trash(self, creds: Credentials, folder: str, uids: list[int]) -> int:
         """Copies to Trash first and only then removes from the folder (imapclient's move), so nothing is ever lost."""
         if not uids:

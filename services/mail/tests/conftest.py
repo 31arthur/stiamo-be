@@ -88,6 +88,9 @@ class FakeMail(MailGateway):
     def correspondents(self, creds):
         return ["partner@fsa.example.com", "ada@example.com"]
 
+    def sent_ids(self, creds):
+        return ["sent-1@sb.example.com", "sent-2@sb.example.com"]
+
     def move_to_trash(self, creds, folder, uids):
         if folder == "Nope":
             raise MailError("That folder isn't on the server.")

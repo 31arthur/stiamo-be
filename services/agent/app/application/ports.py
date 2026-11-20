@@ -66,6 +66,10 @@ class DataGateway(ABC):
     @abstractmethod
     async def mail_correspondents(self, account_id: str) -> list[str]: ...
 
+    async def mail_sent_ids(self, account_id: str) -> list[str]:
+        """The Message-IDs of what this mailbox has sent, so a reply can be matched to the mail it answers. Empty when it can't be told."""
+        return []
+
     @abstractmethod
     async def mail_trash(self, account_id: str, folder: str, uids: list[int]) -> int:
         """Moves messages to the mailbox's Trash folder. Never deletes."""

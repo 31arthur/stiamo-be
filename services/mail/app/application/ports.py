@@ -46,6 +46,10 @@ class MailGateway(Protocol):
         """Addresses the person has written to (From their Sent folder), lower case."""
         ...
 
+    def sent_ids(self, creds: Credentials) -> list[str]:
+        """The Message-IDs of what the person has sent (from the Sent folder, newest 5000), lower case without angle brackets."""
+        ...
+
     def move_to_trash(self, creds: Credentials, folder: str, uids: list[int]) -> int:
         """Moves messages to the Trash folder (never deletes them). Returns how many were moved."""
         ...
