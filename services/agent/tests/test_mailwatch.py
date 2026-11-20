@@ -1,7 +1,7 @@
 import json
 
 from app.domain.llm import ChatResult
-from app.domain.mailwatch import FOCUS, watch_config, watch_id, workspace_of
+from app.domain.mailwatch import FOCUS, LEGACY_PROMPTS, upgraded, watch_config, watch_id, workspace_of
 from app.main import watch_everyone
 
 from .conftest import headers
@@ -112,3 +112,21 @@ async def test_an_urgent_email_reaches_the_phone_with_nothing_built_by_hand(rig)
     alerts = [t for c, t in rig.telegram.sent if c == 555 and "URGENT" in t]
     assert alerts and "S&amp;B" in alerts[0]
     assert any("Will do" in b.get("text", "") for b in last_keyboard(rig)) and alert_id_of(rig)
+
+
+def test_sb_and_personal_only_notify_for_what_matters_and_never_for_codes_or_statements():
+    sb, personal = watch_config("sb", ["a"]), watch_config("personal", ["a"])
+    for word in ("BWI", "Migrants Forum in Asia", "United Nations", "government", "RTI", "reply"):
+        assert word in sb["prompt"]
+    assert "OTP" in sb["prompt"] and "OTP" in personal["prompt"] and "statements" in personal["prompt"] and "order" in personal["prompt"]
+    assert [lb["name"] for lb in personal["labels"]] == ["urgent", "routine"] and [lb["route"] for lb in personal["labels"]] == ["alert", "none"]
+    assert "do business" in personal["prompt"] and sb["focusVersion"] == 2
+
+
+def test_a_watch_still_on_the_first_wording_is_upgraded_and_an_edited_one_is_left_alone():
+    old = {**watch_config("sb", ["a"]), "prompt": LEGACY_PROMPTS["sb"], "focusVersion": 1}
+    new = upgraded("sb", old)
+    assert new is not None and "BWI" in new["prompt"] and new["focusVersion"] == 2 and new["source"] == old["source"]
+    assert upgraded("sb", new) is None
+    assert upgraded("sb", {**old, "prompt": "My own words."}) is None
+    assert upgraded("fsa", {**old, "prompt": LEGACY_PROMPTS["sb"]}) is None
