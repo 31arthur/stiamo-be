@@ -151,5 +151,18 @@ TEMPLATES: list[dict[str, Any]] = [
 ]
 
 
+def _priority_templates() -> list[dict[str, Any]]:
+    from app.domain.flow_priority import priority_flow
+
+    base = "Several small stages, each one a node you can change or swap: cheap rules that never reach a model (known senders in, codes, statements and order mail out), a sorter, specialist readers for each kind of mail, and a critic that decides whether the phone really should buzz."
+    return [
+        {"id": "priority-mail-sb", "name": "Priority mail · S&B", "description": f"Tells you only about BWI, MFA, the UN and its bodies, government agencies, RTI replies and replies to your own mail. {base}", "packs": ["agenda"], "system": None, "suggestions": [], "flow": priority_flow("sb")},
+        {"id": "priority-mail-personal", "name": "Priority mail · personal", "description": f"Tells you only about replies to your mail and people who want to do business with you; never codes, logins, statements or orders. {base}", "packs": ["agenda"], "system": None, "suggestions": [], "flow": priority_flow("personal")},
+    ]
+
+
+TEMPLATES.extend(_priority_templates())
+
+
 def template(template_id: str) -> dict[str, Any] | None:
     return next((t for t in TEMPLATES if t["id"] == template_id), None)
