@@ -144,6 +144,8 @@ class ChannelService:
         self.queue_actions: Any = None
         #: Rapport plans (application/rapport.py): buttons on their messages, and answers from the people they are about.
         self.rapport_actions: Any = None
+        #: The headlines desk (application/headlines.py): the buttons under a news message.
+        self.headline_actions: Any = None
         #: What the buttons under a question about time inside an event do: an AvailabilityService.
         self.availability_actions: Any = None
         self.editor_actions: Any = None
@@ -744,6 +746,10 @@ class ChannelService:
             if action not in ("w",):
                 await self._strip(token, chat, message)
             return await self.rapport_actions.press(who, access, action, rest)
+        if kind == "nw" and self.headline_actions is not None:  # headlines: the next three, or enough (the article buttons are links and stay)
+            if action == "x":
+                await self._strip(token, chat, message)
+            return await self.headline_actions.press(who, action, rest)
         if kind == "ac" and self.queue_actions is not None:  # a previewed change: apply, leave, look at, undo
             if action != "w":
                 await self._strip(token, chat, message)

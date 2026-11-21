@@ -209,6 +209,8 @@ class AgentService:
     queue: Any = None
     #: Rapport plans (application/rapport.py), set by the app once the channels exist.
     rapport: Any = None
+    #: Headlines, three at a time (application/headlines.py), set by the app once the channels exist.
+    headlines: Any = None
     #: Asks a question with buttons on the phone: (who, workspace, text, buttons) -> how many chats it reached. For an Ask me node.
     ask_phone: Any = None
     #: Sends text with one named Telegram bot for a Telegram node: (who, workspace, channel id, chat id or None, text) -> how many chats it reached.
@@ -492,7 +494,7 @@ class AgentService:
             data = ScopedData(data, scope)  # a workspace's assistant sees that workspace's data only
         ctx = PackContext(data, today, decisions, decision.get("modelId") or DECISION_MODELS[0]["id"], lambda: self._waiting(who, scope), self._proposer(who, agent.id, channel_id), channel != "the evening plan", scope,
                           jobs=self.job_runners(s), actions=self.actions, who=who, token=token, actor="chittu" if agent.id == "daily-planner" else agent.id, queue=self.queue, channel=channel, channel_id=channel_id,
-                          zone=where_is_the_owner(s.planner, datetime.now(UTC))[0], home=where_is_the_owner(s.planner, datetime.now(UTC))[1], set_zone=lambda zone, back: self.set_zone(who, zone, back), rapport=self.rapport)
+                          zone=where_is_the_owner(s.planner, datetime.now(UTC))[0], home=where_is_the_owner(s.planner, datetime.now(UTC))[1], set_zone=lambda zone, back: self.set_zone(who, zone, back), rapport=self.rapport, headlines=self.headlines)
         tools: list[Tool] = []
         tool_packs: dict[str, str] = {}
         context: dict[str, Any] = {"today": today, "user": saved_name(s.planner) or who.name, "channel": channel}
