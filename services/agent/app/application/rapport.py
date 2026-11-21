@@ -22,7 +22,7 @@ from stiamo_common.errors import NotFound, ValidationFailed
 from app.application.actions import ActionService
 from app.application.services import Who
 from app.domain.llm import Message
-from app.domain.rapport_advisor import ADVISOR_SYSTEM, adjust_for_stage, parse_advice
+from app.domain.rapport_advisor import ADVISOR_SYSTEM, HUMAN, adjust_for_stage, clean_message, parse_advice
 from app.domain.rapport import DAILY_CAP, missing_details, DEFAULT_TIER, PURPOSES, after_reply, after_sent, after_skip, due_now, may_send, schedule, slot_for, summary
 from app.domain.zones import HOME, label, phone_e164, wa_link, zone_from_location, zone_from_phone
 from app.infrastructure.db.rapport import SqlRapportRepository
@@ -31,17 +31,18 @@ log = logging.getLogger(__name__)
 
 Send = Callable[..., Awaitable[int]]
 
-DRAFT_SYSTEM = """You write one WhatsApp message from {owner} to a business contact. {owner_line} Write it so a busy professional is glad to get it.
+DRAFT_SYSTEM = """You write one WhatsApp message from {owner} to a business contact, the way {owner} would type it on their phone. {owner_line}
 
 Rules:
-- At most 60 words. Plain words. At most one emoji, and only if it fits.
-- Start with their name. One purpose only (given below). One easy next step, or none.
+- At most 60 words. Start with their name, in the way people in their world address each other.
+- One purpose only (given below). One easy next step, or none.
 - Never a bare "how are you". Never flattery. Never a claim, number or fact that is not in the context. No links unless given.
-- Match their world: formal and brief for officials; collegial for unions and civil society; efficient for clients.
+- Match their world: brief and respectful for officials; plain and collegial for unions and civil society; efficient for clients and funders.
 - Write in the language set for them (default English). {sign_off}
 - If the context has a persona or notes, they are what the owner knows about this person: write from them, in the style they say, and never repeat what they say was already said.
 - If the stage is not "new", the message is not an introduction: refer to what happened before.
 - If you do not know enough to be specific, be short and honest rather than generic.
+- {human}
 
 Answer with JSON only: {{"message": "<the message>"}}"""
 
@@ -226,9 +227,9 @@ class RapportService:
             "instruction": "Write a different wording from the last message." if redo else "",
         }
         try:
-            reply = await client.chat(model=name, messages=[Message("system", DRAFT_SYSTEM.format(owner=owner or "the owner", owner_line=self._owner_line(owner, full), sign_off=self._sign_off(owner, full))), Message("user", json.dumps({k: v for k, v in context.items() if v not in (None, "", [], {})}, ensure_ascii=False))], tools=[], thinking=thinking)
+            reply = await client.chat(model=name, messages=[Message("system", DRAFT_SYSTEM.format(owner=owner or "the owner", owner_line=self._owner_line(owner, full), sign_off=self._sign_off(owner, full), human=HUMAN)), Message("user", json.dumps({k: v for k, v in context.items() if v not in (None, "", [], {})}, ensure_ascii=False))], tools=[], thinking=thinking)
             text = json.loads(reply.text[reply.text.index("{"): reply.text.rindex("}") + 1])["message"]
-            return str(text).strip()[:900] or fallback
+            return clean_message(str(text).strip()[:900], owner) or fallback
         except Exception:  # noqa: BLE001  a message that cannot be written well is written plainly, not skipped
             log.info("could not write a rapport message with the model")
             return fallback
@@ -398,12 +399,12 @@ class RapportService:
         plan = await self._repo.get(who.user_id, plan_id)
         if plan is None:
             raise NotFound("That plan isn't there.")
-        return self._detail(plan)
+        return {**self._detail(plan), "owner": {"name": await self._owner(who), "fullName": await self._full_name(who)}}
 
     def _detail(self, plan: dict[str, Any]) -> dict[str, Any]:
         sugg = [{**x, "whatsapp": wa_link(plan["phone"], x["message"]) if plan.get("phone") else ""} for x in plan.get("suggestions") or []]
         return {"id": plan["id"], "name": plan["name"], "workspaces": plan.get("workspaces") or [], "zone": plan.get("zone"), "phone": bool(plan.get("phone")), "status": plan["status"], **summary(plan),
-                "persona": plan.get("persona") or {}, "notes": plan.get("notes") or [], "suggestions": sugg, "about": {k: v for k, v in (plan.get("about") or {}).items() if k in ("organisation", "title", "tags")}}
+                "persona": plan.get("persona") or {}, "notes": plan.get("notes") or [], "suggestions": sugg,  "about": {k: v for k, v in (plan.get("about") or {}).items() if k in ("organisation", "title", "tags")}}
 
     async def advise(self, who: Who, plan_id: str, message: str, token: str = "", *, auto_tier: bool = False) -> dict[str, Any]:
         """The owner tells the adviser what happened (messages already sent, calls, things in common) or asks what to do. It answers, adjusts the persona of the contact
@@ -433,7 +434,7 @@ class RapportService:
         user = "<item>" + shown + "</item>" + chr(10) + chr(10) + "<owner>" + text[:4000] + "</owner>"
         try:
             reply = await client.chat(model=name, messages=[Message("system", ADVISOR_SYSTEM), Message("user", user)], tools=[], thinking=thinking)
-            advice = parse_advice(reply.text, plan.get("persona"))
+            advice = parse_advice(reply.text, plan.get("persona"), owner)
         except ValueError as exc:
             raise ValidationFailed(str(exc)) from exc
         except Exception as exc:  # noqa: BLE001
@@ -450,7 +451,7 @@ class RapportService:
         if suggested and auto_tier:
             await self._set_tier(who, plan, suggested)
             suggested = None
-        return {**self._detail(plan), "reply": advice["reply"], "suggestedTier": suggested, "introductionsChanged": changed, "contactUpdated": applied}
+        return {**self._detail(plan), "owner": {"name": owner, "fullName": full}, "reply": advice["reply"], "suggestedTier": suggested, "introductionsChanged": changed, "contactUpdated": applied}
 
     async def _apply_to_contact(self, token: str, plan: dict[str, Any], advice: dict[str, Any]) -> dict[str, Any]:
         """What the adviser could tell from the owner's words goes on the contact too: tags are added to the ones it has, and a place is set when it had none. A person who is

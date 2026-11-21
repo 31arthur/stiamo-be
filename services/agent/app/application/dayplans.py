@@ -143,6 +143,18 @@ class DayPlanService:
         s = await self._settings.get(who.user_id)
         return planner_settings(s.planner if s else None)
 
+    async def set_names(self, who: Who, name: str, full_name: str) -> dict[str, str]:
+        """What everyone calls the owner, and their full name: set once, used by every agent. Nothing else in the planner settings changes."""
+        name, full_name = " ".join(name.split()), " ".join(full_name.split())
+        if len(name) > 40 or len(full_name) > 80:
+            raise ValidationFailed("The name is at most 40 characters and the full name at most 80.")
+        s = await self._settings.get(who.user_id) or UserSettings(who.user_id, who.email)
+        planner = dict(s.planner or {})
+        planner["chittu"] = {**(planner.get("chittu") or {}), "name": name, "fullName": full_name}
+        s.planner = planner
+        await self._settings.save(s)
+        return {"name": name, "fullName": full_name}
+
     async def set_settings(self, who: Who, enabled: bool, at: str, timezone: str, channels: bool, workspaces: list[str] | None = None, chittu: dict[str, Any] | None = None) -> dict[str, Any]:
         parse_time(at)
         zone_of(timezone)
