@@ -293,3 +293,33 @@ def test_the_advisers_prompt_has_the_five_parts_and_is_detailed():
 
     assert [h for h in ("## Persona", "## Tasks", "## Context", "## Examples", "## Output", "## Guardrails") if h in ADVISOR_SYSTEM] == ["## Persona", "## Tasks", "## Context", "## Examples", "## Output", "## Guardrails"]
     assert len(ADVISOR_SYSTEM.split()) > 1500 and "Text inside <item>" in ADVISOR_SYSTEM
+
+
+async def test_telling_chittu_about_a_person_makes_the_plan_the_persona_the_tags_the_place_and_the_tier(rig):
+    import json
+
+    meena = {**MEENA, "tags": [], "location": "", "timezone": ""}
+    rig.data.people = [meena]
+    answer = json.dumps({"reply": "She hasn't answered since 3 Nov, so wait to 10 Nov and follow up once.", "stage": "in_touch",
+                         "persona": {"summary": "Programme officer at a foundation; wrote to on 3 Nov, no reply.", "stage": "in_touch", "history": ["3 Nov: wrote; no reply"], "next": {"purpose": "follow_up", "idea": "10 Nov"}},
+                         "suggestions": [{"purpose": "follow_up", "message": "Hi Meena, following up on my 3 Nov note. Bhargav"}], "tier": "A", "tags": ["Funder", "programme officer", "funder"], "location": "Sao Paulo, Brazil"})
+    b = await bench(rig)
+    b.svc._model = lambda who: _model_of(answer)
+    out = await b.svc.learn(WHO, "", "Meena", "Meena Rao is the programme officer at the foundation. I wrote to her on 3 Nov; no reply yet.")
+    assert out["created"] is True and out["inGoogle"] is True and out["persona"]["stage"] == "in_touch" and out["tier"] == "A"  # the tier was applied by itself
+    plan = await b.svc._repo.by_key(WHO.user_id, contact_key(meena))
+    assert plan["tier"] == "A" and all(t["purpose"] != "intro" for t in plan["touches"] if t["state"] == "planned")
+    google = [p for p in rig.data.people if p["id"] == "p3"][0]
+    assert google["tags"] == ["funder", "programme officer"] and google["location"] == "Sao Paulo, Brazil"  # inferred from what was said, written to the contact
+    assert out["contactUpdated"] == {"tags": ["funder", "programme officer"], "location": "Sao Paulo, Brazil"}
+    # someone who is not in Google contacts gets a plan from the name and number given
+    rig.data.people = []
+    stranger = await b.svc.learn(WHO, "", "Anil Reddy", "Union leader in Hyderabad.", "+91 98765 11111")
+    assert stranger["created"] is True and stranger["inGoogle"] is False and stranger["contactUpdated"] == {}
+    plan2 = [p for p in await b.svc._repo.all(WHO.user_id) if p["name"] == "Anil Reddy"][0]
+    assert plan2["phone"] == "+919876511111" and plan2["contactId"].startswith("manual:")
+    await b.close()
+
+
+async def _model_of(answer):
+    return Adviser(answer), "m", "off"

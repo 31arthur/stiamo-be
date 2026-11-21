@@ -74,6 +74,21 @@ class RapportPack(ToolPack):
             said = await svc.press(who, token, action, f"{plan['id'][:8]}:0")
             return ToolOutput({"name": plan["name"], "done": said if isinstance(said, str) else said[0]})
 
+        async def tell_about_contact(a: dict[str, Any]) -> ToolOutput:
+            from stiamo_common.errors import ValidationFailed
+
+            try:
+                out = await svc.learn(who, token, text(a.get("contact")), text(a.get("details")), text(a.get("phone")))
+            except ValidationFailed as exc:
+                return ToolOutput({"error": str(exc)})
+            first = (out["suggestions"] or [None])[0]
+            if first and ctx.queue is not None and ctx.channel == "Telegram" and first.get("whatsapp"):
+                await ctx.queue._send(who, f"✉️ {out['name']} · {first['purpose'].replace('_', ' ')}\n\n{first['message']}", [[{"text": "💬 Open WhatsApp", "url": first["whatsapp"]}]], ctx.channel_id)
+            return ToolOutput({"name": out["name"], "planCreated": out["created"], "inGoogleContacts": out["inGoogle"], "stage": out["persona"].get("stage"), "persona": out["persona"].get("summary"), "next": out["persona"].get("next"), "tier": out["tier"],
+                               "tagsAdded": (out.get("contactUpdated") or {}).get("tags"), "placeSet": (out.get("contactUpdated") or {}).get("location"), "introductionsChangedToFollowUps": out["introductionsChanged"], "advice": out["reply"],
+                               "messageSent": bool(first and ctx.channel == "Telegram"),
+                               "say": "Tell the owner in two or three short sentences what you understood (the stage), what you set up, and the advice. If a message was sent with an Open WhatsApp button, say it is ready; do not repeat it."})
+
         async def rapport_status(a: dict[str, Any]) -> ToolOutput:
             return ToolOutput(await svc.status(who))
 
@@ -116,6 +131,19 @@ class RapportPack(ToolPack):
                 ), {"type": OBJ, "properties": {"contact": S, "action": {"type": "string", "enum": ["pause", "resume", "replied", "exclude"]}}, "required": ["contact", "action"]}),
                 lambda a: f"{text(a.get('action')).capitalize()} {text(a.get('contact'))}",
                 change_rapport,
+            ),
+            Tool(
+                ToolSpec("tell_about_contact", card(
+                    "The owner tells you about a person: who they are, what has already happened between them (messages sent, calls, favours), what they have in common, how the person likes to be written to. The plan, the persona, the stage, the tier, the tags and the place are worked out from it, and a ready message is offered.",
+                    use=["The owner describes a contact or a conversation with someone: “Meena Rao is the programme officer at the foundation, I wrote to her on 3 Nov and she hasn't replied”, “I met Ramesh at the Doha conference, he prefers Hindi”, “add a rapport plan for Anil, +91 98xxxxxx, he is a union leader in Hyderabad”."],
+                    avoid=["Do not summarise or reword their details: pass their words as they said them. Not for starting a plain plan with no details (start_rapport), and not for pausing or leaving someone out (change_rapport)."],
+                    args={"contact": "The person's name, as in Google contacts if they are there.", "details": "Everything the owner said about them, in their own words, as one text.", "phone": "Their phone number with country code, only if the owner gave one and they are not in Google contacts."},
+                    returns="{name, planCreated, inGoogleContacts, stage, persona, next, tier, tagsAdded, placeSet, introductionsChangedToFollowUps, advice, messageSent, say}, or {error}.",
+                    fails=["{error} when no AI model is connected: say so and point to Agents, then Connections.", "{error} with no name: ask whose plan it is."],
+                    effect="Creates or updates the plan and the persona for that person, adds tags and a place to their Google contact (never overwriting what is there), may change the tier, and on Telegram sends one ready message with an Open WhatsApp button.",
+                ), {"type": OBJ, "properties": {"contact": S, "details": S, "phone": S}, "required": ["contact", "details"]}),
+                lambda a: f"Took in what you said about {text(a.get('contact'))}",
+                tell_about_contact,
             ),
             Tool(
                 ToolSpec("rapport_status", card(
