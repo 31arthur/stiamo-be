@@ -52,7 +52,7 @@ class RapportPack(ToolPack):
                 return ToolOutput({"error": f"I can't find a contact called “{text(a.get('contact'))}”. Ask for the name as it is in Google contacts."})
             plan = await svc.start(who, token, c, tier=text(a.get("tier")).upper() or None, source="manual")
             nxt = summary(plan)["next"]
-            return ToolOutput({"name": plan["name"], "tier": plan["tier"], "zone": plan.get("zone"), "phone": bool(plan.get("phone")), "firstMessage": nxt, "note": "The plan is on. Messages go on WhatsApp by themselves, inside 10:00–15:00 IST and their working hours. Tags are added on the web."})
+            return ToolOutput({"name": plan["name"], "tier": plan["tier"], "zone": plan.get("zone"), "phone": bool(plan.get("phone")), "firstMessage": nxt, "note": "The plan is on. Each message comes to the owner inside 10:00–15:00 IST and their working hours, with a button that opens the contact's WhatsApp chat with the text ready. Tags and where they are go in on the web."})
 
         async def change_rapport(a: dict[str, Any]) -> ToolOutput:
             c = await svc.find(who, token, text(a.get("contact")))
@@ -93,7 +93,7 @@ class RapportPack(ToolPack):
             ),
             Tool(
                 ToolSpec("start_rapport", card(
-                    "Starts a get-to-know plan for a contact: a series of messages with a reason each, spaced out (closer at first, then less often), each sent on WhatsApp by itself inside 10:00–15:00 IST and the contact's working hours, written at the moment from their tags. New contacts get a plan automatically; use this for a contact the owner already knows, or to bring back one that was left out.",
+                    "Starts a get-to-know plan for a contact: a series of messages with a reason each, spaced out (closer at first, then less often), each handed to the owner inside 10:00–15:00 IST and the contact's working hours, written at the moment from their tags, with a button that opens the contact's WhatsApp with the text ready. New contacts get a plan automatically once their tags and place are filled in on the web; use this for a contact the owner already knows, or to bring back one that was left out.",
                     use=["The owner says to start, build or attach a rapport or get-to-know plan for a named contact, or to change their tier: “start a plan for Meena, tier A”."],
                     avoid=["Do not use it for a contact that already has a live plan unless the tier changes."],
                     args={"contact": "The contact's name.", "tier": "A (key: closest), B (usual, the default) or C (light)."},

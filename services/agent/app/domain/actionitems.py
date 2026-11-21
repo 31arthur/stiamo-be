@@ -75,6 +75,9 @@ class ActionItem:
         there = self.day or self.due
         if today and there and there < today:
             out["daysLate"] = (date.fromisoformat(today) - date.fromisoformat(there)).days
+        wa = ((self.record.get("links") or {}).get("rapport") or {}) if self.table == "native" else {}
+        if wa.get("wa"):  # a message to send to someone: the link opens their WhatsApp chat with the text already written
+            out["whatsapp"], out["draft"] = wa["wa"], wa.get("draft")
         if self.kind == "mail" and self.notes:
             out["summary"] = str(self.notes)[:220]
         return {k: v for k, v in out.items() if v not in (None, "", False) or k in ("fixed",)}

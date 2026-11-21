@@ -25,9 +25,15 @@ class Do(BaseModel):
 @router.get("", summary="The rapport plans: who, which tier, what was sent, what is next")
 async def plans(svc: Rapport, me: deps.Me) -> dict[str, Any]:
     rows = await svc._repo.all(me.user_id)
-    out = [{"id": p["id"], "contactId": p.get("contactId"), "name": p["name"], "workspace": p.get("workspace"), "zone": p.get("zone"), "source": p.get("source"), **summary(p)} for p in rows]
-    out.sort(key=lambda r: (r["status"] != "active", (r["next"] or {"day": "9999"})["day"]))
+    out = [{"id": p["id"], "contactId": p.get("contactId"), "name": p["name"], "workspace": p.get("workspace"), "zone": p.get("zone"), "source": p.get("source"), **summary(p), "missing": p.get("missing") or []} for p in rows]
+    out.sort(key=lambda r: ({"needs_info": 0, "active": 1}.get(r["status"], 2), (r["next"] or {"day": "9999"})["day"]))
     return {"status": await svc.status(me), "plans": out}
+
+
+@router.post("/scan", summary="Look at the contacts now: the ones whose tags and place are filled in get their plan (done every hour anyway)")
+async def scan(svc: Rapport, me: deps.Me, token: deps.Token) -> dict[str, Any]:
+    made = await svc.scan(me, token)
+    return {"started": sum(1 for p in made if p["status"] == "active"), "waiting": sum(1 for p in made if p["status"] == "needs_info")}
 
 
 @router.post("/{plan_id}/do", summary="Pause a plan, stop it for this person, or change its tier")

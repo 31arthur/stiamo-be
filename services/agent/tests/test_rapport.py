@@ -20,15 +20,15 @@ from .test_alerts import press
 from .test_channels import send, telegram
 
 MONDAY_1030_IST = datetime(2026, 11, 23, 6, 30, tzinfo=UTC)  # 12:00 IST on a Monday
-ALI = {"id": "p1", "name": "Ali Hassan", "organisation": "Gulf Workers Union", "title": "Secretary", "workspaces": ["sb"], "emails": [{"value": "ali@gwu.org"}], "phones": [{"value": "+974 5555 1212", "label": "mobile"}], "tags": ["union", "migration"], "profile": {"sector": "Trade union"}, "isNew": True}
-RAMESH = {"id": "p2", "name": "Ramesh Kumar", "organisation": "Labour Dept", "workspaces": ["sb", "personal"], "emails": [{"value": "ramesh@labour.gov.in"}], "phones": [{"value": "98765 43210"}], "tags": [], "profile": {}, "isNew": True}
-MEENA = {"id": "p3", "name": "Meena Rao", "workspaces": ["fsa"], "emails": [{"value": "meena@client.io"}], "phones": [{"value": "+55 11 91234 5678"}], "isNew": True}
+ALI = {"id": "p1", "name": "Ali Hassan", "organisation": "Gulf Workers Union", "title": "Secretary", "workspaces": ["sb"], "emails": [{"value": "ali@gwu.org"}], "phones": [{"value": "+974 5555 1212", "label": "mobile"}], "tags": ["union", "migration"], "profile": {"sector": "Trade union"}, "location": "Doha, Qatar", "isNew": True}
+RAMESH = {"id": "p2", "name": "Ramesh Kumar", "organisation": "Labour Dept", "workspaces": ["sb", "personal"], "emails": [{"value": "ramesh@labour.gov.in"}], "phones": [{"value": "98765 43210"}], "tags": ["labour"], "profile": {}, "location": "Hyderabad, India", "isNew": True}
+MEENA = {"id": "p3", "name": "Meena Rao", "workspaces": ["fsa"], "emails": [{"value": "meena@client.io"}], "phones": [{"value": "+55 11 91234 5678"}], "tags": ["client"], "location": "Sao Paulo, Brazil", "isNew": True}
 SKIP = {"id": "p4", "name": "Private Person", "workspaces": ["personal"], "emails": [{"value": "p@x.org"}], "phones": [], "isNew": True, "rapportExcluded": True}
 
 
 class Bench:
-    def __init__(self, rig, wa_fails=None):
-        self.rig, self.said, self.sent, self.wa_fails = rig, [], [], wa_fails
+    def __init__(self, rig):
+        self.rig, self.said = rig, []
 
     async def open(self):
         from app.infrastructure.db.models import Base  # noqa: F401
@@ -36,17 +36,12 @@ class Bench:
         self.cm = self.rig.app.state.session_factory()
         self.s = await self.cm.__aenter__()
 
-        async def wa(who, number, text):
-            if self.wa_fails:
-                raise ValidationFailed(self.wa_fails)
-            self.sent.append((number, text))
-
         async def notify(who, text, buttons=None):
             self.said.append((text, buttons))
             return 1
 
         actions = ActionService(SqlActionRepository(self.s), self.rig.app.state.data_factory)
-        self.svc = RapportService(SqlRapportRepository(self.s), actions, self.rig.app.state.data_factory, wa, notify, None, None, lambda: MONDAY_1030_IST)
+        self.svc = RapportService(SqlRapportRepository(self.s), actions, self.rig.app.state.data_factory, notify, None, None, lambda: MONDAY_1030_IST)
         self.actions = actions
         return self
 
@@ -66,8 +61,7 @@ async def test_every_new_contact_in_any_workspace_gets_a_plan_and_the_owner_is_t
     assert sorted(p["name"] for p in made) == ["Ali Hassan", "Meena Rao", "Ramesh Kumar"]  # the one marked "no plan" is not given one
     assert len(b.said) == 3 and b.said[0][0].startswith("🌱 New contact: ") and "get-to-know plan" in b.said[0][0]
     ali = next(p for p in made if p["name"] == "Ali Hassan")
-    assert ali["zone"] == "Asia/Qatar" and ali["tier"] == "B" and "Add tags on the web" not in next(t for t, _ in b.said if "Ali Hassan" in t)  # tagged already: no nudge
-    assert "Add tags on the web" in next(t for t, _ in b.said if "Ramesh" in t)
+    assert ali["zone"] == "Asia/Qatar" and ali["tier"] == "B"
     assert next(p for p in made if p["name"] == "Meena Rao")["zone"] == "America/Sao_Paulo"  # from the phone's country code
     assert await b.svc.scan(WHO, "") == []  # nothing twice
     buttons = [x["text"] for row in b.said[0][1] for x in row]
@@ -78,35 +72,36 @@ async def test_every_new_contact_in_any_workspace_gets_a_plan_and_the_owner_is_t
 async def test_a_due_message_is_written_and_sent_inside_the_window_and_nobody_gets_more_than_three_in_a_day(rig):
     dan = {**RAMESH, "id": "p5", "name": "Dan", "emails": [{"value": "dan@x.org"}], "phones": [{"value": "98000 00001"}]}
     eve = {**RAMESH, "id": "p6", "name": "Eve", "emails": [{"value": "eve@x.org"}], "phones": [{"value": "98000 00002"}]}
-    rig.data.people = [RAMESH, dan, eve, {**RAMESH, "id": "p7", "name": "Fay", "emails": [{"value": "fay@x.org"}], "phones": [{"value": "98000 00003"}]}]
+    rig.data.people = [RAMESH, dan, eve, {**RAMESH, "id": "p7", "name": "Fay", "emails": [{"value": "fay@x.org"}], "phones": [{"value": "98000 00003"}]}]  # (all tagged, with a place)
     b = await bench(rig)
     await b.svc.scan(WHO, "")
     out = await b.svc.tick(WHO, "")
-    assert out["sent"] == 3 and len(b.sent) == 3  # the cap for one day across everyone: the fourth was planned for tomorrow
-    assert all(t.startswith("Hello ") for _, t in b.sent) and all("how are you" not in t.lower() for _, t in b.sent)
+    texts = [t for t, _ in b.said if t.startswith("✉️")]
+    assert out["queued"] == 3 and len(texts) == 3  # the cap for one day across everyone: the fourth was planned for tomorrow
+    assert all("Hello " in t for t in texts) and all("how are you" not in t.lower() for t in texts)
     fay = await b.svc._repo.by_key(WHO.user_id, contact_key({"emails": [{"value": "fay@x.org"}]}))
     assert fay["touches"][0]["day"] == "2026-11-24" and fay["touches"][0]["state"] == "planned"
     ramesh = await b.svc._repo.by_key(WHO.user_id, contact_key(RAMESH))
-    assert ramesh["touches"][0]["state"] == "sent" and ramesh["unanswered"] == 1 and ramesh["touches"][1]["day"] > "2026-11-23"
-    assert (await b.svc.tick(WHO, ""))["sent"] == 0  # nothing more is due
+    assert ramesh["touches"][0]["state"] == "queued"  # waiting for the owner to send it on WhatsApp
+    assert (await b.svc.tick(WHO, ""))["queued"] == 0  # nothing more is due
     await b.close()
 
 
-async def test_what_whatsapp_will_not_take_comes_to_the_owner_with_the_text_written_and_a_button_that_opens_whatsapp(rig):
+async def test_a_due_message_comes_to_the_owner_with_the_text_written_and_a_button_that_opens_the_contacts_whatsapp(rig):
     rig.data.people = [ALI]
-    b = await bench(rig, wa_fails="Twilio couldn't send the message (400). Template required.")
+    b = await bench(rig)
     await b.svc.scan(WHO, "")
     b.said.clear()
     out = await b.svc.tick(WHO, "")
-    assert out == {"sent": 0, "queued": 1, "waiting": 0}
+    assert out == {"sent": 0, "queued": 1, "waiting": 0}  # nothing is sent by Stiamo
     text, buttons = b.said[0]
-    assert text.startswith("✉️ Ali Hassan · intro") and "WhatsApp wouldn't send it by itself" in text and "Template required" in text
+    assert text.startswith("✉️ Ali Hassan · intro")
     flat = [x for row in buttons for x in row]
     assert flat[0]["text"] == "💬 Open WhatsApp" and flat[0]["url"].startswith("https://wa.me/97455551212?text=Hello%20Ali")
     assert [x["text"] for x in flat[1:]] == ["✅ Sent", "🗣 They replied", "✏️ Reword", "⏭ Skip", "⏸ Pause"]
     plan = await b.svc._repo.by_key(WHO.user_id, contact_key(ALI))
     item = [i async for i in _items(b)][0]
-    assert item["kind"] == "message" and item["source"] == "rapport" and item["links"]["rapport"]["draft"].startswith("Hello Ali")  # an action item too, with the text
+    assert item["kind"] == "message" and item["source"] == "rapport" and item["links"]["rapport"]["draft"].startswith("Hello Ali") and item["links"]["rapport"]["wa"].startswith("https://wa.me/97455551212")  # an action item too, with the text
     sent = next(x["callback_data"] for x in flat if x["text"] == "✅ Sent")
     said = await b.svc.press(WHO, "", "s", sent.split(":", 2)[2])
     assert said == "✅ Noted: sent to Ali Hassan."
@@ -188,3 +183,23 @@ async def test_a_place_in_the_address_sets_their_zone_and_a_place_added_later_mo
     assert after["zone"] == "Asia/Qatar" and [(t["day"], t["at"]) for t in after["touches"]] != before and all(t["purpose"] for t in after["touches"])
     assert await b3.svc.rezone(WHO, "") == 0  # nothing left to move
     await b3.close()
+
+
+async def test_a_new_contact_waits_for_its_tags_and_place_then_the_plan_starts_by_itself(rig):
+    bare = {"id": "p8", "name": "Chen Wei", "workspaces": ["sb"], "emails": [{"value": "chen@u.org"}], "phones": [{"value": "+213 555 12 34 56"}], "tags": [], "profile": {}, "isNew": True}
+    rig.data.people = [bare]
+    b = await bench(rig)
+    held = await b.svc.scan(WHO, "")
+    assert [p["status"] for p in held] == ["needs_info"] and held[0]["missing"] == ["tags", "where they are"] and held[0]["touches"] == []
+    assert "I need their tags and where they are" in b.said[-1][0] and b.said[-1][1][0][0]["text"] == "🚫 No plan for them"
+    assert await b.svc.scan(WHO, "") == []  # asked once, not every hour
+    assert (await b.svc.tick(WHO, ""))["queued"] == 0  # and nothing is written to them
+    rig.data.people = [{**bare, "tags": ["union"]}]
+    await b.svc.scan(WHO, "")
+    assert (await b.svc._repo.by_key(WHO.user_id, contact_key(bare)))["status"] == "needs_info"  # a place is still missing
+    rig.data.people = [{**bare, "tags": ["union"], "location": "Algiers, Algeria"}]
+    b.said.clear()
+    started = await b.svc.scan(WHO, "")
+    plan = await b.svc._repo.by_key(WHO.user_id, contact_key(bare))
+    assert [p["name"] for p in started] == ["Chen Wei"] and plan["status"] == "active" and plan["touches"] and "get-to-know plan" in b.said[0][0]
+    await b.close()

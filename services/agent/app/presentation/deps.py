@@ -118,7 +118,7 @@ def build_services(app: FastAPI, session: AsyncSession) -> tuple[AgentService, C
         return (s.llm_factory(sel["providerId"], key), sel["modelId"], sel.get("thinking", "off")) if (sel and key) else None
 
     agent.rapport = channels.rapport_actions = RapportService(
-        SqlRapportRepository(session), agent.actions, s.data_factory, channels.send_whatsapp_to, lambda who, text, buttons=None: channels.announce(who, text, kind="rapport", summary=text[:60], buttons=buttons),
+        SqlRapportRepository(session), agent.actions, s.data_factory, lambda who, text, buttons=None: channels.announce(who, text, kind="rapport", summary=text[:60], buttons=buttons),
         chat_model, owner_name, lambda: s.clock())
     channels.queue_actions.rapport = channels.rapport_actions
     agent.actions.on_created = lambda who, ref: channels.queue_actions.add(who, ref)
