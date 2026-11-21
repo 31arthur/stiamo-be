@@ -27,6 +27,7 @@ from app.infrastructure.db.workflows import SqlWorkflowRepository
 from app.infrastructure.llm.gemini import GeminiClient
 from app.infrastructure.llm.jev import JevClient
 from app.infrastructure.llm.openai_compat import OpenAiCompatibleClient
+from app.infrastructure.linkpreview import HttpLinkPreview
 from app.infrastructure.mailevents import HttpMailEvents
 from app.infrastructure.messaging import HttpTelegramApi, HttpTwilioApi
 from app.infrastructure.security import JwtAccessTokens, SecretBox
@@ -37,6 +38,7 @@ from app.presentation.routers import (
     actionitems,
     alerts,
     attention,
+    campaigns,
     availability,
     channels,
     conversations,
@@ -185,7 +187,7 @@ async def _config_of(repo, user_id: str, workflow_id: str):
     return w.config if w else None
 
 
-def create_app(settings: Settings | None = None, *, mail_events=None, registry=None, llm_factory=None, decision_factory=None, data_factory=None, telegram=None, twilio=None, tokens=None, voice=None, caller=None, clock=None) -> FastAPI:
+def create_app(settings: Settings | None = None, *, link_preview=None, mail_events=None, registry=None, llm_factory=None, decision_factory=None, data_factory=None, telegram=None, twilio=None, tokens=None, voice=None, caller=None, clock=None) -> FastAPI:
     """Application factory. Run with: uvicorn app.main:create_app --factory
 
     The keyword arguments swap in fakes for tests; in production they are the real thing.
@@ -255,6 +257,8 @@ def create_app(settings: Settings | None = None, *, mail_events=None, registry=N
     app.state.decision_factory = decision_factory or (lambda key: JevClient(key, http))
     app.state.data_factory = data_factory or (lambda token: HttpDataGateway(http, token, settings.practice_url, settings.files_url, settings.drive_url, settings.mail_url, settings.calendar_url))
     app.state.telegram = telegram or HttpTelegramApi(http)
+    #: What a link looks like when shared (see infrastructure/linkpreview.py).
+    app.state.link_preview = link_preview or HttpLinkPreview(http)
     app.state.twilio = twilio or HttpTwilioApi(http)
     app.state.tokens = tokens or JwtAccessTokens(settings.token_settings())
     #: What each chat said recently, so a follow-up question makes sense. In memory: it resets when the service restarts.
@@ -279,6 +283,8 @@ def create_app(settings: Settings | None = None, *, mail_events=None, registry=N
     app.include_router(queue_routes.router)
     app.include_router(actionitems.router)
     app.include_router(rapport_routes.router)
+    app.include_router(campaigns.router)
+    app.include_router(campaigns.public)
     app.include_router(insights.router)
     app.include_router(deliveries.router)
     app.include_router(health.router)
