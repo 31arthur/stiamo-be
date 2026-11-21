@@ -23,6 +23,7 @@ from app.domain.actionitems import ActionItem, label_day, patch_for, pick, plan_
 from app.domain.actionitems import busy_for as busy_on
 from app.domain.actionitems import from_event, from_follow_up, from_hearing, from_meeting, from_native, from_task
 from app.domain.dayplan import clock, free_windows
+from app.domain.zones import convert
 from app.domain.llm import AiError
 from app.infrastructure.db.actions import SqlActionRepository
 
@@ -47,17 +48,25 @@ def _iso(d: datetime) -> str:
 
 
 class ActionService:
-    def __init__(self, repo: SqlActionRepository, data_factory: Callable[[str], Any], now: Callable[[], datetime] = lambda: datetime.now(UTC)) -> None:
-        self._repo, self._data, self._now = repo, data_factory, now
+    def __init__(self, repo: SqlActionRepository, data_factory: Callable[[str], Any], now: Callable[[], datetime] = lambda: datetime.now(UTC), zones: Callable[[Who], Awaitable[tuple[str, str]]] | None = None) -> None:
+        self._repo, self._data, self._now, self._zones = repo, data_factory, now, zones
+        #: The clock the owner is on now, and the one their records are kept on (India's). Read from their settings by sync_zone.
+        self.zone, self.home = ZONE, ZONE
         #: Called with (who, ref) when a new item is created, so the list in force can take it in (set by the app).
         self.on_created: Callable[..., Awaitable[Any]] | None = None
 
+    async def sync_zone(self, who: Who) -> None:
+        """Reads where the owner is now, so "today", "tomorrow" and the times they say are on their clock."""
+        if self._zones is not None:
+            self.zone, self.home = await self._zones(who)
+
     def today(self) -> str:
-        return self._now().astimezone(ZoneInfo(ZONE)).date().isoformat()
+        return self._now().astimezone(ZoneInfo(self.zone)).date().isoformat()
 
     # --- reading ---------------------------------------------------------------------------------------------------------------------------
 
     async def load(self, who: Who, token: str, ahead: int = 60) -> Loaded:
+        await self.sync_zone(who)
         data = self._data(token)
         today = self.today()
         try:
@@ -112,6 +121,7 @@ class ActionService:
     async def preview_move(self, who: Who, token: str, *, to: str, day: str | None = None, until: str | None = None, kinds: list[str] | None = None, workspace: str | None = None, priority_below: str | None = None,
                            refs: list[str] | None = None, include_overdue: bool = False, include_fixed: bool = False, actor: str = "chittu", channel_id: str | None = None, why: str = "") -> dict[str, Any]:
         """Works out a move and keeps it as a pending change set: nothing is changed until it is applied. `to` is a day in words; it is resolved here, in code."""
+        await self.sync_zone(who)
         today = self.today()
         target = resolve_day(to, today)
         if target is None:
@@ -166,6 +176,7 @@ class ActionService:
         Fixed items (hearings, meetings, events) are left alone: they are not the owner's to cancel from here."""
         if action not in ("complete", "cancel"):
             raise ValidationFailed("The action is complete or cancel.")
+        await self.sync_zone(who)
         today = self.today()
         source = resolve_day(day, today) if day else None
         last = resolve_day(until, today) if until else None
@@ -290,12 +301,13 @@ class ActionService:
 
     # --- small changes, applied at once and undoable ------------------------------------------------------------------------------------
 
-    async def command(self, who: Who, token: str, ref: str, action: str, *, to: str | None = None, start: int | None = None, actor: str = "chittu", reason: str = "", note: str | None = None, include_fixed: bool = False) -> dict[str, Any]:
+    async def command(self, who: Who, token: str, ref: str, action: str, *, to: str | None = None, start: int | None = None, actor: str = "chittu", reason: str = "", note: str | None = None, include_fixed: bool = False, tz: str | None = None) -> dict[str, Any]:
         """complete, cancel, reopen, move (to a day, optionally a time) or snooze (to a day) one item. Applied now; the response says how to undo."""
         loaded = await self.load(who, token)
         it = loaded.get(ref)
         if it is None:
             raise NotFound(f"I can't find an item called {ref}. Look it up first with find_items.")
+        await self.sync_zone(who)
         if it.table not in (*WRITABLE, "native"):
             raise ValidationFailed(f"“{it.title}” is {'an event in a calendar that is not Stiamo\'s' if it.source == 'google' else 'a hearing'}; it can't be changed from here." + (" Its outcome is recorded on the case." if it.kind == "hearing" else ""))
         today = self.today()
@@ -310,12 +322,15 @@ class ActionService:
                 raise ValidationFailed(f"I can't tell which day “{to}” is, or it is in the past. Give a date like 2026-11-25, or tomorrow, or next Monday.")
             if it.fixed and action == "move" and not include_fixed:
                 raise ValidationFailed(f"“{it.title}” is fixed: it involves other people. If you really want it moved, say so, and I will move it and tell the others.")
+            if start is not None:  # the time the owner said is on the clock they gave (or are on): stored on the home clock
+                day, start = convert(day, start, tz or self.zone, self.home)
             patch = patch_for(it, day, start if start is not None else (it.start if action == "move" else None))
             if not patch:
                 raise ValidationFailed(f"“{it.title}” can't be moved from here.")
             before = {k: it.record.get(k) for k in patch}
             new_start = (patch.get("slot") or {}).get("start") if "slot" in patch else (patch.get("due") or {}).get("time") if "due" in patch else patch.get("start")
-            when = label_day(day) + (f" {clock(new_start)}" if new_start is not None else "")
+            shown_day, shown_start = (convert(day, new_start, self.home, self.zone) if new_start is not None else (day, None))  # said on the clock the owner is on
+            when = label_day(shown_day) + (f" {clock(shown_start)}" if shown_start is not None else "")
             title = f"{'Snoozed' if action == 'snooze' else 'Moved'} to {when}: {it.title}"
         else:
             raise ValidationFailed("The action is complete, cancel, reopen, move or snooze.")

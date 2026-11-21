@@ -20,6 +20,7 @@ from app.application.services import Who
 from app.domain.actionitems import EMOJI, ActionItem, pick, queue_order, resolve_day
 from app.domain.chittu import SITTING, good_morning, good_night
 from app.domain.dayplan import check_blocks, clock, day_label
+from app.domain.zones import convert, label
 from app.domain.worklist import DONE, GONE, MOVED, PENDING, SETTLED, SHOWN, SKIPPED, Spec, classify_words, counts, entry, merge, next_index, position
 from app.infrastructure.db.actions import SqlActionRepository
 
@@ -64,11 +65,14 @@ def _plan_buttons(tag: str, index: int) -> list[list[dict[str, str]]]:
     return [[{"text": "✅ Keep", "callback_data": d("d")}, {"text": "✖️ Drop", "callback_data": d("k")}], [{"text": "⏪ 30 min earlier", "callback_data": d("m")}, {"text": "30 min later ⏩", "callback_data": d("p")}], [{"text": "⏹ Stop", "callback_data": d("x")}]]
 
 
-def item_text(it: ActionItem, position_: int, total: int, today: str, note: str | None = None) -> str:
-    """One item, as Chittu says it: where we are (3/10), what it is, when, and why it is on the list. Short."""
+def item_text(it: ActionItem, position_: int, total: int, today: str, note: str | None = None, zone: str | None = None, home: str | None = None) -> str:
+    """One item, as Chittu says it: where we are (3/10), what it is, when (on the clock the owner is on now), and why it is on the list. Short."""
     when = None
-    if it.day and it.start is not None:
-        when = ("Today " if it.day == today else f"{day_label(it.day)} ") + clock(it.start)
+    day, start = it.day, it.start
+    if zone and home and zone != home and day and start is not None:
+        day, start = convert(day, start, home, zone)
+    if day and start is not None:
+        when = ("Today " if day == today else f"{day_label(day)} ") + clock(start) + (f" {label(zone)}" if zone and home and zone != home else "")
     elif (it.day or it.due or "") and (it.day or it.due) < today:  # type: ignore[operator]
         when = f"Overdue since {day_label(it.day or it.due)}"  # type: ignore[arg-type]
     elif it.due:
@@ -89,7 +93,7 @@ class QueueService:
         self._repo, self._actions, self._send, self._now, self._names = repo, actions, send, now, names
 
     def _today(self) -> str:
-        return self._now().astimezone(ZoneInfo(ZONE)).date().isoformat()
+        return self._actions.today()  # on the clock the owner is on now (see ActionService.sync_zone)
 
     async def _owner(self, who: Who) -> str:
         """What Chittu calls the owner: the name they set for him, else the one their email gives."""
@@ -115,6 +119,7 @@ class QueueService:
     async def set(self, who: Who, token: str, spec: Spec, source: str = "ai", channel_id: str | None = None) -> dict[str, Any]:
         """Makes the list a request asked for. `replace` puts the old list aside (its place is kept in the database) and starts this one; `append` adds to the end of the
         list in force, `next` right after the item in front of the owner. Sends the opening line and, for a new or woken list, the first item."""
+        await self._actions.sync_zone(who)
         if not spec.entries:
             return {"started": False, "count": 0, "dropped": spec.dropped}
         old = await self.current(who)
@@ -185,6 +190,7 @@ class QueueService:
     async def morning(self, who: Who, token: str) -> dict[str, Any]:
         """Good morning: how many things need the owner (and how many are still on the list from before), and whether to start. A list left over from yesterday is
         kept, checked against what is real now, and what is new today is added to its end; nothing is brought until the owner says start."""
+        await self._actions.sync_zone(who)
         today = self._today()
         old = await self.current(who)
         if old and old["day"] == today and old["status"] in ("waiting", "active"):
@@ -215,6 +221,7 @@ class QueueService:
 
     async def remind(self, who: Who, token: str) -> dict[str, Any]:
         """If the owner has not answered the good morning, ask once more, gently. Never a third time."""
+        await self._actions.sync_zone(who)
         q = await self._repo.queue(who.user_id, statuses=["waiting"])
         if q is None or q["day"] != self._today() or (q.get("shown") or {}).get("reminded"):
             return {"reminded": False}
@@ -230,10 +237,11 @@ class QueueService:
     async def night(self, who: Who, token: str) -> dict[str, Any]:
         """Good night: what got done today, what moved, what is still open, and what tomorrow opens with. The list is not closed: it is paused where it is, and
         the morning will pick it up."""
+        await self._actions.sync_zone(who)
         from app.domain.dayplan import clock as hhmm
 
         today = self._today()
-        since = datetime.combine(date.fromisoformat(today), datetime.min.time(), tzinfo=ZoneInfo(ZONE)).astimezone(UTC)
+        since = datetime.combine(date.fromisoformat(today), datetime.min.time(), tzinfo=ZoneInfo(self._actions.zone)).astimezone(UTC)
         events = await self._repo.history(who.user_id, None, 500, since)
         done = len({e["ref"] for e in events if e["event"] == "completed"})
         moved = len({e["ref"] for e in events if e["event"] in ("moved", "snoozed")})
@@ -302,9 +310,10 @@ class QueueService:
             return f"{ack}\n\n{body}".strip(), _mail_buttons(_tag(q["id"]), index)
         if e.get("plan"):  # a block of a plan being looked at: when it would be, and what the owner can do about it
             p = e["plan"]
-            body = f"{pos}/{total} · {EMOJI.get(it.kind, '•')} {it.title}\n🕐 {clock(p['start'])}–{clock(p['start'] + p['duration'])}" + (f" · {it.contact}" if it.contact else "") + (f"\n💬 {e['note']}" if e.get("note") else "")
+            shown = convert(p["day"], p["start"], self._actions.home, self._actions.zone)[1]  # (planned on the home clock, said on the one the owner is on)
+            body = f"{pos}/{total} · {EMOJI.get(it.kind, '•')} {it.title}\n🕐 {clock(shown)}–{clock(shown + p['duration'])}" + (f" · {it.contact}" if it.contact else "") + (f"\n💬 {e['note']}" if e.get("note") else "")
             return f"{ack}\n\n{body}".strip(), _plan_buttons(_tag(q["id"]), index)
-        return (f"{ack}\n\n{item_text(it, pos, total, today, e.get('note'))}".strip(), _buttons("review" if e.get("review") else it.kind, it.fixed, _tag(q["id"]), index, undo=undo))
+        return (f"{ack}\n\n{item_text(it, pos, total, today, e.get('note'), self._actions.zone, self._actions.home)}".strip(), _buttons("review" if e.get("review") else it.kind, it.fixed, _tag(q["id"]), index, undo=undo))
 
     async def _settle(self, who: Who, token: str, q: dict[str, Any], index: int, action: str) -> str:
         """Does what a button or a word says to the item in front of the owner and returns what to say. A failure leaves the item skipped, never stuck."""
@@ -358,6 +367,7 @@ class QueueService:
 
     async def press(self, who: Who, token: str, action: str, rest: str) -> Any:
         """A button under one of Chittu's messages: start, later, done, tomorrow, skip, stop, keep going, undo. Returns what to say next."""
+        await self._actions.sync_zone(who)
         tag, _, idx = rest.partition(":")
         q = await self.current(who)
         if q is None or _tag(q["id"]) != tag:
@@ -511,6 +521,7 @@ class QueueService:
     async def command(self, who: Who, token: str, text: str) -> Any:
         """A plain word from the owner while a list is in force (next, done, tomorrow, stop, continue, how many left, undo): handled here, without a model.
         None when it is not one, or there is no list: the message then goes to Chittu as usual."""
+        await self._actions.sync_zone(who)
         word = classify_words(text)
         if word is None:
             return None

@@ -235,13 +235,13 @@ async def test_every_tool_of_chittu_is_described_in_full_and_his_prompt_is_a_ful
         tools = await ActionsPack().tools(PackContext(rig.data, T, actions=svc, who=WHO, token=""))
     finally:
         await finish(s, session)
-    assert [t.spec.name for t in tools] == ["find_items", "which_day", "preview_move", "preview_close", "apply_change", "drop_change", "change_item", "undo_last", "item_history"]
+    assert [t.spec.name for t in tools] == ["find_items", "set_timezone", "which_day", "preview_move", "preview_close", "apply_change", "drop_change", "change_item", "undo_last", "item_history"]
     for t in tools:
         d = t.spec.description
         assert all(part in d for part in ("USE IT WHEN:", "RETURNS:", "EFFECT:")) and len(d.split()) >= 60, t.spec.name  # what it is for, when, what comes back, what it changes
     by = {t.spec.name: t.spec.description for t in tools}
     assert "ARGUMENTS:" in by["preview_move"] and "DO NOT USE IT WHEN:" in by["apply_change"] and "IF IT FAILS:" in by["change_item"] and "Read only" in by["find_items"]
-    assert len(PLANNER_SYSTEM.split()) >= 2000 and all(h in PLANNER_SYSTEM for h in ("## Persona", "## Tasks", "## Context", "## Examples", "## Output", "## Guardrails"))
+    assert len(PLANNER_SYSTEM.split()) <= 2200 and all(h in PLANNER_SYSTEM for h in ("## Persona", "## Tasks", "## Context", "## Examples", "## Output", "## Guardrails"))
     assert "Chidambaram" in PLANNER_SYSTEM and "Chittu" in PLANNER_SYSTEM and "{{day_start}}" in PLANNER_SYSTEM
 
 

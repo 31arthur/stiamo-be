@@ -159,7 +159,8 @@ class DayPlanService:
         s = await self._settings.get(who.user_id) or UserSettings(who.user_id, who.email)
         keep = planner_settings(s.planner)["workspaces"] if workspaces is None else list(dict.fromkeys(workspaces))
         kept = {**((s.planner or {}).get("chittu") or {}), **{k: v for k, v in (chittu or {}).items() if v is not None}}
-        s.planner = {"enabled": enabled, "time": at, "timezone": timezone, "channels": channels, "workspaces": keep, **({"chittu": kept} if kept else {})}
+        trip = {k: s.planner[k] for k in ("home", "backOn") if s.planner and k in s.planner}  # (where the owner is, and when they are back, are not the evening plan's to forget)
+        s.planner = {"enabled": enabled, "time": at, "timezone": timezone, "channels": channels, "workspaces": keep, **({"chittu": kept} if kept else {}), **trip}
         await self._settings.save(s)
         return planner_settings(s.planner)
 

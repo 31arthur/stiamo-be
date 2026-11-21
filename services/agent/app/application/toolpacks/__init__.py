@@ -44,6 +44,10 @@ class PackContext:
     channel: str = ""
     #: The bot the message came in through, so what Chittu sends goes back to the same chat (a workspace's own bot as much as the general one).
     channel_id: str | None = None
+    #: Where the owner is now and where their records are kept (IANA names), and a way to say they have moved (zone, the day they are back).
+    zone: str = "Asia/Kolkata"
+    home: str = "Asia/Kolkata"
+    set_zone: Any = None
 
 
 class ToolPack(ABC):

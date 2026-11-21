@@ -30,6 +30,7 @@ from app.application.runner import AgentRun, Tool, run_agent
 from app.application.scope import PlannerData, ScopedData
 from app.application.toolpacks.cards import enrich
 from app.domain.chittu import saved_name
+from app.domain.zones import where_is_the_owner, resolve_zone, HOME
 from app.application.toolpacks import PackContext
 from app.application.usage_totals import Bucket
 from app.domain.agents import WORKSPACES, AgentDefinition, UnknownAgent, clean_workspaces
@@ -53,12 +54,13 @@ DEFAULT_ZONE = "Asia/Kolkata"
 def local_today(s: UserSettings | None, now: datetime | None = None) -> date:
     """Today on the person's own clock (the time zone set for their evening plan, India's by default), not the server's: an hour
     after midnight there is already tomorrow's date, and "tomorrow" must mean theirs."""
-    name = ((s.planner if s else None) or {}).get("timezone") or DEFAULT_ZONE
+    moment = now or datetime.now(UTC)
+    name = where_is_the_owner((s.planner if s else None), moment)[0] or DEFAULT_ZONE  # where they are now: home, or the zone they said they are in
     try:
         zone = ZoneInfo(name)
     except (ZoneInfoNotFoundError, ValueError, OSError):
         zone = UTC
-    return (now or datetime.now(UTC)).astimezone(zone).date()
+    return moment.astimezone(zone).date()
 
 
 def selection_of(s: UserSettings, agent_id: str) -> tuple[dict[str, Any] | None, bool]:
@@ -195,6 +197,8 @@ class AgentService:
     notify: Any = None
     #: Chittu's action items (see application/actions.py), set by the app when it builds the service.
     actions: Any = None
+    #: Called with (who, planner settings) when the owner's zone changes, so what runs by the clock (good morning, good night, the evening plan) moves with them.
+    zone_changed: Any = None
     #: Chittu's one-at-a-time list on Telegram, set by the app once the channels exist.
     queue: Any = None
     #: Asks a question with buttons on the phone: (who, workspace, text, buttons) -> how many chats it reached. For an Ask me node.
@@ -407,6 +411,27 @@ class AgentService:
         s.selections = {**s.selections, agent_id: choice, ANY: choice}
         await self._repo.save(s)
 
+    async def set_zone(self, who: Who, zone: str, back_on: str | None = None) -> dict[str, Any]:
+        """Where the owner is now ("I'm in Qatar till Monday"): their day, their today, and the times they say follow it until they are back. Records stay on the home
+        clock. Going home (the home zone) clears the trip."""
+        name = resolve_zone(zone)
+        if name is None:
+            raise ValidationFailed(f"I don't know which time zone “{zone}” is. Give a city or a zone name like Asia/Qatar.")
+        s = await self._load(who)
+        planner = dict(s.planner or {})
+        home = str(planner.get("home") or HOME)
+        planner["home"] = home
+        planner["timezone"] = name
+        if name == home or not back_on:
+            planner.pop("backOn", None)
+        else:
+            planner["backOn"] = back_on
+        s.planner = planner
+        await self._repo.save(s)
+        if self.zone_changed is not None:
+            await self.zone_changed(who, planner)
+        return {"zone": name, "home": home, "backOn": planner.get("backOn")}
+
     async def rebuild_on_canvas(self, who: Who, token: str, workflow: dict[str, Any], name: str | None = None) -> dict[str, Any]:
         """A new agent on the canvas that does what an older mail-sorting agent does (see domain/flow_rebuild.py). The older one is left alone."""
         from app.domain.flow_rebuild import flow_from_config
@@ -458,7 +483,8 @@ class AgentService:
         elif scope:
             data = ScopedData(data, scope)  # a workspace's assistant sees that workspace's data only
         ctx = PackContext(data, today, decisions, decision.get("modelId") or DECISION_MODELS[0]["id"], lambda: self._waiting(who, scope), self._proposer(who, agent.id, channel_id), channel != "the evening plan", scope,
-                          jobs=self.job_runners(s), actions=self.actions, who=who, token=token, actor="chittu" if agent.id == "daily-planner" else agent.id, queue=self.queue, channel=channel, channel_id=channel_id)
+                          jobs=self.job_runners(s), actions=self.actions, who=who, token=token, actor="chittu" if agent.id == "daily-planner" else agent.id, queue=self.queue, channel=channel, channel_id=channel_id,
+                          zone=where_is_the_owner(s.planner, datetime.now(UTC))[0], home=where_is_the_owner(s.planner, datetime.now(UTC))[1], set_zone=lambda zone, back: self.set_zone(who, zone, back))
         tools: list[Tool] = []
         tool_packs: dict[str, str] = {}
         context: dict[str, Any] = {"today": today, "user": saved_name(s.planner) or who.name, "channel": channel}
