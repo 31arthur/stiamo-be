@@ -89,6 +89,8 @@ def alert_buttons(a: dict[str, Any], url: str) -> list[list[dict[str, str]]]:
         rows.append([{"text": "🔗 Open the email in Stiamo", "url": url}])
     for i, r in enumerate(a.get("replies") or []):
         rows.append([{"text": f"{_NUMBER[i]} {r['label']}", "callback_data": f"al:{a['id']}:r{i}"}])
+    if a.get("account_id") and not a.get("sample"):  # a real mail in a real mailbox: read it here, or send it to the Trash folder of that mailbox
+        rows.append([{"text": "📖 Read it", "callback_data": f"al:{a['id']}:read"}, {"text": "🗑 Trash", "callback_data": f"al:{a['id']}:trash"}])
     rows.append([{"text": "✍️ Write my own", "callback_data": f"al:{a['id']}:own"}, {"text": "👌 Handled", "callback_data": f"al:{a['id']}:done"}])
     return rows
 
@@ -106,7 +108,7 @@ def draft_buttons(alert_id: str) -> list[list[dict[str, str]]]:
 
 def parse_callback(data: str) -> tuple[str, str] | None:
     """(alert id, code) from a button's data, or None when it isn't one of ours."""
-    m = re.fullmatch(r"al:([0-9a-f]{12}):(r[0-2]|own|send|redo|x|done)", data or "")
+    m = re.fullmatch(r"al:([0-9a-f]{12}):(r[0-2]|own|send|redo|x|done|read|trash)", data or "")
     return (m.group(1), m.group(2)) if m else None
 
 

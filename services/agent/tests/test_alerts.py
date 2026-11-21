@@ -59,7 +59,7 @@ async def test_an_urgent_email_pings_the_phone_at_once_with_a_link_and_suggested
     assert text.startswith("🚨 <b>URGENT · S&amp;B</b>") and "Partnership opportunity" in text and "🏛️ Client Co" in text and "Confirm and send delegate details" in text
     buttons = last_keyboard(rig)
     assert buttons[0] == {"text": "🔗 Open the email in Stiamo", "url": "https://app.example.com/sb/mail?a=acc1&f=INBOX&m=4"}
-    assert [b["text"] for b in buttons[1:4]] == ["1️⃣ Confirm attendance", "2️⃣ Ask for time", "3️⃣ Decline"] and [b["text"] for b in buttons[4:]] == ["✍️ Write my own", "👌 Handled"]
+    assert [b["text"] for b in buttons[1:4]] == ["1️⃣ Confirm attendance", "2️⃣ Ask for time", "3️⃣ Decline"] and [b["text"] for b in buttons[4:]] == ["📖 Read it", "🗑 Trash", "✍️ Write my own", "👌 Handled"]
     assert "replies" in rig.llm_log[-1]["system"]  # the reading asked for suggested replies
     sent = len(rig.telegram.sent)
     again = (await rig.client.post(f"{BASE}/{wid}/run", json={}, headers=headers())).json()
@@ -279,3 +279,18 @@ async def test_no_call_when_the_agent_did_not_ask_for_calls(rig):
     assert rig.caller.calls == [] and "URGENT" in rig.telegram.sent[-1][1]
 
 
+
+
+async def test_read_it_shows_the_mail_and_trash_moves_it_to_the_trash_folder_of_the_real_mailbox_and_closes_the_alert(rig):
+    wid, c = await alert_agent(rig)
+    rig.script += [answer("urgent"), READ]
+    await rig.client.post(f"{BASE}/{wid}/run", json={}, headers=headers())
+    alert_id = alert_id_of(rig)
+    assert [b["text"] for b in last_keyboard(rig)].count("🗑 Trash") == 1
+    await press(rig, c, f"al:{alert_id}:read", update=2)
+    assert rig.telegram.sent[-1][1].startswith("📖 ")
+    assert rig.data.trashed == []  # reading moves nothing
+    await press(rig, c, f"al:{alert_id}:trash", update=3)
+    assert rig.data.trashed_by == [("acc1", 4)] and "Trash folder of your mailbox" in rig.telegram.sent[-1][1]
+    await press(rig, c, f"al:{alert_id}:trash", update=4)
+    assert "already dealt with" in rig.telegram.sent[-1][1] and len(rig.data.trashed_by) == 1  # a second press moves nothing

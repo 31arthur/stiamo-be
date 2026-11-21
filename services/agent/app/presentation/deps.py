@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import uuid
 from collections.abc import AsyncIterator
 from datetime import datetime
 from typing import Annotated, Any
@@ -142,6 +143,12 @@ def build_services(app: FastAPI, session: AsyncSession) -> tuple[AgentService, C
     channels.editor_actions = EditorService(SqlSettingsRepository(session, s.box), s.data_factory, s.llm_factory, lambda who, text, workspace, buttons: channels.announce_plan(who, text, workspace, buttons), lambda: s.clock())
     channels.voice_notes = VoiceNotes(SqlSettingsRepository(session, s.box), s.voice)
     channels.alerts = AlertService(SqlAlertRepository(session), SqlSettingsRepository(session, s.box), s.llm_factory, s.data_factory, s.tokens, channels, app_url=s.settings.app_url, clock_now=lambda: s.clock(), caller=s.caller, calls=s.alert_calls, deliveries=s.deliveries)
+    async def settle_mail_item(who, token, workflow_id, item_id, action):
+        """The action item kept for a mail (see ActionService.record_mail) is done, or cancelled, when the mail is handled or trashed from the phone."""
+        iid = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{who.user_id}|{workflow_id}|{item_id}"))
+        await agent.actions.command(who, token, f"mail:{iid}", action, actor="owner", reason="dealt with from the phone")
+
+    channels.alerts.settle_item = settle_mail_item
     return agent, channels
 
 
