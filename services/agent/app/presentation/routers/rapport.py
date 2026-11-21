@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field
@@ -32,6 +32,16 @@ async def plans(svc: Rapport, me: deps.Me) -> dict[str, Any]:
 
 class Advise(BaseModel):
     message: str = Field(min_length=1, max_length=4000)
+
+
+class Owner(BaseModel):
+    name: Annotated[str, Field(min_length=1, max_length=40)]
+    full_name: Annotated[str, Field(max_length=80)] = ""
+
+
+@router.put("/owner", summary="What everyone calls you and your full name: set once, every agent and every message uses them")
+async def owner(body: Owner, request: Request, session: deps.Session, me: deps.Me) -> dict[str, Any]:
+    return await deps.build_services(request.app, session)[1].plan_actions.set_names(me, body.name, body.full_name)
 
 
 @router.get("/{plan_id}", summary="One plan for the adviser: the persona, the conversation so far and the last suggestions")

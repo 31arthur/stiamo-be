@@ -323,3 +323,24 @@ async def test_telling_chittu_about_a_person_makes_the_plan_the_persona_the_tags
 
 async def _model_of(answer):
     return Adviser(answer), "m", "off"
+
+
+def test_a_message_reads_as_a_person_typed_it_with_no_placeholder_and_no_assistant_tells():
+    from app.domain.rapport_advisor import HUMAN, clean_message
+
+    assert clean_message("Hi Khamid Bhai, good to meet you at the BWI Congress in Brazil. Warmly, [your name]", "Bhargav") == "Hi Khamid Bhai, good to meet you at the BWI Congress in Brazil. Bhargav"
+    assert clean_message("Hi Khamid Bhai, good to meet you — hope all is well. Warmly, [Your Name]", "") == "Hi Khamid Bhai, good to meet you , hope all is well."
+    assert clean_message("Hello Ali; will send it tomorrow. Best regards", "Bhargav") == "Hello Ali, will send it tomorrow."
+    assert "I hope this message finds you well" in HUMAN and "never leave a placeholder" in HUMAN.lower()
+
+
+async def test_the_owners_names_are_set_once_and_the_adviser_and_the_drafts_use_them(rig):
+    import json
+
+    from .conftest import headers
+
+    r = await rig.client.put("/v1/agent/rapport/owner", json={"name": " Bhargav ", "full_name": "Kanthi Kiran Bhargav"}, headers=headers())
+    assert r.status_code == 200 and r.json() == {"name": "Bhargav", "fullName": "Kanthi Kiran Bhargav"}
+    s = (await rig.client.get("/v1/agent/day-plans", headers=headers())).json()["settings"]["chittu"]
+    assert s["name"] == "Bhargav" and s["fullName"] == "Kanthi Kiran Bhargav"
+    assert (await rig.client.put("/v1/agent/rapport/owner", json={"name": ""}, headers=headers())).status_code == 422
