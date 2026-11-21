@@ -225,3 +225,71 @@ async def test_the_message_is_written_in_the_name_the_owner_set_and_a_rapport_me
     assert "Everyone calls them Bhargav; their full name is Kanthi Kiran Bhargav." == RapportService._owner_line("Bhargav", "Kanthi Kiran Bhargav")
     assert "introduce them by the full name once (Kanthi Kiran Bhargav)" in RapportService._sign_off("Bhargav", "Kanthi Kiran Bhargav")
     assert RapportService._owner_line("", "") == "Their name is not known: do not invent one." and RapportService._sign_off("", "") == "Do not sign with a name."
+
+
+class Adviser:
+    """A model that answers like the adviser would, and keeps what it was asked."""
+
+    def __init__(self, answer):
+        self.answer, self.asked = answer, []
+
+    async def chat(self, model, messages, tools, thinking):
+        self.asked.append(messages)
+        return type("R", (), {"text": self.answer})()
+
+
+async def test_the_adviser_learns_what_the_owner_says_adjusts_the_persona_and_turns_the_introduction_into_a_follow_up(rig):
+    import json
+
+    from app.domain.rapport_advisor import ADVISOR_SYSTEM, parse_advice
+
+    persona = {"summary": "Union secretary in Doha. Wrote to on 3 Nov; read, no reply.", "stage": "in_touch", "history": ["3 Nov: WhatsApp about wages; read, no reply"], "common": ["migrant workers"], "style": "brief, English", "next": {"purpose": "follow_up", "idea": "short note on 10 Nov"}}
+    answer = json.dumps({"reply": "You already wrote on 3 Nov, so this is a follow-up. Wait until 10 Nov.", "stage": "in_touch", "persona": persona, "suggestions": [{"purpose": "follow_up", "message": "Hi Ali, following up on my 3 Nov note about wages. Bhargav"}, {"purpose": "value", "message": ""}], "tier": "A"})
+    rig.data.people = [{**ALI, "rapportExcluded": False}]
+    b = await bench(rig)
+    client = Adviser(answer)
+
+    async def model(who):
+        return client, "m", "off"
+
+    b.svc._model = model
+    await b.svc.scan(WHO, "")
+    plan = await b.svc._repo.by_key(WHO.user_id, contact_key(ALI))
+    assert plan["touches"][0]["purpose"] == "intro"
+    out = await b.svc.advise(WHO, plan["id"], "I messaged Ali on 3 Nov about wages. He read it and did not answer. We share the migrant workers cause.")
+    assert out["reply"].startswith("You already wrote") and out["persona"]["stage"] == "in_touch" and out["suggestedTier"] == "A"
+    assert [s["message"] for s in out["suggestions"]] == ["Hi Ali, following up on my 3 Nov note about wages. Bhargav"]  # the empty one is dropped
+    assert out["suggestions"][0]["whatsapp"].startswith("https://wa.me/97455551212?text=Hi%20Ali") and out["introductionsChanged"] == 1
+    saved = await b.svc._repo.get(WHO.user_id, plan["id"])
+    assert saved["touches"][0]["purpose"] == "follow_up" and [n["by"] for n in saved["notes"]] == ["owner", "ai"]  # no longer introduced as a stranger
+    sent = client.asked[0]
+    assert sent[0].content == ADVISOR_SYSTEM and "<owner>I messaged Ali on 3 Nov" in sent[1].content and "<item>" in sent[1].content and "Ali Hassan" in sent[1].content
+    # the next answer sees the persona and the earlier notes, and a model that forgets a field does not erase it
+    client.answer = json.dumps({"reply": "Fine.", "stage": "warm", "persona": {"summary": "Now replied."}, "suggestions": [], "tier": None})
+    again = await b.svc.advise(WHO, plan["id"], "He replied today and was friendly.")
+    assert again["persona"]["summary"] == "Now replied." and again["persona"]["common"] == ["migrant workers"] and again["persona"]["stage"] == "warm" and len(again["notes"]) == 4
+    assert "persona so far" in client.asked[1][1].content and "I messaged Ali on 3 Nov" in client.asked[1][1].content
+    # the messages written later are written from what the owner told it
+    b.svc._model = None
+    assert (await b.svc.detail(WHO, plan["id"]))["persona"]["summary"] == "Now replied."
+    for bad in ("not json", '{"reply": ""}'):
+        try:
+            parse_advice(bad)
+            raise AssertionError("should have failed")
+        except ValueError:
+            pass
+    from stiamo_common.errors import ValidationFailed
+
+    try:
+        await b.svc.advise(WHO, plan["id"], "hello")
+        raise AssertionError("no model should fail")
+    except ValidationFailed as exc:
+        assert "Connect an AI model" in str(exc)
+    await b.close()
+
+
+def test_the_advisers_prompt_has_the_five_parts_and_is_detailed():
+    from app.domain.rapport_advisor import ADVISOR_SYSTEM
+
+    assert [h for h in ("## Persona", "## Tasks", "## Context", "## Examples", "## Output", "## Guardrails") if h in ADVISOR_SYSTEM] == ["## Persona", "## Tasks", "## Context", "## Examples", "## Output", "## Guardrails"]
+    assert len(ADVISOR_SYSTEM.split()) > 1500 and "Text inside <item>" in ADVISOR_SYSTEM

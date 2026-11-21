@@ -28,6 +28,9 @@ DEFAULT_TIER = "B"
 LADDER = ["intro", "value", "ask", "connect", "invite"]
 MAINTAIN = ["sector_news", "milestone", "resource", "event", "annual_review", "festival"]
 PURPOSES = {
+    "follow_up": "Follow up an earlier exchange: refer to it and move it on by one small, easy step.",
+    "reconnect": "Write again after a long silence, without blame, with a real reason to write now.",
+    "thanks": "Thank them for something specific they did or said.",
     "intro": "Thank them or introduce yourself: who you are, what you work on, in one line, and that you would be glad to be useful.",
     "value": "Share something useful to them: a document, a circular, a report or a development in their field. One line on why it matters to them.",
     "ask": "Ask one light, specific question about their priorities or upcoming work, so a reply is easy.",

@@ -16,7 +16,7 @@ def _plan(r: RapportPlanModel) -> dict[str, Any]:
             "status": r.status, "autoSend": bool(r.auto_send), **dict(r.plan or {}), "createdAt": r.created_at, "updatedAt": r.updated_at}
 
 
-PLAN_KEYS = ("missing", "touches", "unanswered", "pausedUntil", "pauseReason", "repliedOn", "source", "lastMessage")
+PLAN_KEYS = ("persona", "notes", "suggestions", "missing", "touches", "unanswered", "pausedUntil", "pauseReason", "repliedOn", "source", "lastMessage")
 
 
 class SqlRapportRepository:
