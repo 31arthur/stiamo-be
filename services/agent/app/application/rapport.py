@@ -30,14 +30,14 @@ log = logging.getLogger(__name__)
 
 Send = Callable[..., Awaitable[int]]
 
-DRAFT_SYSTEM = """You write one WhatsApp message from {owner} to a business contact. Write it so a busy professional is glad to get it.
+DRAFT_SYSTEM = """You write one WhatsApp message from {owner} to a business contact. {owner_line} Write it so a busy professional is glad to get it.
 
 Rules:
 - At most 60 words. Plain words. At most one emoji, and only if it fits.
 - Start with their name. One purpose only (given below). One easy next step, or none.
 - Never a bare "how are you". Never flattery. Never a claim, number or fact that is not in the context. No links unless given.
 - Match their world: formal and brief for officials; collegial for unions and civil society; efficient for clients.
-- Write in the language set for them (default English). Sign off with {owner}'s first name.
+- Write in the language set for them (default English). {sign_off}
 - If you do not know enough to be specific, be short and honest rather than generic.
 
 Answer with JSON only: {{"message": "<the message>"}}"""
@@ -67,14 +67,20 @@ def zone_of(contact: dict[str, Any]) -> str:
 class RapportService:
     def __init__(self, repo: SqlRapportRepository, actions: ActionService, data_factory: Callable[[str], Any], notify: Send,
                  chat_model: Callable[[Who], Awaitable[Any]] | None = None, names: Callable[[Who], Awaitable[str]] | None = None, now: Callable[[], datetime] = lambda: datetime.now(UTC)) -> None:
+        #: The owner's full name (a function of who), and Chittu's list (application/queue.py): set by the app.
+        self.full_name: Callable[[Who], Awaitable[str]] | None = None
+        self.queue: Any = None
         self._repo, self._actions, self._data, self._notify, self._model, self._names, self._now = repo, actions, data_factory, notify, chat_model, names, now
 
     def _today(self) -> str:
         return self._now().astimezone(ZoneInfo(HOME)).date().isoformat()
 
     async def _owner(self, who: Who) -> str:
-        name = (await self._names(who)) if self._names is not None else ""
-        return _first(name or who.name).title() or "me"
+        """What the owner is called (the name they set, e.g. Bhargav); empty when none was set, so no name is guessed from their email."""
+        return " ".join(((await self._names(who)) if self._names is not None else "").split())
+
+    async def _full_name(self, who: Who) -> str:
+        return " ".join(((await self.full_name(who)) if self.full_name is not None else "").split())
 
     async def _taken(self, who: Who) -> dict[str, int]:
         out: dict[str, int] = {}
@@ -185,10 +191,23 @@ class RapportService:
 
     # --- writing and sending -------------------------------------------------------------------------------------------------------------
 
+    @staticmethod
+    def _owner_line(owner: str, full: str) -> str:
+        if not owner:
+            return "Their name is not known: do not invent one."
+        return f"Everyone calls them {owner}" + (f"; their full name is {full}." if full and full != owner else ".")
+
+    @staticmethod
+    def _sign_off(owner: str, full: str) -> str:
+        if not owner:
+            return "Do not sign with a name."
+        return f"Sign off as {owner}." + (f" In the first message to someone, introduce them by the full name once ({full})." if full and full != owner else "")
+
     async def draft(self, who: Who, plan: dict[str, Any], touch: dict[str, Any], redo: bool = False) -> str:
-        owner = await self._owner(who)
+        owner, full = await self._owner(who), await self._full_name(who)
         about, prof = plan.get("about") or {}, (plan.get("about") or {}).get("profile") or {}
-        fallback = f"Hello {_first(plan['name'])}, this is {owner}. " + {
+        who_am_i = f"this is {full or owner}. " if (owner or full) and touch["purpose"] == "intro" else (f"this is {owner}. " if owner else "")
+        fallback = f"Hello {_first(plan['name'])}, {who_am_i}" + {
             "intro": "I wanted to say it was good to be connected, and that I'm glad to help with anything in your work.", "value": "I came across something I thought might be useful to you; shall I send it over?",
             "ask": "What is the main thing on your plate in the coming weeks? I'd like to see where I can help.", "connect": "I know someone whose work fits yours. May I introduce you?",
             "invite": "Could we have a short call this week? Tell me what suits you.", }.get(touch["purpose"], "A short note to stay in touch, and to say I'm here if I can help.")
@@ -203,7 +222,7 @@ class RapportService:
             "instruction": "Write a different wording from the last message." if redo else "",
         }
         try:
-            reply = await client.chat(model=name, messages=[Message("system", DRAFT_SYSTEM.format(owner=owner)), Message("user", json.dumps({k: v for k, v in context.items() if v not in (None, "", [], {})}, ensure_ascii=False))], tools=[], thinking=thinking)
+            reply = await client.chat(model=name, messages=[Message("system", DRAFT_SYSTEM.format(owner=owner or "the owner", owner_line=self._owner_line(owner, full), sign_off=self._sign_off(owner, full))), Message("user", json.dumps({k: v for k, v in context.items() if v not in (None, "", [], {})}, ensure_ascii=False))], tools=[], thinking=thinking)
             text = json.loads(reply.text[reply.text.index("{"): reply.text.rindex("}") + 1])["message"]
             return str(text).strip()[:900] or fallback
         except Exception:  # noqa: BLE001  a message that cannot be written well is written plainly, not skipped
@@ -216,6 +235,7 @@ class RapportService:
         await self._reconcile(who)
         today = self._today()
         plans = await self._repo.all(who.user_id, ["active"])
+        refs: list[str] = []
         sent_today = sum(1 for p in plans for t in p.get("touches", []) if today in (t.get("sentOn"), t.get("queuedOn")))
         for plan in plans:
             touch = due_now(plan, self._now())
@@ -229,10 +249,22 @@ class RapportService:
                 out["waiting"] += 1
                 continue
             text = await self.draft(who, plan, touch)
-            await self._deliver(who, token, plan, touch, text)
+            ref = await self._deliver(who, token, plan, touch, text)
+            if ref:
+                refs.append(ref)
             out["queued"] += 1
             sent_today += 1
+        await self._bring(who, token, refs)
         return out
+
+    async def _bring(self, who: Who, token: str, refs: list[str]) -> None:
+        """The messages that came due go into Chittu's list like any other action item, one at a time and numbered, and first: a rapport message is class 1, ahead of the rest."""
+        if not refs or self.queue is None:
+            return
+        from app.domain.worklist import Spec, entry
+
+        spec = Spec("Rapport messages", "next" if await self.queue.current(who) is not None else "replace", [entry(r, "to send on WhatsApp") for r in refs])
+        await self.queue.set(who, token, spec, source="rapport")
 
     @staticmethod
     def _postpone(plan: dict[str, Any], touch: dict[str, Any], today: str) -> None:
@@ -244,22 +276,17 @@ class RapportService:
                 return
             day += timedelta(days=1)
 
-    async def _deliver(self, who: Who, token: str, plan: dict[str, Any], touch: dict[str, Any], text: str) -> bool:
-        """Hands the message to the owner: an action item (the text, and a link that opens the contact's own WhatsApp chat with it written) and a Telegram message with the same
-        button. The owner presses send in WhatsApp, then Sent here. Nothing leaves Stiamo by itself."""
-        reason = "" if plan.get("phone") else "there is no phone number for them"
+    async def _deliver(self, who: Who, token: str, plan: dict[str, Any], touch: dict[str, Any], text: str) -> str:
+        """Makes the message an action item (the text, and a link that opens the contact's own WhatsApp chat with it written) and returns its ref. It is not sent anywhere
+        on its own: it joins Chittu's list (see _bring), and the owner presses send in WhatsApp, then Done."""
         touch["state"] = "queued"
         touch["queuedOn"] = self._today()
         link = wa_link(plan["phone"], text) if plan.get("phone") else ""
-        item = await self._actions.create(who, kind="message", title=f"Message {plan['name']}: {touch['purpose']}", day=self._today(), priority="normal", workspace=(plan.get("workspaces") or ["personal"])[0], source="rapport",
+        item = await self._actions.create(who, kind="message", title=f"Message {plan['name']}: {touch['purpose']}", day=self._today(), priority="urgent", workspace=(plan.get("workspaces") or ["personal"])[0], source="rapport",
                                           links={"rapport": {"plan": plan["id"], "touch": touch["n"], "draft": text, "wa": link}, "contact": plan["name"]}, notes=text, actor="chittu", reason="a rapport message for you to send")
         touch["item"] = f"message:{item['id']}"
         await self._repo.save(who.user_id, plan, self._now())
-        why = f" ({reason})" if reason else ""
-        rows = ([[{"text": "💬 Open WhatsApp", "url": link}]] if link else []) + [[{"text": "✅ Sent", "callback_data": f"rp:s:{plan['id'][:8]}:{touch['n']}"}, {"text": "🗣 They replied", "callback_data": f"rp:r:{plan['id'][:8]}:{touch['n']}"}],
-                                                                                  [{"text": "✏️ Reword", "callback_data": f"rp:w:{plan['id'][:8]}:{touch['n']}"}, {"text": "⏭ Skip", "callback_data": f"rp:k:{plan['id'][:8]}:{touch['n']}"}, {"text": "⏸ Pause", "callback_data": f"rp:p:{plan['id'][:8]}:{touch['n']}"}]]
-        await self._notify(who, f"✉️ {plan['name']} · {touch['purpose']}{why}\n\n{text}", rows)
-        return False
+        return touch["item"]
 
     async def _reconcile(self, who: Who) -> None:
         """A touch waiting on the owner whose action item was settled in the list: done means it was sent, cancelled means it was skipped."""

@@ -260,11 +260,12 @@ def queue_order(items: list[ActionItem], today: str, through: str | None = None)
         mine.append(it)
 
     def key(it: ActionItem) -> tuple[Any, ...]:
+        first = 0 if it.source == "rapport" else 1  # a rapport message is class 1: it comes before everything else
         if through and through > today:  # a range ahead: by day, then the usual order within a day
-            return (it.day or it.due or "", 0 if it.priority == "urgent" else 1, it.start if it.start is not None else 24 * 60, PRIORITY_RANK.get(it.priority, 2))
+            return (first, it.day or it.due or "", 0 if it.priority == "urgent" else 1, it.start if it.start is not None else 24 * 60, PRIORITY_RANK.get(it.priority, 2))
         timed_fixed = it.fixed and it.day == today and it.start is not None
         overdue = (it.day or it.due or today) < today
-        return (0 if timed_fixed else 1, it.start if timed_fixed else 0, 0 if it.priority == "urgent" else 1, 0 if overdue else 1, (it.day or it.due or today) if overdue else "", PRIORITY_RANK.get(it.priority, 2), it.start if it.start is not None else 24 * 60)
+        return (first, 0 if timed_fixed else 1, it.start if timed_fixed else 0, 0 if it.priority == "urgent" else 1, 0 if overdue else 1, (it.day or it.due or today) if overdue else "", PRIORITY_RANK.get(it.priority, 2), it.start if it.start is not None else 24 * 60)
 
     return sorted(mine, key=key)
 

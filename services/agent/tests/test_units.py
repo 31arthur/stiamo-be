@@ -149,4 +149,4 @@ def test_an_agents_variables_are_the_base_ones_plus_its_packs():
     packs = PackRegistry([CasesPack(), DrivePack()])
     only_drive = AgentDefinition(id="d", name="D", description="", system="x", packs=("drive",))
     reg = AgentRegistry([only_drive], packs)
-    assert {"input", "today", "user", "channel", "tools", "drive"} == set(reg.variables(only_drive))
+    assert {"input", "today", "user", "user_full", "channel", "tools", "drive"} == set(reg.variables(only_drive))

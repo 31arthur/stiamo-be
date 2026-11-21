@@ -47,7 +47,7 @@ from app.application.queue import QueueService
 from app.application.rapport import RapportService
 from app.infrastructure.db.rapport import SqlRapportRepository
 from app.application.services import selection_of
-from app.domain.chittu import saved_name
+from app.domain.chittu import saved_full_name, saved_name
 from app.domain.zones import where_is_the_owner
 
 current_principal = make_principal_dependency(lambda: get_settings().token_settings())
@@ -113,6 +113,10 @@ def build_services(app: FastAPI, session: AsyncSession) -> tuple[AgentService, C
         return saved_name(row.planner) if row else ""
 
     agent.queue = channels.queue_actions = QueueService(SqlActionRepository(session), agent.actions, lambda who, text, buttons, channel_id=None: channels.send_to_channel(who, channel_id, text, buttons) if channel_id else channels.announce(who, text, kind="chittu", summary=text[:60], buttons=buttons), lambda: s.clock(), owner_name)
+    async def owner_full_name(who) -> str:
+        row = await SqlSettingsRepository(session, s.box).get(who.user_id)
+        return saved_full_name(row.planner) if row else ""
+
     async def chat_model(who):
         row = await SqlSettingsRepository(session, s.box).get(who.user_id)
         sel = selection_of(row, "daily-planner")[0] if row else None
@@ -123,6 +127,7 @@ def build_services(app: FastAPI, session: AsyncSession) -> tuple[AgentService, C
         SqlRapportRepository(session), agent.actions, s.data_factory, lambda who, text, buttons=None: channels.announce(who, text, kind="rapport", summary=text[:60], buttons=buttons),
         chat_model, owner_name, lambda: s.clock())
     channels.queue_actions.rapport = channels.rapport_actions
+    channels.rapport_actions.full_name, channels.rapport_actions.queue = owner_full_name, channels.queue_actions
     agent.headlines = channels.headline_actions = HeadlineDesk(NewsService(SqlWorkflowRepository(session), SqlSettingsRepository(session, s.box)), lambda who, text, buttons, channel_id=None: channels.send_to_channel(who, channel_id, text, buttons) if channel_id else channels.announce(who, text, kind="chittu", summary=text[:60], buttons=buttons), lambda: s.clock())
     agent.actions.on_created = lambda who, ref: channels.queue_actions.add(who, ref)
 

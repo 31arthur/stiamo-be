@@ -53,7 +53,7 @@ def chittu_settings(raw: dict[str, Any] | None) -> dict[str, Any]:
     """When Chittu says good morning and good night, and whether he does. On unless switched off: the day opens at six and closes at ten."""
     c = (raw or {}).get("chittu") or {}
     after = c.get("remindAfter", 45)
-    return {"enabled": c.get("enabled", True) is not False, "morning": c.get("morning") or "06:00", "night": c.get("night") or DEFAULT_TIME, "remindAfter": after if isinstance(after, int) and 0 <= after <= 240 else 45, "name": " ".join(str(c.get("name") or "").split())[:40]}
+    return {"enabled": c.get("enabled", True) is not False, "morning": c.get("morning") or "06:00", "night": c.get("night") or DEFAULT_TIME, "remindAfter": after if isinstance(after, int) and 0 <= after <= 240 else 45, "name": " ".join(str(c.get("name") or "").split())[:40], "fullName": " ".join(str(c.get("fullName") or "").split())[:80]}
 
 
 def plan_buttons(plan_id: str) -> list[list[dict[str, str]]]:
@@ -150,6 +150,8 @@ class DayPlanService:
             for k in ("morning", "night"):
                 if chittu.get(k) is not None:
                     parse_time(chittu[k])
+            if chittu.get("fullName") is not None and len(str(chittu["fullName"]).strip()) > 80:
+                raise ValidationFailed("The full name is at most 80 characters.")
             if chittu.get("name") is not None and len(str(chittu["name"]).strip()) > 40:
                 raise ValidationFailed("The name is at most 40 characters.")
             if chittu.get("remindAfter") is not None and not 0 <= int(chittu["remindAfter"]) <= 240:
