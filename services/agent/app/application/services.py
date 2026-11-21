@@ -29,7 +29,7 @@ from app.application.registry import AgentRegistry
 from app.application.runner import AgentRun, Tool, run_agent
 from app.application.scope import PlannerData, ScopedData
 from app.application.toolpacks.cards import enrich
-from app.domain.chittu import saved_name
+from app.domain.chittu import saved_full_name, saved_name
 from app.domain.zones import where_is_the_owner, resolve_zone, HOME
 from app.application.toolpacks import PackContext
 from app.application.usage_totals import Bucket
@@ -497,7 +497,7 @@ class AgentService:
                           zone=where_is_the_owner(s.planner, datetime.now(UTC))[0], home=where_is_the_owner(s.planner, datetime.now(UTC))[1], set_zone=lambda zone, back: self.set_zone(who, zone, back), rapport=self.rapport, headlines=self.headlines)
         tools: list[Tool] = []
         tool_packs: dict[str, str] = {}
-        context: dict[str, Any] = {"today": today, "user": saved_name(s.planner) or who.name, "channel": channel}
+        context: dict[str, Any] = {"today": today, "user": saved_name(s.planner) or who.name, "user_full": saved_full_name(s.planner) or saved_name(s.planner) or who.name, "channel": channel}
         for name in agent.packs:
             pack = self._registry.packs.get(name)
             made = [Tool(enrich(t.spec), t.label, t.run) for t in await pack.tools(ctx)]  # every tool carries its full card

@@ -24,6 +24,11 @@ def saved_name(planner: dict | None) -> str:
     return " ".join(str(((planner or {}).get("chittu") or {}).get("name") or "").split())[:40]
 
 
+def saved_full_name(planner: dict | None) -> str:
+    """The owner's full name, as they set it, or "" when none was set."""
+    return " ".join(str(((planner or {}).get("chittu") or {}).get("fullName") or "").split())[:80]
+
+
 def good_morning(owner: str, day: str, count: int, first: str | None = None, carried: int = 0) -> str:
     """The first message of the day. Short; it says how many things want the owner (and how many are still on the list from before), and asks whether to start."""
     when = date.fromisoformat(day).strftime("%A %-d %B")

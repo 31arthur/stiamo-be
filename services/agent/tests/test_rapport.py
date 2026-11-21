@@ -43,6 +43,17 @@ class Bench:
         actions = ActionService(SqlActionRepository(self.s), self.rig.app.state.data_factory)
         self.svc = RapportService(SqlRapportRepository(self.s), actions, self.rig.app.state.data_factory, notify, None, None, lambda: MONDAY_1030_IST)
         self.actions = actions
+        self.brought = []
+
+        class Queue:
+            async def current(_, who):
+                return None
+
+            async def set(_, who, token, spec, source="ai", channel_id=None):
+                self.brought.append([e["ref"] for e in spec.entries])
+                assert spec.title == "Rapport messages" and spec.mode == "replace" and source == "rapport"
+
+        self.svc.queue = Queue()
         return self
 
     async def close(self):
@@ -76,8 +87,11 @@ async def test_a_due_message_is_written_and_sent_inside_the_window_and_nobody_ge
     b = await bench(rig)
     await b.svc.scan(WHO, "")
     out = await b.svc.tick(WHO, "")
-    texts = [t for t, _ in b.said if t.startswith("✉️")]
-    assert out["queued"] == 3 and len(texts) == 3  # the cap for one day across everyone: the fourth was planned for tomorrow
+    items = [i async for i in _items(b)]
+    texts = [i["notes"] for i in items]
+    assert out["queued"] == 3 and len(items) == 3 and [t for t, _ in b.said if t.startswith("✉️")] == []  # the cap for one day across everyone; nothing is sent on its own
+    assert all(i["priority"] == "urgent" and i["source"] == "rapport" and i["kind"] == "message" for i in items)  # class 1, and ordinary action items
+    assert b.brought == [[i["kind"] + ":" + i["id"] for i in items]]  # handed to Chittu's list together, so it walks them 1/3, 2/3, 3/3
     assert all("Hello " in t for t in texts) and all("how are you" not in t.lower() for t in texts)
     fay = await b.svc._repo.by_key(WHO.user_id, contact_key({"emails": [{"value": "fay@x.org"}]}))
     assert fay["touches"][0]["day"] == "2026-11-24" and fay["touches"][0]["state"] == "planned"
@@ -94,16 +108,11 @@ async def test_a_due_message_comes_to_the_owner_with_the_text_written_and_a_butt
     b.said.clear()
     out = await b.svc.tick(WHO, "")
     assert out == {"sent": 0, "queued": 1, "waiting": 0}  # nothing is sent by Stiamo
-    text, buttons = b.said[0]
-    assert text.startswith("✉️ Ali Hassan · intro")
-    flat = [x for row in buttons for x in row]
-    assert flat[0]["text"] == "💬 Open WhatsApp" and flat[0]["url"].startswith("https://wa.me/97455551212?text=Hello%20Ali")
-    assert [x["text"] for x in flat[1:]] == ["✅ Sent", "🗣 They replied", "✏️ Reword", "⏭ Skip", "⏸ Pause"]
+    assert b.said == [] and len(b.brought) == 1  # no message of its own: it goes into Chittu's list
     plan = await b.svc._repo.by_key(WHO.user_id, contact_key(ALI))
     item = [i async for i in _items(b)][0]
     assert item["kind"] == "message" and item["source"] == "rapport" and item["links"]["rapport"]["draft"].startswith("Hello Ali") and item["links"]["rapport"]["wa"].startswith("https://wa.me/97455551212")  # an action item too, with the text
-    sent = next(x["callback_data"] for x in flat if x["text"] == "✅ Sent")
-    said = await b.svc.press(WHO, "", "s", sent.split(":", 2)[2])
+    said = await b.svc.press(WHO, "", "s", f"{plan['id'][:8]}:{plan['touches'][0]['n']}")
     assert said == "✅ Noted: sent to Ali Hassan."
     plan = await b.svc._repo.by_key(WHO.user_id, contact_key(ALI))
     assert plan["touches"][0]["state"] == "sent" and plan["unanswered"] == 1
@@ -203,3 +212,16 @@ async def test_a_new_contact_waits_for_its_tags_and_place_then_the_plan_starts_b
     plan = await b.svc._repo.by_key(WHO.user_id, contact_key(bare))
     assert [p["name"] for p in started] == ["Chen Wei"] and plan["status"] == "active" and plan["touches"] and "get-to-know plan" in b.said[0][0]
     await b.close()
+
+
+async def test_the_message_is_written_in_the_name_the_owner_set_and_a_rapport_message_is_class_one_in_the_order():
+    from app.domain.actionitems import from_native, queue_order
+
+    mk = lambda i, **o: from_native({"id": i, "kind": "task", "title": i, "workspace": "sb", "day": "2026-11-23", "priority": "normal", "status": "open", **o})  # noqa: E731
+    items = [mk("late", day="2026-11-20", priority="urgent"), mk("hearing", kind="hearing", start=600), mk("calls", kind="call"), mk("wa", kind="message", source="rapport", priority="urgent")]
+    assert queue_order(items, "2026-11-23")[0].ref == "message:wa"  # ahead of an urgent overdue item and a fixed hearing
+    from app.application.rapport import RapportService
+
+    assert "Everyone calls them Bhargav; their full name is Kanthi Kiran Bhargav." == RapportService._owner_line("Bhargav", "Kanthi Kiran Bhargav")
+    assert "introduce them by the full name once (Kanthi Kiran Bhargav)" in RapportService._sign_off("Bhargav", "Kanthi Kiran Bhargav")
+    assert RapportService._owner_line("", "") == "Their name is not known: do not invent one." and RapportService._sign_off("", "") == "Do not sign with a name."

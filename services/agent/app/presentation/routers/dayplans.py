@@ -25,6 +25,8 @@ class ChittuBody(DomainModel):
     night: Annotated[str | None, Field(min_length=4, max_length=5)] = None
     #: What Chittu calls the owner (their first name, say). Left out: unchanged; empty: back to the name their email gives.
     name: Annotated[str | None, Field(max_length=40)] = None
+    #: The owner's full name (Kanthi Kiran Bhargav), for what is written on their behalf. Empty: none.
+    full_name: Annotated[str | None, Field(max_length=80)] = None
     #: Minutes after the good morning to ask once more if there was no answer (0: never).
     remind_after: Annotated[int | None, Field(ge=0, le=240)] = None
 

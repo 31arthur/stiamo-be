@@ -17,7 +17,8 @@ DEFAULT_INPUT = "{{input}}"
 BASE_VARIABLES: dict[str, str] = {
     "input": "What the person typed (the whole message).",
     "today": "Today's date.",
-    "user": "Who is asking (their name, from their email).",
+    "user": "Who is asking: the name they set in Chittu's settings (what everyone calls them), else from their email.",
+    "user_full": "Their full name, as set in Chittu's settings (else the same as user).",
     "channel": "Where the message came from: the web app, Telegram or WhatsApp.",
     "tools": "The tools switched on, one per line with what each does.",
 }
