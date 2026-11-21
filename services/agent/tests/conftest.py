@@ -231,6 +231,13 @@ class FakeData(DataGateway):
         return [{"id": "f2" * 8, "name": "Reply from NHAI.pdf", "mimeType": "application/pdf", "matched": ["NHAI"]}]
 
 
+class FakePreview:
+    pages = {"https://example.org/report": {"title": "The 2026 wage report", "description": "What migrant workers earn, state by state.", "image": "https://example.org/cover.jpg", "site": "example.org", "url": "https://example.org/report", "host": "example.org"}}
+
+    async def fetch(self, url):
+        return self.pages.get(url, {"error": "The page couldn't be reached."})
+
+
 class FakeTelegram(TelegramApi):
     def __init__(self) -> None:
         self.sent: list[tuple[Any, str]] = []
@@ -422,6 +429,7 @@ async def rig():
         tokens=FakeTokens(),
         voice=voice,
         caller=caller,
+        link_preview=FakePreview(),
     )
     async with app.router.lifespan_context(app):
         async with app.state.engine.begin() as conn:

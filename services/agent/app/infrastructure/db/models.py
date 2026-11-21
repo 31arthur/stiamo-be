@@ -430,3 +430,51 @@ class RapportPlanModel(Base):
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime)
 
     __table_args__ = (UniqueConstraint("user_id", "contact_key", name="uq_rapport_plans_contact"), Index("ix_rapport_plans_user", "user_id", "status"))
+
+
+class CampaignModel(Base):
+    """A message, a link or a picture to send to many contacts, one by one, and what came of it."""
+
+    __tablename__ = "campaigns"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(36))
+    name: Mapped[str] = mapped_column(String(200))
+    #: The words, with {name} for the contact's first name and {link} for the link (added at the end when it is not there).
+    message: Mapped[str] = mapped_column(Text, default="")
+    url: Mapped[str] = mapped_column(Text, default="")
+    image_url: Mapped[str] = mapped_column(Text, default="")
+    #: What WhatsApp will show for the link: {title, description, image, site, url}.
+    preview: Mapped[dict[str, Any]] = mapped_column(Json, default=dict)
+    track_clicks: Mapped[bool] = mapped_column(Boolean, default=True)
+    #: draft, active, closed.
+    status: Mapped[str] = mapped_column(String(10), default="active")
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime)
+
+    __table_args__ = (Index("ix_campaigns_user", "user_id", "status"),)
+
+
+class CampaignMemberModel(Base):
+    """One contact in one campaign: whether it was sent, whether they answered, whether they opened the link."""
+
+    __tablename__ = "campaign_members"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    campaign_id: Mapped[str] = mapped_column(String(36))
+    user_id: Mapped[str] = mapped_column(String(36))
+    contact_key: Mapped[str] = mapped_column(String(200))
+    contact_id: Mapped[str] = mapped_column(String(80), default="")
+    name: Mapped[str] = mapped_column(String(200))
+    phone: Mapped[str] = mapped_column(String(32), default="")
+    #: pending, sent, replied, declined, skipped.
+    state: Mapped[str] = mapped_column(String(10), default="pending")
+    #: The secret in this person's own link, so a click is theirs.
+    token: Mapped[str] = mapped_column(String(32))
+    sent_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    replied_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    clicked_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    clicks: Mapped[int] = mapped_column(Integer, default=0)
+    note: Mapped[str] = mapped_column(Text, default="")
+
+    __table_args__ = (UniqueConstraint("campaign_id", "contact_key", name="uq_campaign_member"), Index("ix_campaign_members_campaign", "campaign_id", "state"), Index("ix_campaign_members_token", "token"))

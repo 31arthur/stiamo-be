@@ -38,9 +38,11 @@ from app.infrastructure.db.repositories import (
     SqlProposalRepository,
     SqlSettingsRepository,
 )
+from app.infrastructure.db.campaigns import SqlCampaignRepository
 from app.infrastructure.db.workflows import SqlWorkflowRepository
 from app.infrastructure.db.actions import SqlActionRepository
 from app.application.actions import ActionService
+from app.application.campaigns import CampaignService
 from app.application.headlines import HeadlineDesk
 from app.application.news import NewsService
 from app.application.queue import QueueService
@@ -146,6 +148,11 @@ def build_services(app: FastAPI, session: AsyncSession) -> tuple[AgentService, C
 def build_conversations(app: FastAPI, session: AsyncSession) -> ConversationService:
     agent, _ = build_services(app, session)
     return ConversationService(SqlConversationRepository(session), agent, SqlProposalRepository(session))
+
+
+def build_campaigns(app: FastAPI, session: AsyncSession) -> CampaignService:
+    s = app.state
+    return CampaignService(SqlCampaignRepository(session), s.link_preview.fetch, s.settings.public_url, lambda: s.clock())
 
 
 def build_proposals(app: FastAPI, session: AsyncSession) -> ProposalService:
