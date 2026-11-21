@@ -141,6 +141,21 @@ def phone_e164(raw: str, default_code: str = "+91") -> str | None:
     return s if digits.isdigit() and 8 <= len(digits) <= 15 else None
 
 
+def zone_from_location(text: str | None) -> str | None:
+    """The zone a place means ("Doha, Qatar" -> Asia/Qatar): the whole text, then its parts from the country back to the city, or None when none is known."""
+    raw = str(text or "").strip()
+    if not raw:
+        return None
+    found = resolve_zone(raw)
+    if found:
+        return found
+    for part in reversed([p.strip() for p in re.split(r"[,;/\n]", raw) if p.strip()]):
+        found = resolve_zone(part)
+        if found:
+            return found
+    return None
+
+
 def zone_from_phone(number: str | None) -> str | None:
     """The zone a country code usually means (the longest matching code), or None."""
     n = phone_e164(number or "")

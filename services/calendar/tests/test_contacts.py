@@ -179,3 +179,20 @@ async def test_tags_and_the_zone_are_kept_here_survive_a_sync_and_apply_in_every
     other = headers("u2", "other@example.com")
     assert (await rig.client.patch(f"{C}/{ada['id']}", json={"tags": ["x"]}, headers=other)).status_code == 404  # not someone else's
     assert (await rig.client.patch(f"{C}/{ada['id']}", json={}, headers=headers())).status_code == 422
+
+
+async def test_where_a_contact_is_is_read_from_google_written_back_and_kept(rig):
+    doha = person("c7", "Chen Wei", "chen@union.org", "+974 5555 1212", "Union Federation", addresses=[{"city": "Doha", "country": "Qatar"}])
+    await link(rig, "me@sb.org", [ADA, doha])
+    chen = next(c for c in (await listed(rig, workspace="sb"))["items"] if c["name"] == "Chen Wei")
+    assert chen["location"] == "Doha, Qatar"  # read from the address in Google
+    ada = next(c for c in (await listed(rig, workspace="sb"))["items"] if c["name"] == "Ada Lovelace")
+    assert ada["location"] == ""
+    r = await rig.client.patch(f"{C}/{ada['id']}", json={"location": " Sao  Paulo, Brazil "}, headers=headers())
+    assert r.status_code == 200 and r.json()["location"] == "Sao Paulo, Brazil" and r.json()["googleSaved"] is True
+    assert list(rig.people.addresses.values()) == ["Sao Paulo, Brazil"]  # and written into the contact in Google
+    await sync(rig)
+    assert next(c for c in (await listed(rig, workspace="sb"))["items"] if c["name"] == "Ada Lovelace")["location"] == "Sao Paulo, Brazil"  # a sync where Google has no address keeps it
+    rig.people.read_only = True  # a link made when Stiamo could only read
+    r = await rig.client.patch(f"{C}/{ada['id']}", json={"location": "Lisbon, Portugal"}, headers=headers())
+    assert r.json()["location"] == "Lisbon, Portugal" and r.json()["googleSaved"] is False and "link this Google account again" in r.json()["googleNote"]

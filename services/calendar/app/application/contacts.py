@@ -209,6 +209,10 @@ class ContactService:
                 except Exception as exc:  # noqa: BLE001
                     raise ValidationFailed("That isn't a time zone. Use a name like Asia/Qatar.") from exc
             fields["timezone"] = name
+        place: str | None = None
+        if "location" in body:
+            place = " ".join(str(body["location"] or "").split())[:200]
+            fields["location"] = place
         if "rapportExcluded" in body:
             fields["rapport_excluded"] = bool(body["rapportExcluded"])
         if not fields:
@@ -218,4 +222,20 @@ class ContactService:
             raise NotFound("That contact isn't here.")
         by_account = {a.id: a.email for a in await self._repo.accounts(user_id)}
         mine = next(r for r in rows if r.id == contact_id)
-        return view(mine, sorted({r.workspace for r in rows}), [by_account.get(mine.account_id, "")])
+        out = view(mine, sorted({r.workspace for r in rows}), [by_account.get(mine.account_id, "")])
+        if place is not None:
+            out["googleSaved"], out["googleNote"] = await self._write_place(user_id, mine, place)
+        return out
+
+    async def _write_place(self, user_id: str, c: Contact, place: str) -> tuple[bool, str]:
+        """The place goes into the contact in Google too. A link made when Stiamo could only read contacts can't be written to: it stays here, and the owner is told to link again."""
+        account = await self._repo.account(user_id, c.account_id)
+        if account is None:
+            return False, "Saved here only."
+        try:
+            await self._people.set_address(await self._access_for(account), c.google_id, place)
+            return True, ""
+        except GoogleError as exc:
+            if exc.auth:
+                return False, "Saved here. To save it in Google too, link this Google account again and allow Stiamo to change contacts."
+            return False, f"Saved here, not in Google: {exc.message}"

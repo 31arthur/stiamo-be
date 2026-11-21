@@ -39,9 +39,11 @@ class LocalIn(BaseModel):
     #: Where the contact is, as a zone name (Asia/Qatar); empty to clear.
     timezone: Annotated[str | None, Field(max_length=64)] = None
     rapport_excluded: bool | None = None
+    #: Where they are ("Doha, Qatar"): written into their address in Google too. Empty to clear.
+    location: Annotated[str | None, Field(max_length=200)] = None
 
 
-@router.patch("/{contact_id}", summary="Tag a contact, say where they are, or say no rapport plan for them (kept in Stiamo; nothing is written to Google)")
+@router.patch("/{contact_id}", summary="Tag a contact, say where they are, say no rapport plan for them (kept in Stiamo), or give their place (also written to their address in Google)")
 async def update(contact_id: str, body: LocalIn, me: CurrentPrincipal, svc: Contacts) -> dict[str, Any]:
     sent = body.model_dump(exclude_none=True)
     if "rapport_excluded" in sent:

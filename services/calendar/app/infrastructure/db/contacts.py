@@ -40,7 +40,7 @@ class SqlContactRepository(ContactRepository):
     @staticmethod
     def _contact(r: ContactModel) -> Contact:
         return Contact(r.id, r.user_id, r.account_id, r.workspace, r.google_id, r.name, r.organisation, r.title, list(r.emails or []), list(r.phones or []), r.notes, r.photo, r.search,
-                       r.first_seen_at, bool(r.baseline), r.google_updated or "", list(r.tags or []), dict(r.profile or {}), r.timezone or "", bool(r.rapport_excluded))
+                       r.first_seen_at, bool(r.baseline), r.google_updated or "", list(r.tags or []), dict(r.profile or {}), r.timezone or "", bool(r.rapport_excluded), r.location or "")
 
     async def replace_contacts(self, account: ContactAccount, contacts: list[Contact]) -> int:
         """Makes the contacts kept for this link match what Google has now. What Google says is replaced; what the owner added (tags, profile, zone, "no rapport plan") and
@@ -55,10 +55,12 @@ class SqlContactRepository(ContactRepository):
             r = old.get(c.id)
             fields = dict(workspace=c.workspace, google_id=c.google_id, name=c.name, organisation=c.organisation, title=c.title, emails=c.emails, phones=c.phones, notes=c.notes, photo=c.photo, search=c.search, google_updated=c.google_updated)
             if r is None:
-                self.s.add(ContactModel(id=c.id, user_id=c.user_id, account_id=c.account_id, first_seen_at=now, baseline=first_read, tags=[], profile={}, timezone="", rapport_excluded=False, **fields))
+                self.s.add(ContactModel(id=c.id, user_id=c.user_id, account_id=c.account_id, first_seen_at=now, baseline=first_read, tags=[], profile={}, timezone="", rapport_excluded=False, location=c.location, **fields))
             else:
                 for k, v in fields.items():
                     setattr(r, k, v)
+                if c.location:  # Google has a place for them; when it has none, what the owner wrote here stays
+                    r.location = c.location
         await self.s.flush()
         return len(contacts)
 

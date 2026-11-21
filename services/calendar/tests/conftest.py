@@ -133,6 +133,11 @@ class FakePeople:
     async def email(self, access: str) -> str:
         return access.removeprefix("acc-")
 
+    async def set_address(self, access: str, google_id: str, location: str) -> None:
+        if getattr(self, "read_only", False):
+            raise GoogleError("forbidden", auth=True)
+        self.addresses = {**getattr(self, "addresses", {}), google_id: location}
+
     async def revoke(self, token: str) -> None:
         self.revoked.append(token)
         self.live.pop(token, None)

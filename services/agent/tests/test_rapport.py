@@ -167,3 +167,24 @@ async def test_on_telegram_new_contacts_are_walked_one_at_a_time_with_buttons_to
     nxt = [b for row in rig.telegram.edit_buttons_shown[-1] for b in row]
     await press(rig, c, next(b for b in nxt if b["text"] == "🚫 No plan")["callback_data"], update=4)
     assert "🚫 No plan for Ramesh Kumar." in rig.telegram.edits[-1][2] and [p for p in rig.data.people if p["id"] == "p2"][0]["rapportExcluded"] is True
+
+
+async def test_a_place_in_the_address_sets_their_zone_and_a_place_added_later_moves_the_messages(rig):
+    from app.application.rapport import zone_of
+    from app.domain.zones import zone_from_location
+
+    assert zone_from_location("Doha, Qatar") == "Asia/Qatar" and zone_from_location("Somewhere, Brazil") == "America/Sao_Paulo" and zone_from_location("Nowhere") is None
+    assert zone_of({"location": "Doha, Qatar", "phones": [{"value": "+55 11 91234 5678"}]}) == "Asia/Qatar"  # the address beats the phone's country
+    assert zone_of({"timezone": "Asia/Dubai", "location": "Doha, Qatar"}) == "Asia/Dubai"  # what the owner set beats both
+
+    # a place written later (in the app or in Google) moves what is still to come to their new local hours; what was sent stays
+    rig.data.people = [{**MEENA, "location": "Doha, Qatar"}]  # their phone says Brazil; the address says Qatar
+    b3 = await bench(rig)
+    plan = await b3.svc.start(WHO, "", MEENA)
+    assert plan["zone"] == "America/Sao_Paulo"
+    before = [(t["day"], t["at"]) for t in plan["touches"]]
+    assert await b3.svc.rezone(WHO, "") == 1
+    after = await b3.svc._repo.by_key(WHO.user_id, contact_key(MEENA))
+    assert after["zone"] == "Asia/Qatar" and [(t["day"], t["at"]) for t in after["touches"]] != before and all(t["purpose"] for t in after["touches"])
+    assert await b3.svc.rezone(WHO, "") == 0  # nothing left to move
+    await b3.close()

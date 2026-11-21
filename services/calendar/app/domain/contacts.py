@@ -63,6 +63,8 @@ class Contact:
     timezone: str = ""
     #: The owner said not to build a rapport plan for them.
     rapport_excluded: bool = False
+    #: Where they are, as written in their address in Google ("Doha, Qatar"). The zone is worked out from it when none was set.
+    location: str = ""
 
 
 def _labelled(items: Any, kind: str) -> list[dict[str, str]]:
@@ -90,11 +92,14 @@ def contact_from_person(account: ContactAccount, person: dict[str, Any]) -> Cont
     photos = [p for p in person.get("photos") or [] if p.get("url") and not p.get("default")]
     bios = person.get("biographies") or []
     notes = str((bios[0] if bios else {}).get("value") or "").strip()[:MAX_NOTES]
-    search = " ".join([name, organisation, title, *[e["value"] for e in emails], *[p["value"] for p in phones], notes]).lower()
+    places = person.get("addresses") or []
+    place = places[0] if places else {}
+    location = str(place.get("formattedValue") or ", ".join(str(place.get(k) or "").strip() for k in ("city", "region", "country") if str(place.get(k) or "").strip())).replace("\n", ", ").strip()[:200]
+    search = " ".join([name, organisation, title, *[e["value"] for e in emails], *[p["value"] for p in phones], notes, location]).lower()
     updated = next((str(s.get("updateTime")) for s in (person.get("metadata") or {}).get("sources") or [] if s.get("updateTime")), "")
     return Contact(
         f"{account.id}:{hashlib.sha1(str(person['resourceName']).encode()).hexdigest()[:20]}", account.user_id, account.id, account.workspace, str(person["resourceName"]),
-        name, organisation, title, emails, phones, notes, str(photos[0]["url"]) if photos else "", search, google_updated=updated,
+        name, organisation, title, emails, phones, notes, str(photos[0]["url"]) if photos else "", search, google_updated=updated, location=location,
     )
 
 
@@ -104,7 +109,7 @@ def view(c: Contact, workspaces: list[str] | None = None, accounts: list[str] | 
         "id": c.id, "name": c.name, "organisation": c.organisation, "title": c.title, "emails": c.emails, "phones": c.phones, "notes": c.notes, "photo": c.photo,
         "workspaces": workspaces or [c.workspace], "accounts": accounts or [],
         "firstSeenAt": iso(c.first_seen_at), "isNew": bool(c.first_seen_at) and not c.baseline, "googleUpdated": c.google_updated or None,
-        "tags": c.tags, "profile": c.profile, "timezone": c.timezone, "rapportExcluded": c.rapport_excluded,
+        "tags": c.tags, "profile": c.profile, "timezone": c.timezone, "rapportExcluded": c.rapport_excluded, "location": c.location,
     }
 
 
