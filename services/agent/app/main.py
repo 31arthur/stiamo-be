@@ -34,6 +34,7 @@ from app.infrastructure.voice import DeepgramVoice
 from app.presentation.deps import apply_mail_triggers, apply_schedules, sync_chittu, sync_evening, sync_listener, sync_reminders, watch_everyone
 from app.presentation.routers import (
     agent,
+    actionitems,
     alerts,
     attention,
     availability,
@@ -47,6 +48,7 @@ from app.presentation.routers import (
     news,
     proposals,
     queue as queue_routes,
+    rapport as rapport_routes,
     reminders,
     secrets,
     stories,
@@ -275,6 +277,8 @@ def create_app(settings: Settings | None = None, *, mail_events=None, registry=N
     app.include_router(alerts.router)
     app.include_router(mailwatch.router)
     app.include_router(queue_routes.router)
+    app.include_router(actionitems.router)
+    app.include_router(rapport_routes.router)
     app.include_router(insights.router)
     app.include_router(deliveries.router)
     app.include_router(health.router)
