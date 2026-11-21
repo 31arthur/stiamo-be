@@ -181,18 +181,28 @@ async def test_tags_and_the_zone_are_kept_here_survive_a_sync_and_apply_in_every
     assert (await rig.client.patch(f"{C}/{ada['id']}", json={}, headers=headers())).status_code == 422
 
 
-async def test_where_a_contact_is_is_read_from_google_written_back_and_kept(rig):
-    doha = person("c7", "Chen Wei", "chen@union.org", "+974 5555 1212", "Union Federation", addresses=[{"city": "Doha", "country": "Qatar"}])
-    await link(rig, "me@sb.org", [ADA, doha])
-    chen = next(c for c in (await listed(rig, workspace="sb"))["items"] if c["name"] == "Chen Wei")
-    assert chen["location"] == "Doha, Qatar"  # read from the address in Google
-    ada = next(c for c in (await listed(rig, workspace="sb"))["items"] if c["name"] == "Ada Lovelace")
-    assert ada["location"] == ""
-    r = await rig.client.patch(f"{C}/{ada['id']}", json={"location": " Sao  Paulo, Brazil "}, headers=headers())
-    assert r.status_code == 200 and r.json()["location"] == "Sao Paulo, Brazil" and r.json()["googleSaved"] is True
-    assert list(rig.people.addresses.values()) == ["Sao Paulo, Brazil"]  # and written into the contact in Google
+async def test_places_can_be_searched_and_a_place_and_zone_are_kept_here_only(rig):
+    await link(rig, "me@sb.org", [ADA])
+    got = (await rig.client.get(f"{C}/places", params={"q": "Mahabub"}, headers=headers())).json()["items"]
+    assert got[0]["label"] == "Mahbubnagar, Telangana, India" and got[0]["timezone"] == "Asia/Kolkata"
+    assert (await rig.client.get(f"{C}/places", params={"q": "zzz"}, headers=headers())).json()["items"] == []
+    ada = (await listed(rig, workspace="sb"))["items"][0]
+    r = await rig.client.patch(f"{C}/{ada['id']}", json={"location": " Mahbubnagar,  Telangana, India ", "timezone": "Asia/Kolkata"}, headers=headers())
+    assert r.status_code == 200 and r.json()["location"] == "Mahbubnagar, Telangana, India" and r.json()["timezone"] == "Asia/Kolkata"
     await sync(rig)
-    assert next(c for c in (await listed(rig, workspace="sb"))["items"] if c["name"] == "Ada Lovelace")["location"] == "Sao Paulo, Brazil"  # a sync where Google has no address keeps it
-    rig.people.read_only = True  # a link made when Stiamo could only read
-    r = await rig.client.patch(f"{C}/{ada['id']}", json={"location": "Lisbon, Portugal"}, headers=headers())
-    assert r.json()["location"] == "Lisbon, Portugal" and r.json()["googleSaved"] is False and "link this Google account again" in r.json()["googleNote"]
+    assert (await listed(rig, workspace="sb"))["items"][0]["location"] == "Mahbubnagar, Telangana, India"  # a read from Google keeps it
+
+
+async def test_every_contact_can_be_exported_to_excel(rig):
+    import io
+    import zipfile
+
+    await link(rig, "me@sb.org", [ADA, BOB])
+    ada = next(c for c in (await listed(rig, workspace="sb"))["items"] if c["name"] == "Ada Lovelace")
+    await rig.client.patch(f"{C}/{ada['id']}", json={"tags": ["labour"], "location": "Doha, Qatar", "profile": {"sector": "Government"}}, headers=headers())
+    r = await rig.client.get(f"{C}/export", headers=headers())
+    assert r.status_code == 200 and "spreadsheetml" in r.headers["content-type"] and "stiamo-contacts.xlsx" in r.headers["content-disposition"]
+    z = zipfile.ZipFile(io.BytesIO(r.content))
+    sheet = z.read("xl/worksheets/sheet1.xml").decode()
+    assert "Ada Lovelace" in sheet and "Bob" in sheet and "Doha, Qatar" in sheet and "labour" in sheet and "Government" in sheet and "Where they are" in sheet
+    assert (await rig.client.get(f"{C}/export", headers=headers({"X": "y"}) if False else {})).status_code in (401, 403)

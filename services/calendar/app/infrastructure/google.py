@@ -130,8 +130,8 @@ class HttpGoogle(GoogleGateway):
 
 
 PEOPLE = "https://people.googleapis.com/v1"
-#: Read the person's contacts, and change one thing in them: where a contact is (their address). Stiamo never adds or deletes a contact.
-CONTACT_SCOPES = "openid email https://www.googleapis.com/auth/contacts"
+#: Read the person's contacts and nothing more: Stiamo can't change, add or delete a contact in Google. What the owner adds (tags, where they are) is kept in Stiamo.
+CONTACT_SCOPES = "openid email https://www.googleapis.com/auth/contacts.readonly"
 PERSON_FIELDS = "names,emailAddresses,phoneNumbers,organizations,biographies,photos,addresses,metadata"
 MAX_CONTACT_PAGES = 20
 
@@ -155,19 +155,6 @@ class HttpPeople(HttpGoogle):
             if not page:
                 break
         return people
-
-    async def set_address(self, access: str, google_id: str, location: str) -> None:
-        """Puts the place in the contact's first address (the others stay). Needs the permission to change contacts: a link made before that was asked for gets a 403."""
-        head = {"Authorization": f"Bearer {access}"}
-        r = await self._send("GET", f"{PEOPLE}/{google_id}", headers=head, params={"personFields": "addresses,metadata"})
-        if r.status_code != 200:
-            raise GoogleError(f"Couldn't read the contact: {_message(r)}", auth=r.status_code == 401)
-        person = r.json()
-        rest = (person.get("addresses") or [])[1:]
-        body = {"etag": person.get("etag"), "addresses": ([{"formattedValue": location}] if location else []) + rest}
-        r = await self._send("PATCH", f"{PEOPLE}/{google_id}:updateContact", headers=head, params={"updatePersonFields": "addresses"}, json=body)
-        if r.status_code != 200:
-            raise GoogleError(f"Google wouldn't save it: {_message(r)}", auth=r.status_code in (401, 403))
 
 
 class HttpPractice(PracticeGateway):

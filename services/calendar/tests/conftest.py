@@ -104,6 +104,11 @@ class FakeGoogle(GoogleGateway):
         return code
 
 
+class FakePlaces:
+    async def search(self, q: str, count: int = 8):
+        return [{"label": "Mahbubnagar, Telangana, India", "name": "Mahbubnagar", "region": "Telangana", "country": "India", "timezone": "Asia/Kolkata", "lat": 16.74, "lon": 77.98}] if q.lower().startswith("mah") else []
+
+
 class FakePeople:
     """Google's contacts in memory: accounts by authorisation code, and the people each account has."""
 
@@ -133,10 +138,6 @@ class FakePeople:
     async def email(self, access: str) -> str:
         return access.removeprefix("acc-")
 
-    async def set_address(self, access: str, google_id: str, location: str) -> None:
-        if getattr(self, "read_only", False):
-            raise GoogleError("forbidden", auth=True)
-        self.addresses = {**getattr(self, "addresses", {}), google_id: location}
 
     async def revoke(self, token: str) -> None:
         self.revoked.append(token)
@@ -208,8 +209,9 @@ class Rig:
 @pytest.fixture
 async def rig():
     google, practice, people = FakeGoogle(), FakePractice(), FakePeople()
+    places = FakePlaces()
     settings = Settings(database_url="sqlite+aiosqlite:///:memory:", google_client_id="client-id", google_client_secret="client-secret", public_url=PUBLIC, app_url=APP, sync_minutes=0, contacts_sync_minutes=0, practice_url="http://practice")
-    app = create_app(settings, google=google, practice=practice, people=people)
+    app = create_app(settings, google=google, practice=practice, people=people, places=places)
     async with app.router.lifespan_context(app):
         async with app.state.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)

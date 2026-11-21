@@ -11,6 +11,7 @@ from stiamo_common.errors import install_error_handlers
 
 from app.application.service import AccessCache
 from app.config import Settings, get_settings
+from app.infrastructure.places import HttpPlaces
 from app.infrastructure.google import HttpGoogle, HttpPeople, HttpPractice
 from app.infrastructure.security import SecretBox, TokenMint
 from app.presentation.deps import build_contacts, build_service
@@ -47,7 +48,7 @@ async def contacts_loop(app: FastAPI, minutes: int) -> None:
             log.exception("the contacts sync failed")
 
 
-def create_app(settings: Settings | None = None, *, google=None, practice=None, people=None) -> FastAPI:
+def create_app(settings: Settings | None = None, *, google=None, practice=None, people=None, places=None) -> FastAPI:
     """Application factory. Run with: uvicorn app.main:create_app --factory
 
     `google` and `practice` swap in fakes for tests. Run a single replica: the background sync runs in this process.
@@ -79,6 +80,7 @@ def create_app(settings: Settings | None = None, *, google=None, practice=None, 
     app.state.access = AccessCache()
     app.state.people = people or HttpPeople(http, settings.google_client_id, settings.google_client_secret, settings.redirect_uri)
     app.state.people_access = AccessCache()
+    app.state.places = places or HttpPlaces(http)
     #: Sending to Google needs to read meetings as their owner, which takes a token this service signs: only with a shared HS256 secret.
     app.state.mint = TokenMint(settings.jwt_secret, settings.jwt_issuer, settings.jwt_audience) if settings.jwt_algorithm.startswith("HS") and settings.practice_url else None
 

@@ -1,6 +1,6 @@
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Query, Response
+from fastapi import APIRouter, Query, Request, Response
 from pydantic import BaseModel, Field
 
 from app.presentation.deps import Contacts, CurrentPrincipal
@@ -32,6 +32,16 @@ async def contacts(me: CurrentPrincipal, svc: Contacts, workspace: str | None = 
     return await svc.contacts(me.user_id, workspace, q, limit, offset, recent, sort)
 
 
+@router.get("/places", summary="Places that match what was typed (a town, a region, a country), each with its time zone: for the \"where are they\" box")
+async def places(request: Request, me: CurrentPrincipal, q: Annotated[str, Query(max_length=100)] = "") -> dict[str, Any]:
+    return {"items": await request.app.state.places.search(q.strip())}
+
+
+@router.get("/export", summary="Every contact, with everything Stiamo knows about them, as an Excel file")
+async def export(me: CurrentPrincipal, svc: Contacts) -> Response:
+    return Response(await svc.export(me.user_id), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": 'attachment; filename="stiamo-contacts.xlsx"'})
+
+
 class LocalIn(BaseModel):
     #: What the owner knows: free tags, and a profile (sector, relationship, tier A/B/C, language, how_met, interests, goal). Kept in Stiamo, never written to Google.
     tags: list[str] | None = None
@@ -39,11 +49,11 @@ class LocalIn(BaseModel):
     #: Where the contact is, as a zone name (Asia/Qatar); empty to clear.
     timezone: Annotated[str | None, Field(max_length=64)] = None
     rapport_excluded: bool | None = None
-    #: Where they are ("Doha, Qatar"): written into their address in Google too. Empty to clear.
+    #: Where they are ("Mahbubnagar, Telangana, India"), chosen from the place search or typed. Empty to clear.
     location: Annotated[str | None, Field(max_length=200)] = None
 
 
-@router.patch("/{contact_id}", summary="Tag a contact, say where they are, say no rapport plan for them (kept in Stiamo), or give their place (also written to their address in Google)")
+@router.patch("/{contact_id}", summary="Tag a contact, say where they are, give their place, or say no rapport plan for them (all kept in Stiamo; nothing is written to Google)")
 async def update(contact_id: str, body: LocalIn, me: CurrentPrincipal, svc: Contacts) -> dict[str, Any]:
     sent = body.model_dump(exclude_none=True)
     if "rapport_excluded" in sent:

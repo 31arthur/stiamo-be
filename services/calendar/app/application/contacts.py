@@ -19,6 +19,7 @@ from stiamo_common.errors import NotFound, ValidationFailed
 from app.application.ports import ContactRepository, GoogleError, PeopleGateway
 from app.application.service import AccessCache
 from app.config import Settings
+from app.domain.xlsx import workbook
 from app.domain.contacts import WORKSPACES, ContactAccount, contact_from_person, merge_across, view
 
 log = logging.getLogger(__name__)
@@ -187,6 +188,18 @@ class ContactService:
             items.sort(key=lambda i: i["firstSeenAt"] or "", reverse=True)
         return {"items": items[offset : offset + limit], "total": len(items)}
 
+    async def export(self, user_id: str) -> bytes:
+        """Every contact of every workspace (one row per person), with their tags, profile, place and zone."""
+        by_account = {a.id: a.email for a in await self._repo.accounts(user_id)}
+        rows = merge_across(await self._repo.contacts(user_id, None, None, 100000), by_account)
+        header = ["Name", "Organisation", "Title", "Emails", "Phones", "Workspaces", "Where they are", "Time zone", "Tags", "Sector", "Relationship", "Tier", "Language", "How we met", "Interests", "What I want", "Notes", "First seen", "Rapport plan", "Google account"]
+        out = []
+        for v in rows:
+            p = v["profile"] or {}
+            out.append([v["name"], v["organisation"], v["title"], "; ".join(e["value"] for e in v["emails"]), "; ".join(p_["value"] for p_ in v["phones"]), ", ".join(v["workspaces"]), v["location"], v["timezone"], ", ".join(v["tags"]),
+                        p.get("sector", ""), p.get("relationship", ""), p.get("tier", ""), p.get("language", ""), p.get("how_met", ""), p.get("interests", ""), p.get("goal", ""), v["notes"], (v["firstSeenAt"] or "")[:10], "no plan" if v["rapportExcluded"] else "", ", ".join(v["accounts"])])
+        return workbook("Contacts", header, out, [24, 24, 20, 30, 22, 14, 26, 18, 24, 16, 14, 6, 12, 22, 24, 24, 40, 12, 10, 26])
+
     async def update(self, user_id: str, contact_id: str, body: dict[str, Any]) -> dict[str, Any]:
         """What the owner knows about a contact: tags, a profile (sector, relationship, tier A/B/C, language, how we met, interests, goal), the zone they are in, and
         whether a rapport plan is wanted. Kept here only: nothing is written to Google."""
@@ -209,10 +222,8 @@ class ContactService:
                 except Exception as exc:  # noqa: BLE001
                     raise ValidationFailed("That isn't a time zone. Use a name like Asia/Qatar.") from exc
             fields["timezone"] = name
-        place: str | None = None
         if "location" in body:
-            place = " ".join(str(body["location"] or "").split())[:200]
-            fields["location"] = place
+            fields["location"] = " ".join(str(body["location"] or "").split())[:200]
         if "rapportExcluded" in body:
             fields["rapport_excluded"] = bool(body["rapportExcluded"])
         if not fields:
@@ -222,20 +233,4 @@ class ContactService:
             raise NotFound("That contact isn't here.")
         by_account = {a.id: a.email for a in await self._repo.accounts(user_id)}
         mine = next(r for r in rows if r.id == contact_id)
-        out = view(mine, sorted({r.workspace for r in rows}), [by_account.get(mine.account_id, "")])
-        if place is not None:
-            out["googleSaved"], out["googleNote"] = await self._write_place(user_id, mine, place)
-        return out
-
-    async def _write_place(self, user_id: str, c: Contact, place: str) -> tuple[bool, str]:
-        """The place goes into the contact in Google too. A link made when Stiamo could only read contacts can't be written to: it stays here, and the owner is told to link again."""
-        account = await self._repo.account(user_id, c.account_id)
-        if account is None:
-            return False, "Saved here only."
-        try:
-            await self._people.set_address(await self._access_for(account), c.google_id, place)
-            return True, ""
-        except GoogleError as exc:
-            if exc.auth:
-                return False, "Saved here. To save it in Google too, link this Google account again and allow Stiamo to change contacts."
-            return False, f"Saved here, not in Google: {exc.message}"
+        return view(mine, sorted({r.workspace for r in rows}), [by_account.get(mine.account_id, "")])

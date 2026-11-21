@@ -1,10 +1,10 @@
 """Rapport plans: keeping business contacts warm, within limits (see domain/rapport.py for the rules).
 
-A new contact in Google contacts (any workspace) gets a plan on its own: a tier from its profile (B if not set), a zone from where it is (or its phone's country),
-and a list of touches. The tags are the owner's, added on the web; the plan reads them when each message is written. When a touch falls due the message is written
-by the model at that moment, from the tags and the touch's purpose, and sent on WhatsApp (auto-send). If WhatsApp will not take it (a business-initiated message
-needs an approved template, or the number has no open chat), or there is no number or no WhatsApp channel, it becomes an action item and a Telegram message with an
-"Open WhatsApp" button whose text is already written. Everything is in the history, and the owner can pause, exclude, or say they replied, at any time.
+A new contact in Google contacts (any workspace) first needs its tags and where they are, filled in on the web (the owner is told what is missing); then it gets a plan:
+a tier from its profile (B if not set), a zone from where they are (or their phone's country), and a list of touches. When a touch falls due the message is written by
+the model at that moment, from the tags and the touch's purpose, and handed to the owner as an action item and a Telegram message with an "Open WhatsApp" button: it
+opens the contact's own chat with the text already written, and the owner only presses send. Nothing is sent by Stiamo itself. Everything is in the history, and the
+owner can pause, exclude, or say they replied, at any time.
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ from stiamo_common.errors import NotFound, ValidationFailed
 from app.application.actions import ActionService
 from app.application.services import Who
 from app.domain.llm import Message
-from app.domain.rapport import DAILY_CAP, DEFAULT_TIER, PURPOSES, after_reply, after_sent, after_skip, due_now, may_send, schedule, slot_for, summary
+from app.domain.rapport import DAILY_CAP, missing_details, DEFAULT_TIER, PURPOSES, after_reply, after_sent, after_skip, due_now, may_send, schedule, slot_for, summary
 from app.domain.zones import HOME, label, phone_e164, wa_link, zone_from_location, zone_from_phone
 from app.infrastructure.db.rapport import SqlRapportRepository
 
@@ -65,9 +65,9 @@ def zone_of(contact: dict[str, Any]) -> str:
 
 
 class RapportService:
-    def __init__(self, repo: SqlRapportRepository, actions: ActionService, data_factory: Callable[[str], Any], send_whatsapp: Callable[[Who, str, str], Awaitable[None]], notify: Send,
+    def __init__(self, repo: SqlRapportRepository, actions: ActionService, data_factory: Callable[[str], Any], notify: Send,
                  chat_model: Callable[[Who], Awaitable[Any]] | None = None, names: Callable[[Who], Awaitable[str]] | None = None, now: Callable[[], datetime] = lambda: datetime.now(UTC)) -> None:
-        self._repo, self._actions, self._data, self._wa, self._notify, self._model, self._names, self._now = repo, actions, data_factory, send_whatsapp, notify, chat_model, names, now
+        self._repo, self._actions, self._data, self._notify, self._model, self._names, self._now = repo, actions, data_factory, notify, chat_model, names, now
 
     def _today(self) -> str:
         return self._now().astimezone(ZoneInfo(HOME)).date().isoformat()
@@ -100,7 +100,7 @@ class RapportService:
         if existing is not None and existing["status"] in ("active", "paused") and tier is None:
             return existing
         plan = {"id": existing["id"] if existing else str(uuid.uuid4()), "contactKey": key, "contactId": str(contact.get("id")), "name": contact.get("name") or key, "workspaces": contact.get("workspaces") or [], "phone": phone, "zone": zone,
-                "about": about, "tier": chosen, "status": "active", "autoSend": True, "touches": schedule(chosen, today, zone, await self._taken(who)), "unanswered": 0, "source": source}
+                "about": about, "tier": chosen, "status": "active", "autoSend": False, "touches": schedule(chosen, today, zone, await self._taken(who)), "unanswered": 0, "source": source}
         await self._repo.save(who.user_id, plan, self._now())
         await self._actions.note(who, f"rapport:{plan['id']}", "created", "chittu", plan["name"], f"rapport plan, tier {chosen}, {source}")
         if announce:
@@ -118,14 +118,45 @@ class RapportService:
         return f"on {d.strftime('%a')} {d.day} {d.strftime('%b')} at {t['at'] // 60:02d}:{t['at'] % 60:02d}"
 
     async def scan(self, who: Who, token: str, days: int = 14) -> list[dict[str, Any]]:
-        """Every contact that appeared recently (in any workspace) and has no plan yet gets one, and the owner is told. Contacts marked "no plan" are left alone."""
+        """Every contact that appeared recently (in any workspace) and has no plan yet: when its tags and place are filled in, it gets a plan and the owner is told; when
+        they are not, the owner is asked for them once, and the plan starts the moment they are there. Contacts marked "no plan" are left alone."""
         made = []
         for c in await self._data(token).contacts_recent(days):
             if c.get("rapportExcluded") or await self._repo.by_key(who.user_id, contact_key(c)) is not None:
                 continue
-            made.append(await self.start(who, token, c, source="auto", announce=True))
+            gaps = missing_details(c)
+            made.append(await (self._hold(who, c, gaps) if gaps else self.start(who, token, c, source="auto", announce=True)))
+        made += await self._release(who, token)
         await self.rezone(who, token)
         return made
+
+    async def _hold(self, who: Who, contact: dict[str, Any], gaps: list[str]) -> dict[str, Any]:
+        """A new contact whose details are not in yet: no plan, and the owner is asked for what is missing, once."""
+        key = contact_key(contact)
+        plan = {"id": str(uuid.uuid4()), "contactKey": key, "contactId": str(contact.get("id")), "name": contact.get("name") or key, "workspaces": contact.get("workspaces") or [], "phone": best_phone(contact), "zone": zone_of(contact),
+                "about": {}, "tier": DEFAULT_TIER, "status": "needs_info", "autoSend": False, "touches": [], "unanswered": 0, "source": "auto", "missing": gaps}
+        await self._repo.save(who.user_id, plan, self._now())
+        await self._actions.note(who, f"rapport:{plan['id']}", "created", "chittu", plan["name"], f"waiting for {' and '.join(gaps)}")
+        await self._notify(who, f"🌱 New contact: {plan['name']}" + (f" · {contact.get('organisation')}" if contact.get("organisation") else "") + f".\nBefore I start a get-to-know plan I need their {' and '.join(gaps)}: add {'it' if len(gaps) == 1 else 'them'} on the web (Contacts, then {plan['name']}). The plan starts by itself once they are there.",
+                           [[{"text": "🚫 No plan for them", "callback_data": f"rp:x:{plan['id'][:8]}:0"}]])
+        return plan
+
+    async def _release(self, who: Who, token: str) -> list[dict[str, Any]]:
+        """Contacts that were waiting for their details and now have them get their plan."""
+        started = []
+        for plan in await self._repo.all(who.user_id, ["needs_info"]):
+            found = next((c for c in await self._data(token).contacts(plan["name"], 5) if str(c.get("id")) == plan.get("contactId")), None)
+            if found is None:
+                continue
+            if found.get("rapportExcluded"):
+                plan["status"] = "excluded"
+                await self._repo.save(who.user_id, plan, self._now())
+            elif not missing_details(found):
+                started.append(await self.start(who, token, found, source="auto", announce=True))
+            else:
+                plan["missing"] = missing_details(found)
+                await self._repo.save(who.user_id, plan, self._now())
+        return started
 
     async def rezone(self, who: Who, token: str) -> int:
         """A contact whose place was added or changed (here or in Google) is written to at their new local time: the messages still to come are fitted again."""
@@ -185,7 +216,7 @@ class RapportService:
         await self._reconcile(who)
         today = self._today()
         plans = await self._repo.all(who.user_id, ["active"])
-        sent_today = sum(1 for p in plans for t in p.get("touches", []) if t.get("sentOn") == today)
+        sent_today = sum(1 for p in plans for t in p.get("touches", []) if today in (t.get("sentOn"), t.get("queuedOn")))
         for plan in plans:
             touch = due_now(plan, self._now())
             if touch is None:
@@ -198,11 +229,9 @@ class RapportService:
                 out["waiting"] += 1
                 continue
             text = await self.draft(who, plan, touch)
-            if await self._deliver(who, token, plan, touch, text):
-                out["sent"] += 1
-                sent_today += 1
-            else:
-                out["queued"] += 1
+            await self._deliver(who, token, plan, touch, text)
+            out["queued"] += 1
+            sent_today += 1
         return out
 
     @staticmethod
@@ -216,29 +245,17 @@ class RapportService:
             day += timedelta(days=1)
 
     async def _deliver(self, who: Who, token: str, plan: dict[str, Any], touch: dict[str, Any], text: str) -> bool:
-        """Sends on WhatsApp; true when it went. Otherwise the owner gets it to send themselves, with the text written and a button that opens WhatsApp."""
-        today = self._today()
-        reason = ""
-        if plan.get("autoSend", True) and plan.get("phone"):
-            try:
-                await self._wa(who, plan["phone"], text)
-                plan.update(after_sent(plan, touch["n"], today))
-                plan["lastMessage"] = text
-                await self._repo.save(who.user_id, plan, self._now())
-                await self._actions.note(who, f"rapport:{plan['id']}", "sent", "chittu", plan["name"], f"{touch['purpose']}: {text[:300]}")
-                await self._notify(who, f"💬 Sent to {plan['name']} ({touch['purpose']}):\n{text}", [[{"text": "🗣 They replied", "callback_data": f"rp:r:{plan['id'][:8]}:{touch['n']}"}, {"text": "⏸ Pause", "callback_data": f"rp:p:{plan['id'][:8]}:{touch['n']}"}]])
-                return True
-            except Exception as exc:  # noqa: BLE001
-                reason = str(getattr(exc, "message", None) or exc)[:160]
-        elif not plan.get("phone"):
-            reason = "there is no phone number for them"
+        """Hands the message to the owner: an action item (the text, and a link that opens the contact's own WhatsApp chat with it written) and a Telegram message with the same
+        button. The owner presses send in WhatsApp, then Sent here. Nothing leaves Stiamo by itself."""
+        reason = "" if plan.get("phone") else "there is no phone number for them"
         touch["state"] = "queued"
+        touch["queuedOn"] = self._today()
         link = wa_link(plan["phone"], text) if plan.get("phone") else ""
         item = await self._actions.create(who, kind="message", title=f"Message {plan['name']}: {touch['purpose']}", day=self._today(), priority="normal", workspace=(plan.get("workspaces") or ["personal"])[0], source="rapport",
                                           links={"rapport": {"plan": plan["id"], "touch": touch["n"], "draft": text, "wa": link}, "contact": plan["name"]}, notes=text, actor="chittu", reason="a rapport message for you to send")
         touch["item"] = f"message:{item['id']}"
         await self._repo.save(who.user_id, plan, self._now())
-        why = f" (WhatsApp wouldn't send it by itself: {reason})" if reason else ""
+        why = f" ({reason})" if reason else ""
         rows = ([[{"text": "💬 Open WhatsApp", "url": link}]] if link else []) + [[{"text": "✅ Sent", "callback_data": f"rp:s:{plan['id'][:8]}:{touch['n']}"}, {"text": "🗣 They replied", "callback_data": f"rp:r:{plan['id'][:8]}:{touch['n']}"}],
                                                                                   [{"text": "✏️ Reword", "callback_data": f"rp:w:{plan['id'][:8]}:{touch['n']}"}, {"text": "⏭ Skip", "callback_data": f"rp:k:{plan['id'][:8]}:{touch['n']}"}, {"text": "⏸ Pause", "callback_data": f"rp:p:{plan['id'][:8]}:{touch['n']}"}]]
         await self._notify(who, f"✉️ {plan['name']} · {touch['purpose']}{why}\n\n{text}", rows)
@@ -342,5 +359,5 @@ class RapportService:
     async def status(self, who: Who) -> dict[str, Any]:
         plans = await self._repo.all(who.user_id)
         live = [p for p in plans if p["status"] == "active"]
-        return {"plans": len(plans), "active": len(live), "paused": sum(1 for p in plans if p["status"] == "paused" or p.get("pausedUntil")), "excluded": sum(1 for p in plans if p["status"] == "excluded"),
+        return {"plans": len(plans), "active": len(live), "paused": sum(1 for p in plans if p["status"] == "paused" or p.get("pausedUntil")), "excluded": sum(1 for p in plans if p["status"] == "excluded"), "needsInfo": sum(1 for p in plans if p["status"] == "needs_info"),
                 "dueSoon": [{"name": p["name"], **(summary(p)["next"] or {})} for p in sorted(live, key=lambda p: (summary(p)["next"] or {"day": "9999"})["day"])[:5]]}

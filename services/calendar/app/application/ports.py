@@ -61,8 +61,6 @@ class GoogleGateway(ABC):
     @abstractmethod
     async def revoke(self, token: str) -> None: ...
 
-    async def set_address(self, access: str, google_id: str, location: str) -> None: ...
-
 
 class PeopleGateway(Protocol):
     """Google's OAuth, and the person's contacts (the People API). The same sign-in as the calendar, with its own permission: read contacts."""

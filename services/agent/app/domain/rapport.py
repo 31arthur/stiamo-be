@@ -171,6 +171,16 @@ def may_send(plan: dict[str, Any], sent_last_30: int, today_count: int, cap: int
     return None
 
 
+def missing_details(contact: dict[str, Any]) -> list[str]:
+    """What the owner still has to fill in before a plan starts: tags (or at least a sector), and where the contact is."""
+    out = []
+    if not (contact.get("tags") or (contact.get("profile") or {}).get("sector")):
+        out.append("tags")
+    if not (contact.get("location") or contact.get("timezone")):
+        out.append("where they are")
+    return out
+
+
 def summary(plan: dict[str, Any]) -> dict[str, Any]:
     touches = plan.get("touches", [])
     nxt = next((t for t in touches if t["state"] == "planned"), None)
