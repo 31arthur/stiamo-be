@@ -22,6 +22,7 @@ from stiamo_common.errors import NotFound, ValidationFailed
 from app.application.actions import ActionService
 from app.application.services import Who
 from app.domain.llm import Message
+from app.domain.rapport_advisor import ADVISOR_SYSTEM, adjust_for_stage, parse_advice
 from app.domain.rapport import DAILY_CAP, missing_details, DEFAULT_TIER, PURPOSES, after_reply, after_sent, after_skip, due_now, may_send, schedule, slot_for, summary
 from app.domain.zones import HOME, label, phone_e164, wa_link, zone_from_location, zone_from_phone
 from app.infrastructure.db.rapport import SqlRapportRepository
@@ -38,6 +39,8 @@ Rules:
 - Never a bare "how are you". Never flattery. Never a claim, number or fact that is not in the context. No links unless given.
 - Match their world: formal and brief for officials; collegial for unions and civil society; efficient for clients.
 - Write in the language set for them (default English). {sign_off}
+- If the context has a persona or notes, they are what the owner knows about this person: write from them, in the style they say, and never repeat what they say was already said.
+- If the stage is not "new", the message is not an introduction: refer to what happened before.
 - If you do not know enough to be specific, be short and honest rather than generic.
 
 Answer with JSON only: {{"message": "<the message>"}}"""
@@ -217,6 +220,7 @@ class RapportService:
         client, name, thinking = model
         context = {
             "contact": plan["name"], "organisation": about.get("organisation"), "title": about.get("title"), "tags": about.get("tags"), "profile": prof, "notes": about.get("notes"),
+            "persona": plan.get("persona"), "what the owner has told me about them (newest last)": [n["text"] for n in (plan.get("notes") or []) if n.get("by") == "owner"][-6:],
             "their local time zone": label(plan.get("zone") or HOME), "purpose": f"{touch['purpose']}: {PURPOSES.get(touch['purpose'], '')}",
             "already sent": [{"purpose": t["purpose"], "on": t.get("sentOn")} for t in plan.get("touches", []) if t["state"] == "sent"][-4:], "their last reply on": plan.get("repliedOn"), "the last message I sent": plan.get("lastMessage"),
             "instruction": "Write a different wording from the last message." if redo else "",
@@ -382,6 +386,60 @@ class RapportService:
         """A contact by a word in their name (their rapport plan if they have one is `plan`)."""
         rows = await self._data(token).contacts(query.strip(), 5)
         return rows[0] if rows else None
+
+    async def detail(self, who: Who, plan_id: str) -> dict[str, Any]:
+        """One plan for the adviser on the web: who, how it stands, the persona, the conversation so far and the last suggestions (each with its WhatsApp link)."""
+        plan = await self._repo.get(who.user_id, plan_id)
+        if plan is None:
+            raise NotFound("That plan isn't there.")
+        return self._detail(plan)
+
+    def _detail(self, plan: dict[str, Any]) -> dict[str, Any]:
+        sugg = [{**x, "whatsapp": wa_link(plan["phone"], x["message"]) if plan.get("phone") else ""} for x in plan.get("suggestions") or []]
+        return {"id": plan["id"], "name": plan["name"], "workspaces": plan.get("workspaces") or [], "zone": plan.get("zone"), "phone": bool(plan.get("phone")), "status": plan["status"], **summary(plan),
+                "persona": plan.get("persona") or {}, "notes": plan.get("notes") or [], "suggestions": sugg, "about": {k: v for k, v in (plan.get("about") or {}).items() if k in ("organisation", "title", "tags")}}
+
+    async def advise(self, who: Who, plan_id: str, message: str) -> dict[str, Any]:
+        """The owner tells the adviser what happened (messages already sent, calls, things in common) or asks what to do. It answers, adjusts the persona of the contact
+        (so every later message is written from it) and, when the relationship is already going, turns the planned introduction into a follow-up."""
+        plan = await self._repo.get(who.user_id, plan_id)
+        if plan is None:
+            raise NotFound("That plan isn't there.")
+        text = " ".join(message.split()) if len(message) < 200 else message.strip()
+        if not text:
+            raise ValidationFailed("Write what happened, or what you want to know.")
+        model = await self._model(who) if self._model is not None else None
+        if model is None:
+            raise ValidationFailed("Connect an AI model first (Agents, then Connections), so the adviser can answer.")
+        client, name, thinking = model
+        owner, full = await self._owner(who), await self._full_name(who)
+        about = plan.get("about") or {}
+        touches = plan.get("touches") or []
+        facts = {
+            "today": self._today(), "the owner is called": owner or None, "the owner's full name": full or None,
+            "contact": {"name": plan["name"], "organisation": about.get("organisation"), "title": about.get("title"), "tags": about.get("tags"), "profile": about.get("profile"), "notes from Google": about.get("notes"), "their zone": plan.get("zone")},
+            "plan": {"tier": plan.get("tier"), "status": plan.get("status"), "sent": [{"purpose": t["purpose"], "on": t.get("sentOn")} for t in touches if t["state"] == "sent"][-8:],
+                     "next planned": next(({"purpose": t["purpose"], "day": t["day"]} for t in touches if t["state"] == "planned"), None), "unanswered": plan.get("unanswered", 0), "they last replied on": plan.get("repliedOn"), "last message sent": plan.get("lastMessage")},
+            "persona so far": plan.get("persona") or None,
+            "notes so far, oldest first": [{"by": n["by"], "at": n["at"][:10], "text": n["text"][:600]} for n in (plan.get("notes") or [])[-20:]],
+        }
+        shown = json.dumps({k: v for k, v in facts.items() if v not in (None, "", [], {})}, ensure_ascii=False)
+        user = "<item>" + shown + "</item>" + chr(10) + chr(10) + "<owner>" + text[:4000] + "</owner>"
+        try:
+            reply = await client.chat(model=name, messages=[Message("system", ADVISOR_SYSTEM), Message("user", user)], tools=[], thinking=thinking)
+            advice = parse_advice(reply.text, plan.get("persona"))
+        except ValueError as exc:
+            raise ValidationFailed(str(exc)) from exc
+        except Exception as exc:  # noqa: BLE001
+            log.info("the rapport adviser could not answer")
+            raise ValidationFailed("The AI model could not answer just now. Try again in a moment.") from exc
+        now = self._now().isoformat(timespec="seconds").replace("+00:00", "Z")
+        plan["notes"] = ([*(plan.get("notes") or []), {"at": now, "by": "owner", "text": text[:4000]}, {"at": now, "by": "ai", "text": advice["reply"]}])[-40:]
+        plan["persona"], plan["suggestions"] = advice["persona"], advice["suggestions"]
+        changed = adjust_for_stage(plan, advice["stage"])
+        await self._repo.save(who.user_id, plan, self._now())
+        await self._actions.note(who, f"rapport:{plan['id']}", "updated", "owner", plan["name"], f"told the adviser: {text[:160]}")
+        return {**self._detail(plan), "reply": advice["reply"], "suggestedTier": advice["tier"] if advice["tier"] != plan.get("tier") else None, "introductionsChanged": changed}
 
     async def status(self, who: Who) -> dict[str, Any]:
         plans = await self._repo.all(who.user_id)

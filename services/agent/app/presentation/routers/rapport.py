@@ -30,6 +30,20 @@ async def plans(svc: Rapport, me: deps.Me) -> dict[str, Any]:
     return {"status": await svc.status(me), "plans": out}
 
 
+class Advise(BaseModel):
+    message: str = Field(min_length=1, max_length=4000)
+
+
+@router.get("/{plan_id}", summary="One plan for the adviser: the persona, the conversation so far and the last suggestions")
+async def detail(plan_id: str, svc: Rapport, me: deps.Me) -> dict[str, Any]:
+    return await svc.detail(me, plan_id)
+
+
+@router.post("/{plan_id}/advise", summary="Tell the adviser what happened with this contact (or ask what to do): it answers, suggests messages and updates the contact's persona")
+async def advise(plan_id: str, body: Advise, svc: Rapport, me: deps.Me) -> dict[str, Any]:
+    return await svc.advise(me, plan_id, body.message)
+
+
 @router.post("/scan", summary="Look at the contacts now: the ones whose tags and place are filled in get their plan (done every hour anyway)")
 async def scan(svc: Rapport, me: deps.Me, token: deps.Token) -> dict[str, Any]:
     made = await svc.scan(me, token)
