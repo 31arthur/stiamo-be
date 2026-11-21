@@ -67,6 +67,7 @@ class ContactModel(Base):
     profile: Mapped[dict] = mapped_column(JSON, default=dict)
     timezone: Mapped[str] = mapped_column(String(64), default="", server_default="")
     rapport_excluded: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    location: Mapped[str] = mapped_column(String(200), default="", server_default="")
 
     __table_args__ = (Index("ix_contacts_user_ws", "user_id", "workspace"), Index("ix_contacts_account", "account_id"))
 

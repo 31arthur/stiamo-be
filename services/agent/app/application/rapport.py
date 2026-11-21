@@ -23,7 +23,7 @@ from app.application.actions import ActionService
 from app.application.services import Who
 from app.domain.llm import Message
 from app.domain.rapport import DAILY_CAP, DEFAULT_TIER, PURPOSES, after_reply, after_sent, after_skip, due_now, may_send, schedule, slot_for, summary
-from app.domain.zones import HOME, label, phone_e164, wa_link, zone_from_phone
+from app.domain.zones import HOME, label, phone_e164, wa_link, zone_from_location, zone_from_phone
 from app.infrastructure.db.rapport import SqlRapportRepository
 
 log = logging.getLogger(__name__)
@@ -59,6 +59,11 @@ def best_phone(c: dict[str, Any]) -> str:
     return phone_e164(rows[0]["value"]) or "" if rows else ""
 
 
+def zone_of(contact: dict[str, Any]) -> str:
+    """Where they are: the zone the owner set, else the one their address means, else their phone's country, else home."""
+    return contact.get("timezone") or zone_from_location(contact.get("location")) or zone_from_phone(best_phone(contact)) or HOME
+
+
 class RapportService:
     def __init__(self, repo: SqlRapportRepository, actions: ActionService, data_factory: Callable[[str], Any], send_whatsapp: Callable[[Who, str, str], Awaitable[None]], notify: Send,
                  chat_model: Callable[[Who], Awaitable[Any]] | None = None, names: Callable[[Who], Awaitable[str]] | None = None, now: Callable[[], datetime] = lambda: datetime.now(UTC)) -> None:
@@ -88,7 +93,7 @@ class RapportService:
         chosen = (tier or profile.get("tier") or DEFAULT_TIER).upper()
         chosen = chosen if chosen in ("A", "B", "C") else DEFAULT_TIER
         phone = best_phone(contact)
-        zone = contact.get("timezone") or zone_from_phone(phone) or HOME
+        zone = zone_of(contact)
         about = {"organisation": contact.get("organisation") or "", "title": contact.get("title") or "", "tags": contact.get("tags") or [], "profile": profile, "notes": str(contact.get("notes") or "")[:400]}
         today = self._today()
         existing = await self._repo.by_key(who.user_id, key)
@@ -119,7 +124,33 @@ class RapportService:
             if c.get("rapportExcluded") or await self._repo.by_key(who.user_id, contact_key(c)) is not None:
                 continue
             made.append(await self.start(who, token, c, source="auto", announce=True))
+        await self.rezone(who, token)
         return made
+
+    async def rezone(self, who: Who, token: str) -> int:
+        """A contact whose place was added or changed (here or in Google) is written to at their new local time: the messages still to come are fitted again."""
+        moved = 0
+        for plan in await self._repo.all(who.user_id, ["active", "paused"]):
+            found = next((c for c in await self._data(token).contacts(plan["name"], 5) if str(c.get("id")) == plan.get("contactId")), None)
+            if found is None or not (found.get("timezone") or found.get("location")):
+                continue  # nothing said where they are: the phone's country stays what it was
+            zone = zone_of(found)
+            if zone == plan.get("zone"):
+                continue
+            plan["zone"] = zone
+            for t in plan["touches"]:  # the same purposes, on the same days where they work, at their new local hours
+                if t["state"] != "planned":
+                    continue
+                day = date.fromisoformat(t["day"])
+                for _ in range(14):
+                    at = slot_for(day.isoformat(), zone)
+                    if at is not None:
+                        t["day"], t["at"], t["outside"] = day.isoformat(), at[0], at[1]
+                        break
+                    day += timedelta(days=1)
+            await self._repo.save(who.user_id, plan, self._now())
+            moved += 1
+        return moved
 
     # --- writing and sending -------------------------------------------------------------------------------------------------------------
 
