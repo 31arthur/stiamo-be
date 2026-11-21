@@ -321,9 +321,7 @@ class RapportService:
         n = int(arg) if arg.isdigit() else 0
         touch = next((t for t in plan.get("touches", []) if t["n"] == n), None)
         if action == "t":
-            plan["tier"] = arg if arg in ("A", "B", "C") else plan["tier"]
-            plan["touches"] = [t for t in plan["touches"] if t["state"] in ("sent", "skipped")] + [{**t, "n": t["n"] + 100} for t in schedule(plan["tier"], today, plan.get("zone"), await self._taken(who))]
-            await self._repo.save(who.user_id, plan, self._now())
+            await self._set_tier(who, plan, arg)
             return f"⭐ {plan['name']}: tier {plan['tier']}. Next message {self._when(next(t for t in plan['touches'] if t['state'] == 'planned'))}."
         if action == "x":
             plan["status"] = "excluded"
@@ -363,6 +361,14 @@ class RapportService:
             return f"✉️ {plan['name']} · {touch['purpose']}\n\n{text}", rows
         return "I don't know that button."
 
+    async def _set_tier(self, who: Who, plan: dict[str, Any], tier: str) -> None:
+        """Changes how closely to keep in touch: what was sent stays, and what is still to come is planned again for the new tier (an introduction already made stays a follow-up)."""
+        plan["tier"] = tier if tier in ("A", "B", "C") else plan["tier"]
+        was_following = (plan.get("persona") or {}).get("stage", "new")
+        plan["touches"] = [t for t in plan["touches"] if t["state"] in ("sent", "skipped")] + [{**t, "n": t["n"] + 100} for t in schedule(plan["tier"], self._today(), plan.get("zone"), await self._taken(who))]
+        adjust_for_stage(plan, was_following)
+        await self._repo.save(who.user_id, plan, self._now())
+
     async def _complete_item(self, who: Who, token: str, touch: dict[str, Any], cancel: bool = False) -> None:
         if touch.get("item"):
             try:
@@ -399,7 +405,7 @@ class RapportService:
         return {"id": plan["id"], "name": plan["name"], "workspaces": plan.get("workspaces") or [], "zone": plan.get("zone"), "phone": bool(plan.get("phone")), "status": plan["status"], **summary(plan),
                 "persona": plan.get("persona") or {}, "notes": plan.get("notes") or [], "suggestions": sugg, "about": {k: v for k, v in (plan.get("about") or {}).items() if k in ("organisation", "title", "tags")}}
 
-    async def advise(self, who: Who, plan_id: str, message: str) -> dict[str, Any]:
+    async def advise(self, who: Who, plan_id: str, message: str, token: str = "", *, auto_tier: bool = False) -> dict[str, Any]:
         """The owner tells the adviser what happened (messages already sent, calls, things in common) or asks what to do. It answers, adjusts the persona of the contact
         (so every later message is written from it) and, when the relationship is already going, turns the planned introduction into a follow-up."""
         plan = await self._repo.get(who.user_id, plan_id)
@@ -439,7 +445,48 @@ class RapportService:
         changed = adjust_for_stage(plan, advice["stage"])
         await self._repo.save(who.user_id, plan, self._now())
         await self._actions.note(who, f"rapport:{plan['id']}", "updated", "owner", plan["name"], f"told the adviser: {text[:160]}")
-        return {**self._detail(plan), "reply": advice["reply"], "suggestedTier": advice["tier"] if advice["tier"] != plan.get("tier") else None, "introductionsChanged": changed}
+        applied = await self._apply_to_contact(token, plan, advice)
+        suggested = advice["tier"] if advice["tier"] and advice["tier"] != plan.get("tier") else None
+        if suggested and auto_tier:
+            await self._set_tier(who, plan, suggested)
+            suggested = None
+        return {**self._detail(plan), "reply": advice["reply"], "suggestedTier": suggested, "introductionsChanged": changed, "contactUpdated": applied}
+
+    async def _apply_to_contact(self, token: str, plan: dict[str, Any], advice: dict[str, Any]) -> dict[str, Any]:
+        """What the adviser could tell from the owner's words goes on the contact too: tags are added to the ones it has, and a place is set when it had none. A person who is
+        not in Google contacts has nothing to write to."""
+        cid = str(plan.get("contactId") or "")
+        if not cid or cid.startswith("manual:") or not (advice.get("tags") or advice.get("location")):
+            return {}
+        try:
+            found = next((c for c in await self._data(token).contacts(plan["name"], 5) if str(c.get("id")) == cid), None)
+            if found is None:
+                return {}
+            changes: dict[str, Any] = {}
+            tags = list(dict.fromkeys([*(found.get("tags") or []), *advice.get("tags", [])]))[:30]
+            if tags != (found.get("tags") or []):
+                changes["tags"] = tags
+            if advice.get("location") and not (found.get("location") or found.get("timezone")):
+                changes["location"] = advice["location"]
+            if changes:
+                await self._data(token).contact_update(cid, changes)
+            return changes
+        except Exception:  # noqa: BLE001  the advice is kept even when the contact could not be updated
+            log.info("could not write the adviser's tags to the contact")
+            return {}
+
+    async def learn(self, who: Who, token: str, name: str, details: str, phone: str = "") -> dict[str, Any]:
+        """The owner tells Chittu about a person (who they are, what happened, what they share). The plan is started if there is none (for a person who is not in Google
+        contacts, from the name and number given), the adviser reads the details, and the persona, the stage, the tier, the tags, the place and the messages follow from them."""
+        contact = await self.find(who, token, name)
+        if contact is None:
+            if not name.strip():
+                raise ValidationFailed("Whose plan is this? Give their name.")
+            contact = {"id": f"manual:{uuid.uuid4()}", "name": name.strip()[:200], "workspaces": ["personal"], "phones": [{"value": phone}] if phone.strip() else [], "emails": [], "tags": [], "profile": {}}
+        existed = await self._repo.by_key(who.user_id, contact_key(contact)) is not None
+        plan = await self.start(who, token, contact, source="manual")
+        out = await self.advise(who, plan["id"], details, token, auto_tier=True)
+        return {**out, "created": not existed, "inGoogle": not str(contact.get("id")).startswith("manual:")}
 
     async def status(self, who: Who) -> dict[str, Any]:
         plans = await self._repo.all(who.user_id)
