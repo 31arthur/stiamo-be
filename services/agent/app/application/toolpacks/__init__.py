@@ -48,6 +48,8 @@ class PackContext:
     zone: str = "Asia/Kolkata"
     home: str = "Asia/Kolkata"
     set_zone: Any = None
+    #: Rapport plans: start, pause or leave out a contact's plan.
+    rapport: Any = None
 
 
 class ToolPack(ABC):

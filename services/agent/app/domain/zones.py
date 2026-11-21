@@ -117,3 +117,43 @@ def say(day: str, minutes: int, src: str, home: str = HOME) -> str:
     d2, m2 = convert(day, minutes, src, home)
     extra = f", {date.fromisoformat(d2).strftime('%a')} {date.fromisoformat(d2).day} {date.fromisoformat(d2).strftime('%b')}" if d2 != day else ""
     return f"{h12(minutes)} {label(src)} ({h12(m2)} {label(home)}{extra})"
+
+
+#: Where a phone's country code usually puts someone, for a contact whose zone was not set. Only the main zone of each country: the owner can set another.
+PHONE_ZONES = {
+    "+91": HOME, "+974": "Asia/Qatar", "+971": "Asia/Dubai", "+966": "Asia/Riyadh", "+965": "Asia/Kuwait", "+973": "Asia/Bahrain", "+968": "Asia/Muscat", "+55": "America/Sao_Paulo",
+    "+44": "Europe/London", "+353": "Europe/Dublin", "+1": "America/New_York", "+65": "Asia/Singapore", "+60": "Asia/Kuala_Lumpur", "+61": "Australia/Sydney", "+64": "Pacific/Auckland",
+    "+49": "Europe/Berlin", "+33": "Europe/Paris", "+41": "Europe/Zurich", "+34": "Europe/Madrid", "+39": "Europe/Rome", "+31": "Europe/Amsterdam", "+32": "Europe/Brussels", "+90": "Europe/Istanbul",
+    "+977": "Asia/Kathmandu", "+94": "Asia/Colombo", "+880": "Asia/Dhaka", "+92": "Asia/Karachi", "+62": "Asia/Jakarta", "+63": "Asia/Manila", "+66": "Asia/Bangkok", "+852": "Asia/Hong_Kong",
+    "+81": "Asia/Tokyo", "+82": "Asia/Seoul", "+86": "Asia/Shanghai", "+27": "Africa/Johannesburg", "+254": "Africa/Nairobi", "+20": "Africa/Cairo", "+234": "Africa/Lagos", "+52": "America/Mexico_City",
+}
+
+
+def phone_e164(raw: str, default_code: str = "+91") -> str | None:
+    """A phone number as +<country><number>, or None when it cannot be one. A bare ten-digit number is taken to be Indian."""
+    s = "".join(ch for ch in str(raw or "") if ch.isdigit() or ch == "+")
+    if s.startswith("00"):
+        s = "+" + s[2:]
+    if not s.startswith("+"):
+        s = s.lstrip("0")
+        s = (default_code + s) if len(s) == 10 else ("+" + s)
+    digits = s[1:]
+    return s if digits.isdigit() and 8 <= len(digits) <= 15 else None
+
+
+def zone_from_phone(number: str | None) -> str | None:
+    """The zone a country code usually means (the longest matching code), or None."""
+    n = phone_e164(number or "")
+    if not n:
+        return None
+    for k in sorted(PHONE_ZONES, key=len, reverse=True):
+        if n.startswith(k):
+            return PHONE_ZONES[k]
+    return None
+
+
+def wa_link(number: str, message: str) -> str:
+    """A link that opens WhatsApp to this number with the message already written."""
+    from urllib.parse import quote
+
+    return f"https://wa.me/{(phone_e164(number) or '').lstrip('+')}?text={quote(message)}"

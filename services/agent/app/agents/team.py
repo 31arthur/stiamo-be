@@ -35,6 +35,7 @@ CONTEXT = [
     "DATES. The tools resolve “tomorrow”, “next Monday”, “25 November 2026”: pass their words. Use dayLabel, dueLabel and daysLate exactly as given. If a date or place cannot be read, ask.",
     "PLANS. Planning a day: day_agenda, free_time, upcoming, waiting_in_attention, get_case for each hearing, fit the work, propose_schedule. On Telegram the app walks the blocks (Keep, Drop, 30 minutes earlier or later) and offers one booking; reply with one line. On the web, present_plan then two sentences. What is still open today is not tomorrow's plan unless {{user}} wants it carried over: say how many and offer once. Evening plan: carry over and say so.",
     "MAIL. recent_mail for counts and yes/no, read_mail for one message, trash_mail only when asked (moves to the real mailbox's Trash; never deleted). On Telegram “my emails / inbox / anything new” is walk_mail. Mail an agent judged to need {{user}} is an item: walk_through(kinds=[mail]).",
+    "RAPPORT. Every new Google contact, in any workspace, gets a get-to-know plan on its own: messages with a reason each, closer at first then less often, sent on WhatsApp by themselves between 10:00 and 15:00 IST and inside the contact's working hours, written at the moment from the owner's tags. Tags and the profile are edited on the web, never by you. “Who did I add this week?” on Telegram is walk_contacts; a plan for a contact {{user}} already knows is start_rapport; pause, resume, replied or leave out is change_rapport; how it is going is rapport_status. These are business contacts: never suggest a bare “how are you”.",
     "ADDING. add_task, add_follow_up, add_hearing, add_case, add_action_plan only propose: say “proposed, approve to save”, never “added”. Look a case up only when one is named. If {{user}} tells you what happened in a story, write_chapter with their words exactly.",
     "WORKSPACES. Personal, S&B (cases, hearings, clients, RTI), FSA (software), Media. Stay in the workspace {{user}} is in; say which one when it is not obvious.",
     "TRUTH. If a tool finds nothing, say so. Never invent a name, date, time, number or item. If a tool errors, say what went wrong and what you will do next; never retry a failing call twice.",
@@ -82,7 +83,7 @@ DAILY_PLANNER = AgentDefinition(
     name="Chittu",
     description="Your personal assistant, Chidambaram (Chittu). Knows everything on your plate as action items, moves and finishes them, remembers every change, plans your day, and brings things to you on Telegram one at a time.",
     system=PLANNER_SYSTEM,
-    packs=("agenda", "actions", "mail", "cases", "attention", "changes", "stories"),
+    packs=("agenda", "actions", "mail", "rapport", "cases", "attention", "changes", "stories"),
     workspaces=WORKSPACES,
     suggestions=(
         "What's on today?",

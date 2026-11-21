@@ -401,3 +401,32 @@ class ActionQueueModel(Base):
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime)
 
     __table_args__ = (Index("ix_action_queues_user", "user_id", "status"),)
+
+
+
+class RapportPlanModel(Base):
+    """A plan for staying in touch with one business contact: who they are (as it was when the plan began), the tier, and the touches with their dates, purposes and outcomes."""
+
+    __tablename__ = "rapport_plans"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(36))
+    #: One plan per person: their first email, else their number, else the contact's id.
+    contact_key: Mapped[str] = mapped_column(String(200))
+    contact_id: Mapped[str] = mapped_column(String(80))
+    name: Mapped[str] = mapped_column(String(200))
+    workspaces: Mapped[list[str]] = mapped_column(Json, default=list)
+    phone: Mapped[str] = mapped_column(String(32), default="")
+    zone: Mapped[str] = mapped_column(String(64), default="")
+    #: Organisation, title, tags and profile, as they were when the plan began or last changed.
+    about: Mapped[dict[str, Any]] = mapped_column(Json, default=dict)
+    tier: Mapped[str] = mapped_column(String(1), default="B")
+    #: active, paused, excluded, done.
+    status: Mapped[str] = mapped_column(String(10), default="active")
+    auto_send: Mapped[bool] = mapped_column(Boolean, default=True)
+    #: The touches and how it is going: {touches, unanswered, pausedUntil, pauseReason, repliedOn, source}.
+    plan: Mapped[dict[str, Any]] = mapped_column(Json, default=dict)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime)
+
+    __table_args__ = (UniqueConstraint("user_id", "contact_key", name="uq_rapport_plans_contact"), Index("ix_rapport_plans_user", "user_id", "status"))

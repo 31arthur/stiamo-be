@@ -42,6 +42,9 @@ from app.infrastructure.db.workflows import SqlWorkflowRepository
 from app.infrastructure.db.actions import SqlActionRepository
 from app.application.actions import ActionService
 from app.application.queue import QueueService
+from app.application.rapport import RapportService
+from app.infrastructure.db.rapport import SqlRapportRepository
+from app.application.services import selection_of
 from app.domain.chittu import saved_name
 from app.domain.zones import where_is_the_owner
 
@@ -108,6 +111,16 @@ def build_services(app: FastAPI, session: AsyncSession) -> tuple[AgentService, C
         return saved_name(row.planner) if row else ""
 
     agent.queue = channels.queue_actions = QueueService(SqlActionRepository(session), agent.actions, lambda who, text, buttons, channel_id=None: channels.send_to_channel(who, channel_id, text, buttons) if channel_id else channels.announce(who, text, kind="chittu", summary=text[:60], buttons=buttons), lambda: s.clock(), owner_name)
+    async def chat_model(who):
+        row = await SqlSettingsRepository(session, s.box).get(who.user_id)
+        sel = selection_of(row, "daily-planner")[0] if row else None
+        key = row.keys.get(sel["providerId"]) if (row and sel) else None
+        return (s.llm_factory(sel["providerId"], key), sel["modelId"], sel.get("thinking", "off")) if (sel and key) else None
+
+    agent.rapport = channels.rapport_actions = RapportService(
+        SqlRapportRepository(session), agent.actions, s.data_factory, channels.send_whatsapp_to, lambda who, text, buttons=None: channels.announce(who, text, kind="rapport", summary=text[:60], buttons=buttons),
+        chat_model, owner_name, lambda: s.clock())
+    channels.queue_actions.rapport = channels.rapport_actions
     agent.actions.on_created = lambda who, ref: channels.queue_actions.add(who, ref)
 
     async def zone_changed(who, planner):  # the owner is somewhere else: good morning and good night, and the evening plan, follow them

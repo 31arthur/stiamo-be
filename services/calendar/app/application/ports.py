@@ -102,6 +102,10 @@ class ContactRepository(ABC):
         """Makes the contacts kept for this link match what Google has now. Returns how many there are."""
 
     @abstractmethod
+    async def update_local(self, user_id: str, contact_id: str, fields: dict) -> list[Contact]:
+        """Changes what the owner knows about a contact (tags, profile, zone, no rapport plan), for the same Google contact in every workspace. Returns the rows changed."""
+
+    @abstractmethod
     async def contacts(self, user_id: str, workspace: str | None, query: str | None, limit: int) -> list[Contact]:
         """Sorted by name. `query` (lower case) is looked for in the name, organisation, addresses, numbers and notes."""
 

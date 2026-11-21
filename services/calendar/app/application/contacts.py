@@ -9,7 +9,8 @@ from __future__ import annotations
 import logging
 import time
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 from typing import Any
 
 import jwt
@@ -25,6 +26,7 @@ log = logging.getLogger(__name__)
 STATE_TYPE = "contacts-oauth"
 STATE_MINUTES = 15
 MAX_LISTED = 5000
+PROFILE_KEYS = ("sector", "relationship", "tier", "language", "how_met", "interests", "goal")
 
 
 def _account_json(a: ContactAccount) -> dict[str, Any]:
@@ -166,8 +168,9 @@ class ContactService:
     async def status(self, user_id: str) -> dict[str, Any]:
         return {"configured": self._cfg.configured, "accounts": [_account_json(a) for a in await self._repo.accounts(user_id)]}
 
-    async def contacts(self, user_id: str, workspace: str | None, q: str, limit: int, offset: int) -> dict[str, Any]:
-        """One workspace's contacts, or everyone's together (a contact in several workspaces shown once). Sorted by name."""
+    async def contacts(self, user_id: str, workspace: str | None, q: str, limit: int, offset: int, recent_days: int | None = None, sort: str = "name") -> dict[str, Any]:
+        """One workspace's contacts, or everyone's together (a contact in several workspaces shown once). Sorted by name, or newest first (`sort="recent"`).
+        With `recent_days`, only the contacts that appeared in the last so many days (not the ones already there when the account was first read)."""
         if workspace is not None and workspace not in WORKSPACES:
             raise ValidationFailed("That isn't one of your workspaces.")
         found = await self._repo.contacts(user_id, workspace, q.strip().lower() or None, MAX_LISTED)
@@ -177,4 +180,42 @@ class ContactService:
         else:
             emails = {a.id: a.email for a in await self._repo.accounts(user_id)}
             items = [view(c, [c.workspace], [emails.get(c.account_id, "")]) for c in found]
+        if recent_days is not None:
+            since = datetime.now(UTC) - timedelta(days=max(1, min(recent_days, 3650)))
+            items = [i for i in items if i["isNew"] and i["firstSeenAt"] and datetime.fromisoformat(i["firstSeenAt"].replace("Z", "+00:00")) >= since]
+        if sort == "recent" or recent_days is not None:
+            items.sort(key=lambda i: i["firstSeenAt"] or "", reverse=True)
         return {"items": items[offset : offset + limit], "total": len(items)}
+
+    async def update(self, user_id: str, contact_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        """What the owner knows about a contact: tags, a profile (sector, relationship, tier A/B/C, language, how we met, interests, goal), the zone they are in, and
+        whether a rapport plan is wanted. Kept here only: nothing is written to Google."""
+        fields: dict[str, Any] = {}
+        if "tags" in body:
+            tags = [" ".join(str(t).split())[:40] for t in (body["tags"] or []) if str(t).strip()]
+            fields["tags"] = list(dict.fromkeys(tags))[:30]
+        if "profile" in body:
+            prof = {k: " ".join(str(v).split())[:300] for k, v in (body["profile"] or {}).items() if k in PROFILE_KEYS and str(v or "").strip()}
+            if prof.get("tier") and prof["tier"].upper() not in ("A", "B", "C"):
+                raise ValidationFailed("The tier is A, B or C.")
+            if prof.get("tier"):
+                prof["tier"] = prof["tier"].upper()
+            fields["profile"] = prof
+        if "timezone" in body:
+            name = str(body["timezone"] or "").strip()
+            if name:
+                try:
+                    ZoneInfo(name)
+                except Exception as exc:  # noqa: BLE001
+                    raise ValidationFailed("That isn't a time zone. Use a name like Asia/Qatar.") from exc
+            fields["timezone"] = name
+        if "rapportExcluded" in body:
+            fields["rapport_excluded"] = bool(body["rapportExcluded"])
+        if not fields:
+            raise ValidationFailed("Nothing to change was given.")
+        rows = await self._repo.update_local(user_id, contact_id, fields)
+        if not rows:
+            raise NotFound("That contact isn't here.")
+        by_account = {a.id: a.email for a in await self._repo.accounts(user_id)}
+        mine = next(r for r in rows if r.id == contact_id)
+        return view(mine, sorted({r.workspace for r in rows}), [by_account.get(mine.account_id, "")])

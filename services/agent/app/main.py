@@ -131,6 +131,39 @@ async def watch_loop(app: FastAPI, minutes: int) -> None:
         await start_watches(app)
 
 
+async def rapport_run(app: FastAPI, scan: bool) -> None:
+    """One pass for everyone: what is due is sent (inside the caps and the working hours), and with `scan`, new contacts get a plan. One person's trouble is not everyone's."""
+    from app.presentation.deps import build_services
+
+    async with app.state.session_factory() as session:
+        try:
+            _, channels = build_services(app, session)
+            for s in await SqlSettingsRepository(session, app.state.box).everyone():
+                who = Who(s.user_id, s.email)
+                token = app.state.tokens.mint(who.user_id, who.email)
+                try:
+                    if scan:
+                        await channels.rapport_actions.scan(who, token)
+                    await channels.rapport_actions.tick(who, token)
+                except Exception:  # noqa: BLE001
+                    logging.getLogger(__name__).exception("rapport run failed for %s", s.user_id)
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
+
+
+async def rapport_loop(app: FastAPI, minutes: int) -> None:
+    n = 0
+    while True:
+        await asyncio.sleep(minutes * 60)
+        try:
+            await rapport_run(app, scan=n % max(1, 60 // minutes) == 0)
+        except Exception:  # noqa: BLE001
+            logging.getLogger(__name__).exception("the rapport run failed")
+        n += 1
+
+
 async def refresh_webhooks(app: FastAPI) -> None:
     """Bots connected before urgent-email alerts existed are told to send button presses too (best effort, once per start)."""
     if not app.state.settings.public_url.startswith("https://"):
@@ -166,16 +199,18 @@ def create_app(settings: Settings | None = None, *, mail_events=None, registry=N
         await start_listening(app)
         await start_watches(app)
         watching = asyncio.create_task(watch_loop(app, settings.mailwatch_minutes)) if settings.mailwatch_minutes > 0 else None
+        rapport = asyncio.create_task(rapport_loop(app, settings.rapport_minutes)) if settings.rapport_minutes > 0 else None
         await start_evenings(app)
         await start_chittu(app)
         await start_flow_schedules(app)
         await start_reminders(app)
         await refresh_webhooks(app)
         yield
-        if watching:
-            watching.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await watching
+        for task in (watching, rapport):
+            if task:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
         await app.state.reminders.close()
         await app.state.daily.close()
         await app.state.flowsched.close()

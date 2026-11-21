@@ -165,6 +165,12 @@ class Memo(DataGateway):
     async def contacts(self, query="", limit=50):
         return await self._once(f"contacts:{query}:{limit}", lambda: self._inner.contacts(query, limit))
 
+    async def contacts_recent(self, days=14):
+        return await self._once(f"contacts_recent:{days}", lambda: self._inner.contacts_recent(days))
+
+    async def contact_update(self, contact_id, fields):
+        return await self._inner.contact_update(contact_id, fields)
+
     async def calendar_sync(self):
         return await self._inner.calendar_sync()
 
@@ -201,6 +207,8 @@ class AgentService:
     zone_changed: Any = None
     #: Chittu's one-at-a-time list on Telegram, set by the app once the channels exist.
     queue: Any = None
+    #: Rapport plans (application/rapport.py), set by the app once the channels exist.
+    rapport: Any = None
     #: Asks a question with buttons on the phone: (who, workspace, text, buttons) -> how many chats it reached. For an Ask me node.
     ask_phone: Any = None
     #: Sends text with one named Telegram bot for a Telegram node: (who, workspace, channel id, chat id or None, text) -> how many chats it reached.
@@ -484,7 +492,7 @@ class AgentService:
             data = ScopedData(data, scope)  # a workspace's assistant sees that workspace's data only
         ctx = PackContext(data, today, decisions, decision.get("modelId") or DECISION_MODELS[0]["id"], lambda: self._waiting(who, scope), self._proposer(who, agent.id, channel_id), channel != "the evening plan", scope,
                           jobs=self.job_runners(s), actions=self.actions, who=who, token=token, actor="chittu" if agent.id == "daily-planner" else agent.id, queue=self.queue, channel=channel, channel_id=channel_id,
-                          zone=where_is_the_owner(s.planner, datetime.now(UTC))[0], home=where_is_the_owner(s.planner, datetime.now(UTC))[1], set_zone=lambda zone, back: self.set_zone(who, zone, back))
+                          zone=where_is_the_owner(s.planner, datetime.now(UTC))[0], home=where_is_the_owner(s.planner, datetime.now(UTC))[1], set_zone=lambda zone, back: self.set_zone(who, zone, back), rapport=self.rapport)
         tools: list[Tool] = []
         tool_packs: dict[str, str] = {}
         context: dict[str, Any] = {"today": today, "user": saved_name(s.planner) or who.name, "channel": channel}

@@ -34,6 +34,8 @@ class Settings(BaseSettings):
     public_url: str = ""
     #: How often (minutes) every person's mailboxes are checked for a workspace that has none watching it yet. 0 turns it off.
     mailwatch_minutes: int = 60
+    #: How often rapport messages that are due are sent (and new contacts are given a plan, once an hour). 0: never.
+    rapport_minutes: int = 10
     #: Where the Stiamo web app lives (https), so an urgent-email alert can link to the email: https://stiamo.example.com
     app_url: str = ""
 

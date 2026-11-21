@@ -21,6 +21,7 @@ from app.application.toolpacks import PackRegistry
 from app.application.toolpacks.actions import ActionsPack
 from app.application.toolpacks.agenda import AgendaPack
 from app.application.toolpacks.mail import MailPack
+from app.application.toolpacks.rapport import RapportPack
 from app.application.toolpacks.attention import AttentionPack
 from app.application.toolpacks.cases import CasesPack
 from app.application.toolpacks.changes import ChangesPack
@@ -184,6 +185,16 @@ class FakeData(DataGateway):
 
     async def contacts(self, query="", limit=50):
         return [p for p in self.people if query.lower() in str(p.get("name", "")).lower()][:limit]
+
+    async def contacts_recent(self, days=14):
+        return [p for p in self.people if p.get("isNew")]
+
+    async def contact_update(self, contact_id, fields):
+        for p in self.people:
+            if p.get("id") == contact_id:
+                p.update({("rapportExcluded" if k == "rapportExcluded" else k): v for k, v in fields.items()})
+                return p
+        return None
 
     syncs = 0  # how many times Google's calendars were asked to sync now
     sync_result: dict | None = {"pulled": 0, "sent": {"added": 2, "changed": 0, "removed": 0}, "errors": []}
@@ -379,7 +390,7 @@ LIBRARIAN = AgentDefinition(id="librarian", name="Librarian", description="Finds
 
 
 def test_registry() -> AgentRegistry:
-    return AgentRegistry([*AGENTS, LIBRARIAN], PackRegistry([CasesPack(), DrivePack(), DecisionsPack(), AgendaPack(), ActionsPack(), MailPack(), AttentionPack(), ChangesPack(), StoriesPack(), InsightPack()]))
+    return AgentRegistry([*AGENTS, LIBRARIAN], PackRegistry([CasesPack(), DrivePack(), DecisionsPack(), AgendaPack(), ActionsPack(), MailPack(), RapportPack(), AttentionPack(), ChangesPack(), StoriesPack(), InsightPack()]))
 
 
 class Rig:
