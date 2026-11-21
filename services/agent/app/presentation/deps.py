@@ -41,6 +41,8 @@ from app.infrastructure.db.repositories import (
 from app.infrastructure.db.workflows import SqlWorkflowRepository
 from app.infrastructure.db.actions import SqlActionRepository
 from app.application.actions import ActionService
+from app.application.headlines import HeadlineDesk
+from app.application.news import NewsService
 from app.application.queue import QueueService
 from app.application.rapport import RapportService
 from app.infrastructure.db.rapport import SqlRapportRepository
@@ -121,6 +123,7 @@ def build_services(app: FastAPI, session: AsyncSession) -> tuple[AgentService, C
         SqlRapportRepository(session), agent.actions, s.data_factory, lambda who, text, buttons=None: channels.announce(who, text, kind="rapport", summary=text[:60], buttons=buttons),
         chat_model, owner_name, lambda: s.clock())
     channels.queue_actions.rapport = channels.rapport_actions
+    agent.headlines = channels.headline_actions = HeadlineDesk(NewsService(SqlWorkflowRepository(session), SqlSettingsRepository(session, s.box)), lambda who, text, buttons, channel_id=None: channels.send_to_channel(who, channel_id, text, buttons) if channel_id else channels.announce(who, text, kind="chittu", summary=text[:60], buttons=buttons), lambda: s.clock())
     agent.actions.on_created = lambda who, ref: channels.queue_actions.add(who, ref)
 
     async def zone_changed(who, planner):  # the owner is somewhere else: good morning and good night, and the evening plan, follow them

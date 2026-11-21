@@ -50,6 +50,8 @@ class PackContext:
     set_zone: Any = None
     #: Rapport plans: start, pause or leave out a contact's plan.
     rapport: Any = None
+    #: Headlines from the news agents, three at a time (application/headlines.py).
+    headlines: Any = None
 
 
 class ToolPack(ABC):

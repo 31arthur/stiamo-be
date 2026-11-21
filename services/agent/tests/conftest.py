@@ -21,6 +21,7 @@ from app.application.toolpacks import PackRegistry
 from app.application.toolpacks.actions import ActionsPack
 from app.application.toolpacks.agenda import AgendaPack
 from app.application.toolpacks.mail import MailPack
+from app.application.toolpacks.news import NewsPack
 from app.application.toolpacks.rapport import RapportPack
 from app.application.toolpacks.attention import AttentionPack
 from app.application.toolpacks.cases import CasesPack
@@ -390,7 +391,7 @@ LIBRARIAN = AgentDefinition(id="librarian", name="Librarian", description="Finds
 
 
 def test_registry() -> AgentRegistry:
-    return AgentRegistry([*AGENTS, LIBRARIAN], PackRegistry([CasesPack(), DrivePack(), DecisionsPack(), AgendaPack(), ActionsPack(), MailPack(), RapportPack(), AttentionPack(), ChangesPack(), StoriesPack(), InsightPack()]))
+    return AgentRegistry([*AGENTS, LIBRARIAN], PackRegistry([CasesPack(), DrivePack(), DecisionsPack(), AgendaPack(), ActionsPack(), MailPack(), NewsPack(), RapportPack(), AttentionPack(), ChangesPack(), StoriesPack(), InsightPack()]))
 
 
 class Rig:
