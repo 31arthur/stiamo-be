@@ -42,6 +42,13 @@ def role_of(c: Channel) -> str:
 
 #: What a button says the moment it is pressed (the first two parts of its data).
 PRESS_ACKS = {
+    "rp:s": "Noting it…",
+    "rp:r": "Noting it…",
+    "rp:w": "Finding other words…",
+    "rp:k": "Skipping it…",
+    "rp:p": "Pausing…",
+    "rp:x": "Leaving them out…",
+    "rp:t": "Changing the tier…",
     "ac:a": "Doing it…",
     "ac:x": "Leaving it as it is…",
     "ac:w": "One moment…",
@@ -135,6 +142,8 @@ class ChannelService:
         self.plan_actions: Any = None
         #: Chittu's list on Telegram, one thing at a time (application/queue.py).
         self.queue_actions: Any = None
+        #: Rapport plans (application/rapport.py): buttons on their messages, and answers from the people they are about.
+        self.rapport_actions: Any = None
         #: What the buttons under a question about time inside an event do: an AvailabilityService.
         self.availability_actions: Any = None
         self.editor_actions: Any = None
@@ -408,6 +417,14 @@ class ChannelService:
             await self._logged(who, "workflow", "telegram", self._who(c, p), True, summary=text[:80], workspace=workspace)
             sent += 1
         return sent
+
+    async def send_whatsapp_to(self, who: Who, number: str, text: str) -> None:
+        """A WhatsApp message from the owner's connected WhatsApp number to someone else (a business contact). Raises, in words, when there is no number connected or
+        WhatsApp will not take it (a business-initiated message needs an approved template, or an open chat)."""
+        channel = next((c for c in await self._repo.for_user(who.user_id) if c.kind == "whatsapp"), None)
+        if channel is None:
+            raise ValidationFailed("No WhatsApp number is connected.")
+        await self._tw.send_whatsapp(channel.public["accountSid"], channel.secrets["authToken"], channel.public["from"], number, text)
 
     async def send_to_channel(self, who: Who, channel_id: str, text: str, buttons: list[list[dict[str, str]]] | None = None) -> int:
         """A message with buttons to the chats of one named bot: the bot the owner is talking to. Returns how many chats it reached."""
@@ -723,6 +740,10 @@ class ChannelService:
             await self._strip(token, chat, message)
             reply = await self._ask_in(c, who, f"{c.kind}:{c.id}:{pending['sender']}:{action}", pending["text"], action, "Telegram", TELEGRAM_MAX, "telegram", master=True)
             return reply, None, True
+        if kind == "rp" and self.rapport_actions is not None:  # a rapport message: sent, replied, reword, skip, pause, no plan, tier
+            if action not in ("w",):
+                await self._strip(token, chat, message)
+            return await self.rapport_actions.press(who, access, action, rest)
         if kind == "ac" and self.queue_actions is not None:  # a previewed change: apply, leave, look at, undo
             if action != "w":
                 await self._strip(token, chat, message)
@@ -783,6 +804,8 @@ class ChannelService:
         try:
             number = as_whatsapp(sender)
             if number not in c.public.get("allowed", []):
+                if self.rapport_actions is not None:  # someone the owner is building rapport with, answering: the plan is told (they still get no reply from the assistant)
+                    await self.rapport_actions.on_inbound(Who(c.user_id, c.public.get("ownerEmail", "")), sender, body)
                 return  # a stranger gets no reply, so the number isn't confirmed to be in use
             text = body.strip()
             if not text:

@@ -138,3 +138,44 @@ def test_merging_keeps_workspaces_together_for_one_google_contact():
     one, two = contact_from_person(a, ADA), contact_from_person(b, ADA)
     merged = merge_across([one, two], {"a1": "me@x.org", "a2": "me@x.org"})
     assert len(merged) == 1 and merged[0]["workspaces"] == ["fsa", "sb"] and merged[0]["accounts"] == ["me@x.org"]
+
+
+# --- what the owner knows about a contact, and which are new ------------------------------------------------------------------------------
+
+
+async def sync(rig):
+    return (await rig.client.post(f"{C}/sync", json={}, headers=headers())).json()
+
+
+async def test_a_contact_that_appears_after_the_first_read_is_new_and_the_ones_already_there_are_not(rig):
+    await link(rig, "me@sb.org", [ADA, BOB])
+    first = await listed(rig, workspace="sb")
+    assert all(c["isNew"] is False and c["firstSeenAt"] for c in first["items"])  # the baseline: nobody already in Google is "new"
+    assert (await listed(rig, recent="14"))["total"] == 0
+    rig.people.people["me@sb.org"] = [ADA, BOB, person("c9", "Chen Wei", "chen@union.org", "+974 5555 1212", "Union Federation")]
+    await sync(rig)
+    new = await listed(rig, recent="14")
+    assert [c["name"] for c in new["items"]] == ["Chen Wei"] and new["items"][0]["isNew"] is True
+    assert [c["name"] for c in (await listed(rig, sort="recent"))["items"]][0] == "Chen Wei"  # newest first
+    assert (await listed(rig, workspace="sb"))["total"] == 3
+
+
+async def test_tags_and_the_zone_are_kept_here_survive_a_sync_and_apply_in_every_workspace_the_contact_is_in(rig):
+    await link(rig, "me@sb.org", [ADA, BOB])
+    code = rig.people.connect("me@sb.org", [ADA, BOB])
+    rig.people.people["me@sb.org"] = [ADA, BOB]
+    await rig.client.get("/v1/calendar/oauth/callback", params={"code": code, "state": await start(rig, "fsa")}, follow_redirects=False)  # the same Google account in FSA too
+    ada = next(c for c in (await listed(rig, workspace="sb"))["items"] if c["name"] == "Ada Lovelace")
+    r = await rig.client.patch(f"{C}/{ada['id']}", json={"tags": ["labour", " government ", "labour"], "profile": {"sector": "Government", "tier": "a", "bogus": "x"}, "timezone": "Asia/Kolkata", "rapport_excluded": True}, headers=headers())
+    assert r.status_code == 200, r.text
+    out = r.json()
+    assert out["tags"] == ["labour", "government"] and out["profile"] == {"sector": "Government", "tier": "A"} and out["timezone"] == "Asia/Kolkata" and out["rapportExcluded"] is True and sorted(out["workspaces"]) == ["fsa", "sb"]
+    rig.people.people["me@sb.org"] = [{**ADA, "names": [{"displayName": "Ada L. Lovelace", "metadata": {"primary": True}}]}, BOB]
+    await sync(rig)
+    now = next(c for c in (await listed(rig, workspace="fsa"))["items"] if c["name"].startswith("Ada"))
+    assert now["name"] == "Ada L. Lovelace" and now["tags"] == ["labour", "government"] and now["profile"]["tier"] == "A" and now["rapportExcluded"] is True  # Google's change came in, the owner's notes stayed
+    assert (await rig.client.patch(f"{C}/{ada['id']}", json={"profile": {"tier": "Z"}}, headers=headers())).status_code == 422
+    assert (await rig.client.patch(f"{C}/{ada['id']}", json={"timezone": "Narnia/Cair"}, headers=headers())).status_code == 422
+    other = headers("u2", "other@example.com")
+    assert (await rig.client.patch(f"{C}/{ada['id']}", json={"tags": ["x"]}, headers=other)).status_code == 404  # not someone else's
+    assert (await rig.client.patch(f"{C}/{ada['id']}", json={}, headers=headers())).status_code == 422

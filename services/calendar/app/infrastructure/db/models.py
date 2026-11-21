@@ -60,6 +60,13 @@ class ContactModel(Base):
     notes: Mapped[str] = mapped_column(Text, default="")
     photo: Mapped[str] = mapped_column(Text, default="")
     search: Mapped[str] = mapped_column(Text, default="")
+    first_seen_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    baseline: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    google_updated: Mapped[str] = mapped_column(String(40), default="", server_default="")
+    tags: Mapped[list] = mapped_column(JSON, default=list)
+    profile: Mapped[dict] = mapped_column(JSON, default=dict)
+    timezone: Mapped[str] = mapped_column(String(64), default="", server_default="")
+    rapport_excluded: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
 
     __table_args__ = (Index("ix_contacts_user_ws", "user_id", "workspace"), Index("ix_contacts_account", "account_id"))
 

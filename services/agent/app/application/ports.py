@@ -103,6 +103,14 @@ class DataGateway(ABC):
         """People from the owner's Google contacts (each with name, phones, emails, organisation, workspaces), by a word in their name. Empty when none are connected."""
         return []
 
+    async def contacts_recent(self, days: int = 14) -> list[dict[str, Any]]:
+        """The contacts that appeared in the owner's Google contacts in the last so many days (not those already there when an account was first read), newest first."""
+        return []
+
+    async def contact_update(self, contact_id: str, fields: dict[str, Any]) -> dict[str, Any] | None:
+        """Changes what the owner knows about a contact (tags, profile, zone, "no rapport plan"). The contact as it is now, or None."""
+        return None
+
     async def calendar_sync(self) -> dict[str, Any] | None:
         """Has Google's calendars read and Stiamo's meetings, tasks and calls sent to them now. What it did ({pulled, sent, errors}), or None when
         the calendar service couldn't be reached (nothing is lost: the background sync does it within minutes)."""

@@ -197,6 +197,20 @@ class HttpDataGateway(DataGateway):
             return []
         return r.json().get("items", []) if r.status_code == 200 else []
 
+    async def contacts_recent(self, days: int = 14) -> list[dict[str, Any]]:
+        try:
+            r = await self._http.get(f"{self._calendar}/v1/calendar/contacts", headers=self._headers, params={"recent": max(1, min(days, 3650)), "limit": 500})
+        except httpx.HTTPError:
+            return []
+        return r.json().get("items", []) if r.status_code == 200 else []
+
+    async def contact_update(self, contact_id: str, fields: dict[str, Any]) -> dict[str, Any] | None:
+        try:
+            r = await self._http.patch(f"{self._calendar}/v1/calendar/contacts/{contact_id}", headers=self._headers, json=fields)
+        except httpx.HTTPError:
+            return None
+        return r.json() if r.status_code == 200 else None
+
     async def calendar_sync(self) -> dict[str, Any] | None:
         try:
             r = await self._http.post(f"{self._calendar}/v1/calendar/sync", headers=self._headers, json={})

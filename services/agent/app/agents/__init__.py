@@ -14,10 +14,11 @@ from app.application.toolpacks.decisions import DecisionsPack
 from app.application.toolpacks.drive import DrivePack
 from app.application.toolpacks.insight import InsightPack
 from app.application.toolpacks.mail import MailPack
+from app.application.toolpacks.rapport import RapportPack
 from app.application.toolpacks.stories import StoriesPack
 
 AGENTS = [CASE_AGENT, *TEAM, STORY_AGENT]
 
 
 def default_registry() -> AgentRegistry:
-    return AgentRegistry(AGENTS, PackRegistry([CasesPack(), DrivePack(), DecisionsPack(), AgendaPack(), ActionsPack(), MailPack(), AttentionPack(), ChangesPack(), StoriesPack(), InsightPack()]))
+    return AgentRegistry(AGENTS, PackRegistry([CasesPack(), DrivePack(), DecisionsPack(), AgendaPack(), ActionsPack(), MailPack(), RapportPack(), AttentionPack(), ChangesPack(), StoriesPack(), InsightPack()]))

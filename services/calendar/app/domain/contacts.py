@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from app.domain.calendar import WORKSPACES
@@ -51,6 +51,18 @@ class Contact:
     photo: str = ""
     #: Lower case text of everything a search looks in.
     search: str = ""
+    #: When this contact first appeared here, and whether that was the first ever read of the link (so everyone already in Google at the start is not "new").
+    first_seen_at: datetime | None = None
+    baseline: bool = False
+    #: When Google last changed it (its own "update time"): a new contact has a recent one, and so has an edited one.
+    google_updated: str = ""
+    #: What the owner knows about them, kept here and never written back to Google: free tags, and a profile (sector, relationship, tier, language, how we met, interests).
+    tags: list[str] = field(default_factory=list)
+    profile: dict[str, Any] = field(default_factory=dict)
+    #: Where they are (a zone name), so a message reaches them in their working hours.
+    timezone: str = ""
+    #: The owner said not to build a rapport plan for them.
+    rapport_excluded: bool = False
 
 
 def _labelled(items: Any, kind: str) -> list[dict[str, str]]:
@@ -79,16 +91,20 @@ def contact_from_person(account: ContactAccount, person: dict[str, Any]) -> Cont
     bios = person.get("biographies") or []
     notes = str((bios[0] if bios else {}).get("value") or "").strip()[:MAX_NOTES]
     search = " ".join([name, organisation, title, *[e["value"] for e in emails], *[p["value"] for p in phones], notes]).lower()
+    updated = next((str(s.get("updateTime")) for s in (person.get("metadata") or {}).get("sources") or [] if s.get("updateTime")), "")
     return Contact(
         f"{account.id}:{hashlib.sha1(str(person['resourceName']).encode()).hexdigest()[:20]}", account.user_id, account.id, account.workspace, str(person["resourceName"]),
-        name, organisation, title, emails, phones, notes, str(photos[0]["url"]) if photos else "", search,
+        name, organisation, title, emails, phones, notes, str(photos[0]["url"]) if photos else "", search, google_updated=updated,
     )
 
 
 def view(c: Contact, workspaces: list[str] | None = None, accounts: list[str] | None = None) -> dict[str, Any]:
+    iso = lambda d: d.astimezone(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z") if d else None  # noqa: E731
     return {
         "id": c.id, "name": c.name, "organisation": c.organisation, "title": c.title, "emails": c.emails, "phones": c.phones, "notes": c.notes, "photo": c.photo,
         "workspaces": workspaces or [c.workspace], "accounts": accounts or [],
+        "firstSeenAt": iso(c.first_seen_at), "isNew": bool(c.first_seen_at) and not c.baseline, "googleUpdated": c.google_updated or None,
+        "tags": c.tags, "profile": c.profile, "timezone": c.timezone, "rapportExcluded": c.rapport_excluded,
     }
 
 

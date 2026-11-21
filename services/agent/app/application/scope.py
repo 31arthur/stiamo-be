@@ -151,6 +151,13 @@ class ScopedData(DataGateway):
         """Only the people of this workspace's contact accounts."""
         return [c for c in await self._inner.contacts(query, 200) if self.workspace in (c.get("workspaces") or [])][:limit]
 
+    async def contacts_recent(self, days: int = 14):
+        """Only the new contacts of this workspace's contact accounts."""
+        return [c for c in await self._inner.contacts_recent(days) if self.workspace in (c.get("workspaces") or [])]
+
+    async def contact_update(self, contact_id: str, fields: dict):
+        return await self._inner.contact_update(contact_id, fields)
+
     async def calendar_sync(self):
         return await self._inner.calendar_sync()
 

@@ -60,6 +60,11 @@ def _mail_buttons(tag: str, index: int) -> list[list[dict[str, str]]]:
     return [[{"text": "✅ Keep", "callback_data": d("d")}, {"text": "🗑 Trash", "callback_data": d("z")}], [{"text": "📖 Read", "callback_data": d("r")}, {"text": "⏭ Next", "callback_data": d("k")}], [{"text": "⏹ Stop", "callback_data": d("x")}]]
 
 
+def _contact_buttons(tag: str, index: int) -> list[list[dict[str, str]]]:
+    d = lambda action: f"aq:{action}:{tag}:{index}"  # noqa: E731
+    return [[{"text": "🌱 Start plan", "callback_data": d("n")}, {"text": "⭐ Tier A", "callback_data": d("a")}], [{"text": "🚫 No plan", "callback_data": d("o")}, {"text": "⏭ Next", "callback_data": d("k")}], [{"text": "⏹ Stop", "callback_data": d("x")}]]
+
+
 def _plan_buttons(tag: str, index: int) -> list[list[dict[str, str]]]:
     d = lambda action: f"aq:{action}:{tag}:{index}"  # noqa: E731
     return [[{"text": "✅ Keep", "callback_data": d("d")}, {"text": "✖️ Drop", "callback_data": d("k")}], [{"text": "⏪ 30 min earlier", "callback_data": d("m")}, {"text": "30 min later ⏩", "callback_data": d("p")}], [{"text": "⏹ Stop", "callback_data": d("x")}]]
@@ -81,8 +86,8 @@ def item_text(it: ActionItem, position_: int, total: int, today: str, note: str 
     lines = [f"{position_}/{total} · {EMOJI.get(it.kind, '•')} {it.title}"]
     if bits:
         lines.append(" · ".join(str(b) for b in bits))
-    if it.kind == "mail" and it.notes:
-        lines.append(str(it.notes)[:200])
+    if (it.kind == "mail" or it.source == "rapport") and it.notes:
+        lines.append(str(it.notes)[:400 if it.source == "rapport" else 200])  # (a rapport message: the text that would be sent)
     if note:
         lines.append(f"💬 {note}")
     return "\n".join(lines)
@@ -91,6 +96,8 @@ def item_text(it: ActionItem, position_: int, total: int, today: str, note: str 
 class QueueService:
     def __init__(self, repo: SqlActionRepository, actions: ActionService, send: Send, now: Callable[[], datetime] = lambda: datetime.now(UTC), names: Callable[[Who], Awaitable[str]] | None = None) -> None:
         self._repo, self._actions, self._send, self._now, self._names = repo, actions, send, now, names
+        #: Rapport plans (set by the app), for the contacts walk.
+        self.rapport: Any = None
 
     def _today(self) -> str:
         return self._actions.today()  # on the clock the owner is on now (see ActionService.sync_zone)
@@ -266,7 +273,7 @@ class QueueService:
     def _revalidate(q: dict[str, Any], loaded: Any) -> None:
         """Entries whose item was settled somewhere else, or deleted, since the list was made are gone: the list never shows what is not real."""
         for e in q["entries"]:
-            if e["state"] in (PENDING, SHOWN) and not e.get("mail"):  # (a message of the inbox is not an action item)
+            if e["state"] in (PENDING, SHOWN) and not e.get("mail") and not e.get("contact"):  # (a message of the inbox, or a contact, is not an action item)
                 it = loaded.get(e["ref"])
                 if it is None or it.status != "open":
                     e["state"] = GONE
@@ -288,8 +295,8 @@ class QueueService:
             bits = [f"{n} {w}" for w, n in (("done", left_counts[DONE]), ("moved", left_counts[MOVED]), ("skipped", left_counts[SKIPPED]), ("snoozed", left_counts["snoozed"])) if n]
             return (f"{ack}\n\n✅ That's everything on the list" + (f" ({', '.join(bits)})." if bits else ".")).strip(), None
         e = q["entries"][index]
-        it = loaded.get(e["ref"]) if not e.get("mail") else None
-        assert it is not None or e.get("mail")
+        it = loaded.get(e["ref"]) if not (e.get("mail") or e.get("contact")) else None
+        assert it is not None or e.get("mail") or e.get("contact")
         if front is None and sitting >= SITTING:
             await self._save(who, q)
             left = counts(q["entries"])["left"]
@@ -304,6 +311,11 @@ class QueueService:
         undo = last if isinstance(last, int) and 0 <= last < len(q["entries"]) and q["entries"][last]["state"] in (DONE, MOVED, SKIPPED) and q["entries"][last].get("cs") and last != index else None
         await self._save(who, q)
         pos, total = position(q["entries"], index)
+        if e.get("contact"):  # a contact added recently: who they are, and what the owner has told us about them
+            c = e["contact"]
+            ws = ", ".join(w.upper() if w != "personal" else "Personal" for w in c.get("workspaces") or [])
+            body = f"{pos}/{total} · 👤 {c.get('name')}" + "".join(f"\n{x}" for x in (" · ".join(y for y in (c.get("organisation"), c.get("title"), ws) if y), ("🏷 " + ", ".join(c["tags"])) if c.get("tags") else "") if x) + ("\nAlready has a plan." if c.get("hasPlan") else "")
+            return f"{ack}\n\n{body}".strip(), _contact_buttons(_tag(q["id"]), index)
         if e.get("mail"):  # a message of the inbox: who, what, when, the start of it
             m = e["mail"]
             body = f"{pos}/{total} · ✉️ {m.get('subject') or '(no subject)'}\nFrom {m.get('from') or m.get('fromAddress') or 'unknown'}" + (f" · {m['date'][:10]}" if m.get("date") else "") + ("" if m.get("seen") else " · unread") + (f"\n{m['snippet']}" if m.get("snippet") else "")
@@ -313,14 +325,20 @@ class QueueService:
             shown = convert(p["day"], p["start"], self._actions.home, self._actions.zone)[1]  # (planned on the home clock, said on the one the owner is on)
             body = f"{pos}/{total} · {EMOJI.get(it.kind, '•')} {it.title}\n🕐 {clock(shown)}–{clock(shown + p['duration'])}" + (f" · {it.contact}" if it.contact else "") + (f"\n💬 {e['note']}" if e.get("note") else "")
             return f"{ack}\n\n{body}".strip(), _plan_buttons(_tag(q["id"]), index)
-        return (f"{ack}\n\n{item_text(it, pos, total, today, e.get('note'), self._actions.zone, self._actions.home)}".strip(), _buttons("review" if e.get("review") else it.kind, it.fixed, _tag(q["id"]), index, undo=undo))
+        board = _buttons("review" if e.get("review") else it.kind, it.fixed, _tag(q["id"]), index, undo=undo)
+        wa = ((it.record.get("links") or {}).get("rapport") or {}).get("wa") if it.source == "rapport" else None
+        if wa:  # a rapport message for the owner to send: a button that opens WhatsApp with it already written
+            board = [[{"text": "💬 Open WhatsApp", "url": wa}], *board]
+        return (f"{ack}\n\n{item_text(it, pos, total, today, e.get('note'), self._actions.zone, self._actions.home)}".strip(), board)
 
     async def _settle(self, who: Who, token: str, q: dict[str, Any], index: int, action: str) -> str:
         """Does what a button or a word says to the item in front of the owner and returns what to say. A failure leaves the item skipped, never stuck."""
         e = q["entries"][index]
         ref = e["ref"]
         try:
-            if e.get("mail"):
+            if e.get("contact"):
+                ack = await self._settle_contact(who, token, e, action)
+            elif e.get("mail"):
                 ack = await self._settle_mail(token, e, action)
             elif e.get("plan"):
                 ack = await self._settle_block(who, token, q, e, action)
@@ -389,7 +407,9 @@ class QueueService:
         e = q["entries"][index]
         if e["state"] != SHOWN:
             return "That one is already settled."  # an old button, or a second tap
-        if action not in ("d", "t", "k", "m", "p", "z", "r"):
+        if action in ("n", "a", "o") and not e.get("contact"):
+            return "That one is not a contact."
+        if action not in ("d", "t", "k", "m", "p", "z", "r", "n", "a", "o"):
             return "I don't know that button."
         if action in ("z", "r") and not e.get("mail"):
             return "That one is not a mail."
@@ -469,6 +489,33 @@ class QueueService:
         if not entries:
             return {"started": False, "count": 0}
         return await self.set(who, token, Spec((title or "Your inbox")[:60], "replace", entries), "mail", channel_id)
+
+    async def review_contacts(self, who: Who, token: str, rows: list[dict[str, Any]], *, title: str = "", channel_id: str | None = None) -> dict[str, Any]:
+        """Contacts added recently, one at a time (1/5 · name, organisation, workspace, tags), each given a plan, a key (tier A) plan, or left out, by a button."""
+        from app.application.rapport import contact_key
+
+        entries = []
+        for c in rows[:30]:
+            has = await self.rapport._repo.by_key(who.user_id, contact_key(c)) is not None if self.rapport is not None else False
+            entries.append({**entry(f"contact:{c.get('id')}"), "contact": {k: c.get(k) for k in ("id", "name", "organisation", "title", "workspaces", "tags", "emails", "phones", "profile", "timezone", "notes", "rapportExcluded")} | {"hasPlan": has}})
+        if not entries:
+            return {"started": False, "count": 0}
+        return await self.set(who, token, Spec((title or "New contacts")[:60], "replace", entries), "contacts", channel_id)
+
+    async def _settle_contact(self, who: Who, token: str, e: dict[str, Any], action: str) -> str:
+        """Start a plan for the contact (tier A with the star), leave them out of rapport plans, or go on."""
+        c = e["contact"]
+        if action in ("n", "a"):
+            plan = await self.rapport.start(who, token, c, tier="A" if action == "a" else None, source="manual")
+            e["state"] = DONE
+            first = next((t for t in plan.get("touches", []) if t["state"] == "planned"), None)
+            return f"🌱 Plan for {c.get('name')}, tier {plan['tier']}." + (f" First message {self.rapport._when(first)}." if first else "")
+        if action == "o":
+            await self._actions._data(token).contact_update(str(c.get("id")), {"rapportExcluded": True})
+            e["state"] = MOVED
+            return f"🚫 No plan for {c.get('name')}."
+        e["state"] = SKIPPED
+        return "⏭ Next."
 
     async def _settle_mail(self, token: str, e: dict[str, Any], action: str) -> str:
         """Keep a message (it stays in the inbox), skip it, or move it to the Trash folder of the real mailbox (never deleted)."""
