@@ -68,7 +68,7 @@ def _theme(s: UserSettings | None, alert: Alert) -> dict[str, Any] | None:
 
 
 def _view(a: Alert) -> dict[str, Any]:
-    return {"id": a.id, "subject": a.subject, "sender_name": a.sender_name, "sender_address": a.sender_address, "summary": a.summary, "action": a.action, "due": a.due, "replies": a.replies}
+    return {"id": a.id, "subject": a.subject, "sender_name": a.sender_name, "sender_address": a.sender_address, "summary": a.summary, "action": a.action, "due": a.due, "replies": a.replies, "account_id": a.account_id, "sample": a.sample}
 
 
 class AlertService:
@@ -227,7 +227,21 @@ class AlertService:
                 a.status, a.draft, a.awaiting = "handled", None, None
                 await self._alerts.save(a)
                 await self._strip(a)
+                await self._settle_item(who, token, a, "complete")
                 await self._phone.say(channel_id, chat, "👌 Marked as handled.")
+            elif code == "read":
+                body = " ".join((await self._email_text(token, a)).split())
+                await self._phone.say(channel_id, chat, "📖 " + escape(body[:3400] or "(nothing to read)"))
+            elif code == "trash":
+                if a.sample or not a.account_id:
+                    await self._phone.say(channel_id, chat, "This is a test alert: there is no mail to move.")
+                    return
+                moved = await self._data(token).mail_trash(a.account_id, a.folder, [a.uid])
+                a.status, a.draft, a.awaiting = "handled", None, None
+                await self._alerts.save(a)
+                await self._strip(a)
+                await self._settle_item(who, token, a, "cancel")
+                await self._phone.say(channel_id, chat, "🗑 Moved to the Trash folder of your mailbox. It is not deleted." if moved else "🗑 It was already gone from the inbox.")
         except (ValidationFailed, AiError, NotFound) as exc:
             await self._phone.say(channel_id, chat, f"⚠️ {getattr(exc, 'message', None) or exc}")
 
@@ -297,6 +311,17 @@ class AlertService:
         await self._alerts.save(a)
         await self._strip(a)
         await self._phone.say(channel_id, chat, f"✅ <b>Sent</b> to {escape(d['to'])}.")
+
+    #: Set by the app: settles the action item that was kept for this mail ("complete" or "cancel"), so it does not stay on the list after the mail is dealt with.
+    settle_item: Any = None
+
+    async def _settle_item(self, who: Who, token: str, a: Alert, action: str) -> None:
+        if self.settle_item is None:
+            return
+        try:
+            await self.settle_item(who, token, a.workflow_id or "", a.item_id, action)
+        except Exception:  # noqa: BLE001  the mail was dealt with; a list that cannot be tidied is not a reason to fail
+            log.info("could not settle the action item of an alert")
 
     async def _strip(self, a: Alert) -> None:
         """Takes the buttons off the alert once it is dealt with, so it can't be answered twice."""
