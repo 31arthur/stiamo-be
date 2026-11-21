@@ -43,6 +43,7 @@ from app.infrastructure.db.actions import SqlActionRepository
 from app.application.actions import ActionService
 from app.application.queue import QueueService
 from app.domain.chittu import saved_name
+from app.domain.zones import where_is_the_owner
 
 current_principal = make_principal_dependency(lambda: get_settings().token_settings())
 CurrentPrincipal = Annotated[Principal, Depends(current_principal)]
@@ -73,11 +74,21 @@ async def get_session(request: Request) -> AsyncIterator[AsyncSession]:
 Session = Annotated[AsyncSession, Depends(get_session)]
 
 
+def zones_of(session: AsyncSession, s):
+    """Where the owner is now and where their records are kept, read from their settings when asked."""
+
+    async def zones(who) -> tuple[str, str]:
+        row = await SqlSettingsRepository(session, s.box).get(who.user_id)
+        return where_is_the_owner(row.planner if row else None, s.clock())
+
+    return zones
+
+
 def build_services(app: FastAPI, session: AsyncSession) -> tuple[AgentService, ChannelService]:
     s = app.state
     agent = AgentService(SqlSettingsRepository(session, s.box), s.registry, s.runs, SqlWorkflowRepository(session), s.llm_factory, s.decision_factory, s.data_factory, s.settings.max_steps, SqlProposalRepository(session))
     agent.engine = s.settings.engine
-    agent.actions = ActionService(SqlActionRepository(session), s.data_factory, lambda: s.clock())
+    agent.actions = ActionService(SqlActionRepository(session), s.data_factory, lambda: s.clock(), zones_of(session, s))
     box: list[ChannelService] = []  # (the channels are made after the agent, and the agent sends through them)
     agent.notify = lambda who, workspace, text: box[0].tell(who, workspace, text)
     agent.sorter = lambda: WorkflowService(SqlWorkflowRepository(session), SqlSettingsRepository(session, s.box), s.runs, s.llm_factory, s.decision_factory, s.data_factory, s.running, s.sweeps.is_active, box[0].alerts)
@@ -98,6 +109,12 @@ def build_services(app: FastAPI, session: AsyncSession) -> tuple[AgentService, C
 
     agent.queue = channels.queue_actions = QueueService(SqlActionRepository(session), agent.actions, lambda who, text, buttons, channel_id=None: channels.send_to_channel(who, channel_id, text, buttons) if channel_id else channels.announce(who, text, kind="chittu", summary=text[:60], buttons=buttons), lambda: s.clock(), owner_name)
     agent.actions.on_created = lambda who, ref: channels.queue_actions.add(who, ref)
+
+    async def zone_changed(who, planner):  # the owner is somewhere else: good morning and good night, and the evening plan, follow them
+        sync_chittu(app, who, planner)
+        sync_evening(app, who, planner)
+
+    agent.zone_changed = zone_changed
     channels.availability_actions = AvailabilityService(SqlSettingsRepository(session, s.box), s.data_factory, lambda who, text, workspace, buttons: channels.announce_plan(who, text, workspace, buttons), plans)
     channels.editor_actions = EditorService(SqlSettingsRepository(session, s.box), s.data_factory, s.llm_factory, lambda who, text, workspace, buttons: channels.announce_plan(who, text, workspace, buttons), lambda: s.clock())
     channels.voice_notes = VoiceNotes(SqlSettingsRepository(session, s.box), s.voice)
@@ -342,7 +359,7 @@ def build_workflow_service(app: FastAPI, session: AsyncSession) -> WorkflowServi
     _, channels = build_services(app, session)
     svc = WorkflowService(SqlWorkflowRepository(session), SqlSettingsRepository(session, s.box), s.runs, s.llm_factory, s.decision_factory, s.data_factory, s.running, s.sweeps.is_active, channels.alerts)
     def record_item(who, **kw):
-        actions = ActionService(SqlActionRepository(session), s.data_factory, lambda: s.clock())
+        actions = ActionService(SqlActionRepository(session), s.data_factory, lambda: s.clock(), zones_of(session, s))
         actions.on_created = lambda w, ref: channels.queue_actions.add(w, ref)  # a mail that needs the owner joins the list in force
         return actions.record_mail(who, **kw)
 

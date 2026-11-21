@@ -18,6 +18,8 @@ from app.application.toolpacks.cards import card
 from app.application.toolpacks.common import limit, text
 from app.domain.actionitems import KINDS, label_day, resolve_day
 from app.domain.llm import ToolSpec
+from app.domain.zones import label as zone_label
+from app.domain.zones import offset_label, resolve_zone
 
 OBJ = "object"
 
@@ -31,10 +33,16 @@ def _day_arg(note: str) -> dict[str, Any]:
 
 class ActionsPack(ToolPack):
     name = "actions"
-    variables = {"day_start": "When Chittu's day opens (06:00).", "day_end": "When Chittu's day closes (22:00)."}
+    variables = {"day_start": "When Chittu's day opens (06:00).", "day_end": "When Chittu's day closes (22:00).", "here": "Where the owner is now and what the clock says there, and the clock their records are kept on."}
 
     async def context(self, ctx: PackContext) -> dict[str, Any]:
-        return {"day_start": "06:00", "day_end": "22:00"}
+        from datetime import UTC, datetime
+        from zoneinfo import ZoneInfo
+
+        now = datetime.now(UTC).astimezone(ZoneInfo(ctx.zone))
+        away = ctx.zone != ctx.home
+        where = f"{zone_label(ctx.zone)} (UTC{offset_label(ctx.zone)}), where it is {now.strftime('%a %-d %b, %H:%M')}"
+        return {"day_start": "06:00", "day_end": "22:00", "here": where + (f". Their records are kept on {zone_label(ctx.home)} time; every time you handle is converted by the tools." if away else ". That is also the clock their records are kept on.")}
 
     async def tools(self, ctx: PackContext) -> list[Tool]:
         svc, who, token = ctx.actions, ctx.who, ctx.token
@@ -62,7 +70,7 @@ class ActionsPack(ToolPack):
             word = text(a.get("query")).lower()
             if word:  # find one by a word in its title, its summary (a mail's subject and what it says), its case or its contact
                 found = [i for i in found if word in " ".join(str(x or "") for x in (i.title, i.notes, i.case_ref, i.contact)).lower()]
-            rows = [i.view(today) for i in found]
+            rows = [i.view(today, ctx.zone, ctx.home) for i in found]
             most = limit(a.get("max"), 40, 100)
             out: dict[str, Any] = {"count": len(rows), "range": {"from": day, "to": until or day}, "items": clip(rows, most), "truncated": len(rows) > most}
             if day and not until:
@@ -117,7 +125,10 @@ class ActionsPack(ToolPack):
 
         async def change_item(a: dict[str, Any]) -> ToolOutput:
             try:
-                return ToolOutput(await svc.command(who, token, text(a.get("ref")), text(a.get("action")), to=text(a.get("to")) or None, start=int(a["start_minute"]) if isinstance(a.get("start_minute"), (int, float)) else None, actor=actor, reason=text(a.get("why")), note=text(a.get("note")) or None, include_fixed=bool(a.get("include_fixed"))))
+                named = text(a.get("timezone"))
+                if named and resolve_zone(named) is None:
+                    return ToolOutput({"error": f"I don't know which time zone “{named}” is. Give a city or a zone name like Asia/Qatar."})
+                return ToolOutput(await svc.command(who, token, text(a.get("ref")), text(a.get("action")), to=text(a.get("to")) or None, start=int(a["start_minute"]) if isinstance(a.get("start_minute"), (int, float)) else None, actor=actor, reason=text(a.get("why")), note=text(a.get("note")) or None, include_fixed=bool(a.get("include_fixed")), tz=resolve_zone(named) if named else None))
             except (NotFound, Conflict, ValidationFailed) as exc:
                 return ToolOutput({"error": str(getattr(exc, "message", None) or exc)})
 
@@ -143,6 +154,31 @@ class ActionsPack(ToolPack):
             if not out.get("started"):
                 return ToolOutput({"started": False, "count": 0, "dropped": out.get("dropped"), "next": "Nothing valid was on the list. Look the items up with find_items and use their refs."})
             return ToolOutput({**out, "next": "The list is made and the first item has ALREADY been sent with its buttons. From here the app walks it by itself: do NOT call any tool per item. Reply with one short line only, and mention anything in dropped."})
+
+        async def set_timezone(a: dict[str, Any]) -> ToolOutput:
+            if ctx.set_zone is None:
+                return ToolOutput({"error": "I can't change the zone here."})
+            name = resolve_zone(text(a.get("place")))
+            if name is None:
+                return ToolOutput({"error": f"I don't know which time zone “{text(a.get('place'))}” is. Ask the owner for the city or country."})
+            from datetime import UTC, datetime
+
+            from app.domain.zones import today_in
+
+            back = None
+            if text(a.get("until")):
+                back = resolve_day(text(a.get("until")), today_in(name, datetime.now(UTC)))
+                if back is None:
+                    return ToolOutput({"error": f"I can't tell which day “{text(a.get('until'))}” is. Ask the owner when they are back."})
+            try:
+                out = await ctx.set_zone(name, back)
+            except ValidationFailed as exc:
+                return ToolOutput({"error": str(getattr(exc, "message", None) or exc)})
+            from zoneinfo import ZoneInfo
+
+            now = datetime.now(UTC).astimezone(ZoneInfo(name))
+            return ToolOutput({"zone": name, "label": zone_label(name), "now": now.strftime("%a %-d %b %H:%M"), "utcOffset": offset_label(name), "home": zone_label(out["home"]), "backOn": out.get("backOn"), "backOnLabel": label_day(out["backOn"]) if out.get("backOn") else None,
+                               "note": "From now on, today, tomorrow and the times the owner says are on this clock; records stay on the home clock and the tools convert. Confirm in one short line."})
 
         async def undo_last(a: dict[str, Any]) -> ToolOutput:
             try:
@@ -199,6 +235,19 @@ class ActionsPack(ToolPack):
                 lambda a: "Started the list",
                 walk_through,
             )] if ctx.queue is not None and ctx.channel == "Telegram" else []),
+            Tool(
+                ToolSpec("set_timezone", card(
+                    "Tells the app where the owner is now. Their day, their today, their good morning and good night, and every time they say follow that place until they are back.",
+                    use=["The owner says where they are or are going: “I'm in Qatar”, “I'm in Brazil till Monday”, “I'm back”, “I'm landing in Hyderabad Monday”. Say the place as they did.", "They give times in a place they are not in (a flight home): do NOT change the zone for that; pass timezone on the task instead."],
+                    avoid=["Do not call it for a single time in another place."],
+                    args={"place": "A country, a city or a zone (“Qatar”, “São Paulo”, “Asia/Qatar”). “India” or “home” puts them back.", "until": "The day they are back at home, in their words (“Monday”, “23 November”). Leave out if they did not say: it then stays until they say they are back."},
+                    returns="{zone, label, now (the time there), utcOffset, home, backOn, backOnLabel}, or {error} when the place cannot be told: ask the owner for the city or country.",
+                    fails=["{error} for a place or day it cannot read: ask one short question."],
+                    effect="Changes the owner's settings (where they are). Records are not changed: they stay on the home clock.",
+                ), {"type": OBJ, "properties": {"place": S, "until": S}, "required": ["place"]}),
+                lambda a: f"Set the zone to {text(a.get('place'))}",
+                set_timezone,
+            ),
             Tool(
                 ToolSpec("which_day", card(
                     "Turns the owner's words for a day into a calendar date, in code, using today's date and the owner's time zone.",
@@ -269,11 +318,11 @@ class ActionsPack(ToolPack):
                     "Does one thing to one item: mark it done, cancel it, reopen it, move it to another day (and optionally a time), or snooze it.",
                     use=["The owner says “done with the call to Ramesh”, “cancel that”, “move the rejoinder to Thursday”, “snooze this till Monday”, “put it at 4 pm”.", "Exactly one item is meant, and you have its ref from find_items."],
                     avoid=["For several items: use preview_move.", "For a hearing or a Google event: they cannot be changed here; tell the owner where to do it.", "Do not guess the item. If two items could be meant, ask which."],
-                    args={"ref": "The item's ref from find_items.", "action": "complete, cancel, reopen, move or snooze.", "to": "For move and snooze: the day, in words or YYYY-MM-DD.", "start_minute": "For move: a time of day as minutes after midnight (4 pm is 960). Leave out to keep the time.", "why": "The owner's reason in a few words. Always pass it when they gave one: it is kept in the history.", "note": "A comment to keep with a completed or cancelled item.", "include_fixed": "Only when the owner said they want a fixed item (one with other people in it) moved."},
+                    args={"ref": "The item's ref from find_items.", "action": "complete, cancel, reopen, move or snooze.", "to": "For move and snooze: the day, in words or YYYY-MM-DD.", "start_minute": "For move: a time of day as minutes after midnight (4 pm is 960). Leave out to keep the time.", "why": "The owner's reason in a few words. Always pass it when they gave one: it is kept in the history.", "note": "A comment to keep with a completed or cancelled item.", "include_fixed": "Only when the owner said they want a fixed item (one with other people in it) moved.", "timezone": "The place or zone start_minute is on, if not where the owner is now (“Qatar”)."},
                     returns="{ok, item, ref, did, changesetId, undo}. did is ready to say (Moved to Thu 26 Nov 16:00: …). Say what was done in one short line and mention that undo is possible. A move also moves the due date when it was on or before the new day.",
                     fails=["{error} saying the item is fixed: tell the owner it involves others and ask if they really want it moved, then retry with include_fixed.", "{error} saying it cannot find the ref: call find_items again.", "{error} for an unreadable or past day: ask for a date."],
                     effect="Changes the owner's record at once and writes the history. Undo with undo_last.",
-                ), {"type": OBJ, "properties": {"ref": S, "action": {"type": "string", "enum": ["complete", "cancel", "reopen", "move", "snooze"]}, "to": S, "start_minute": {"type": "integer"}, "why": S, "note": S, "include_fixed": {"type": "boolean"}}, "required": ["ref", "action"]}),
+                ), {"type": OBJ, "properties": {"ref": S, "action": {"type": "string", "enum": ["complete", "cancel", "reopen", "move", "snooze"]}, "to": S, "start_minute": {"type": "integer"}, "why": S, "note": S, "include_fixed": {"type": "boolean"}, "timezone": S}, "required": ["ref", "action"]}),
                 lambda a: f"{text(a.get('action')).capitalize()} {text(a.get('ref'))}",
                 change_item,
             ),

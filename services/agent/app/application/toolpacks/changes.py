@@ -13,6 +13,8 @@ from app.application.toolpacks import PackContext, ToolPack
 from app.application.toolpacks.common import text
 from app.domain import proposals as p
 from app.domain.llm import ToolSpec
+from app.domain.zones import convert, resolve_zone
+from app.domain.zones import say as zsay
 
 OBJ = "object"
 S = {"type": "string"}
@@ -71,6 +73,22 @@ class ChangesPack(ToolPack):
 
             return wrapped
 
+        zone, home = ctx.zone, ctx.home
+
+        def clock_of(a: dict[str, Any]) -> str:
+            """The clock the times in this request are on: the one the owner named (“Qatar time”), else the one they are on now."""
+            named = text(a.get("timezone"))
+            if not named:
+                return zone
+            found = resolve_zone(named)
+            if found is None:
+                raise p.Bad(f"I don't know which time zone “{named}” is. Give a city or a zone name like Asia/Qatar.")
+            return found
+
+        def on_home_clock(day: str, minutes: int, tz: str) -> tuple[str, int]:
+            """A time said on the clock `tz`, as it is stored (on the home clock): the day changes when it must, and the model never works it out."""
+            return convert(day, minutes, tz, home)
+
         # --- tasks -----------------------------------------------------------------------------------------
 
         def task_fields(a: dict[str, Any], *, creating: bool) -> tuple[dict[str, Any], list[str]]:
@@ -99,8 +117,13 @@ class ChangesPack(ToolPack):
             if date or start is not None:
                 if not (date and start is not None):
                     raise p.Bad("To place it on the planner give both date and start.")
-                f["slot"] = {"date": date, "start": start, "duration": f.get("estimate") or int(a.get("minutes") or 30)}
-                shown.append(f"On the planner {p.day_label(date)} at {p.clock(start)}")
+                tz = clock_of(a)
+                said = zsay(date, start, tz, home)
+                shown.append(f"On the planner {p.day_label(date)}, {said}")
+                home_day, home_start = on_home_clock(date, start, tz)
+                if f.get("dueDate") == date:  # due on the day it is planned for, on the clock it was said on
+                    f["dueDate"] = home_day
+                f["slot"] = {"date": home_day, "start": home_start, "duration": f.get("estimate") or int(a.get("minutes") or 30)}
             return f, shown
 
         async def add_task(a: dict[str, Any]) -> ToolOutput:
@@ -144,8 +167,13 @@ class ChangesPack(ToolPack):
             if date or at is not None:
                 if not date:
                     raise p.Bad("A time needs a day too: give due as well.")
+                tz = clock_of(a)
+                if at is not None:
+                    shown.append(f"{p.day_label(date)}, {zsay(date, at, tz, home)}")
+                    date, at = on_home_clock(date, at, tz)
+                else:
+                    shown.append(p.day_label(date))
                 f["due"] = {"date": date, **({"time": at} if at is not None else {})}
-                shown.append(f"{p.day_label(date)}" + (f" at {p.clock(at)}" if at is not None else ""))
             if a.get("minutes") not in (None, ""):
                 f["duration"] = p.length(a.get("minutes"), "The length", 15)
             if (notes := p.long_text(a.get("notes"), "The notes")) is not None:
@@ -188,6 +216,9 @@ class ChangesPack(ToolPack):
             clash = next((h for h in hearings if h.get("caseId") == c["id"] and h.get("date") == date and (h.get("outcome") or {}).get("status", "open") == "open"), None)
             if clash is not None:
                 raise p.Bad(f"{c.get('reference')} already has a hearing on {p.day_label(date)} (“{clash.get('purpose')}”). Change that one instead.")
+            said_at = zsay(date, at, clock_of(a), home) if at is not None else None
+            if at is not None:
+                date, at = on_home_clock(date, at, clock_of(a))
             hid = str(uuid.uuid4())
             record: dict[str, Any] = {"id": hid, "caseId": c["id"], "date": date, "purpose": purpose, "duration": p.length(a.get("minutes"), "The length", 30), "outcome": {"status": "open"}}
             if at is not None:
@@ -196,7 +227,7 @@ class ChangesPack(ToolPack):
                 record["forum"] = forum
             if also:
                 record["alsoCaseIds"] = [x["id"] for x in also if x]
-            shown = p.lines(f"{c.get('reference')} {c.get('title', '')}".strip(), p.day_label(date) + (f" at {p.clock(at)}" if at is not None else ""), forum if forum else None, f"Also heard with {', '.join(str(x.get('reference')) for x in also if x)}" if also else None)
+            shown = p.lines(f"{c.get('reference')} {c.get('title', '')}".strip(), p.day_label(date) + (f", {said_at}" if said_at else ""), forum if forum else None, f"Also heard with {', '.join(str(x.get('reference')) for x in also if x)}" if also else None)
             return await propose("hearing.create", f"New hearing: {purpose}", shown, [{"table": "hearings", "id": hid, "create": True, "patch": record}])
 
         async def add_case(a: dict[str, Any]) -> ToolOutput:
@@ -267,6 +298,7 @@ class ChangesPack(ToolPack):
             "workspace": {"type": "string", "enum": list(p.WORKSPACES)},
             "date": _described(S, "Put it on the planner on this day (YYYY-MM-DD); needs start too."),
             "start": _described({"type": "string"}, "Start time on the planner, HH:MM."),
+            "timezone": _described(S, "The place or zone the date and times are on, when it is not where the owner is now (“Qatar”, “Brazil”, “Asia/Qatar”). Leave out for where they are. The tool converts to the stored clock: never convert yourself."),
         }
         follow_schema = {
             "title": _described(S, "What to do, e.g. “Call the advocate about the filing”."),
@@ -278,6 +310,7 @@ class ChangesPack(ToolPack):
             "notes": S,
             "case": _described(S, "The case it is about: reference number or id."),
             "workspace": {"type": "string", "enum": list(p.WORKSPACES)},
+            "timezone": _described(S, "The place or zone the day and time are on, when it is not where the owner is now (“Qatar”, “Brazil”). Leave out for where they are. The tool converts to the stored clock: never convert yourself."),
         }
 
         def tool(name: str, description: str, schema: dict[str, Any], required: list[str], label, run) -> Tool:
@@ -288,7 +321,7 @@ class ChangesPack(ToolPack):
             tool("change_task", "Propose a change to a task: its title, due date, priority, length, notes, case, a time on the planner, or its status (done, cancelled, open).", _props(id=_described(S, "The task id from day_agenda."), status={"type": "string", "enum": list(p.STATUSES)}, clear_planned_time={"type": "boolean"}, **task_fields_schema), ["id"], lambda a: f"Proposed a change to task {text(a.get('id'))}", change_task),
             tool("add_follow_up", "Propose a new call, message, email or visit to make.", _props(**follow_schema), ["title"], lambda a: f"Proposed a follow-up: {text(a.get('title'))}", add_follow_up),
             tool("change_follow_up", "Propose a change to a follow-up: when it is due, who, how, notes, or its status (done, cancelled, open).", _props(id=_described(S, "The follow-up id from day_agenda."), status={"type": "string", "enum": list(p.STATUSES)}, **follow_schema), ["id"], lambda a: f"Proposed a change to follow-up {text(a.get('id'))}", change_follow_up),
-            tool("add_hearing", "Propose listing a hearing for a case.", _props(case=_described(S, "The case: reference number or id."), date=_described(S, "YYYY-MM-DD."), time=_described(S, "HH:MM."), purpose=_described(S, "What it is listed for."), forum=_described(S, "Court or bench."), minutes={"type": "integer"}, also_cases={"type": "array", "items": S, "description": "Other cases heard together."}), ["case", "date", "purpose"], lambda a: f"Proposed a hearing on {text(a.get('date'))}", add_hearing),
+            tool("add_hearing", "Propose listing a hearing for a case.", _props(case=_described(S, "The case: reference number or id."), date=_described(S, "YYYY-MM-DD."), time=_described(S, "HH:MM."), timezone=_described(S, "The place or zone the time is on, if not the owner's now."), purpose=_described(S, "What it is listed for."), forum=_described(S, "Court or bench."), minutes={"type": "integer"}, also_cases={"type": "array", "items": S, "description": "Other cases heard together."}), ["case", "date", "purpose"], lambda a: f"Proposed a hearing on {text(a.get('date'))}", add_hearing),
             tool("add_case", f"Propose opening a case. The case number is generated when it is opened. Organization is one of {', '.join(p.ORGANIZATIONS)}.", _props(title=S, organization={"type": "string", "enum": list(p.ORGANIZATIONS)}, type={"type": "string", "enum": list(p.CASE_TYPES)}, client=S, opposing_party=S, court=S, court_number=S, stage=S, summary=S, filed_on=_described(S, "YYYY-MM-DD.")), ["title", "organization"], lambda a: f"Proposed a case: {text(a.get('title'))}", add_case),
             tool("add_action_plan", "Propose an action plan: an objective with ordered steps, each a task or a call, optionally for one or more cases.", _props(title=S, objective=S, due=_described(S, "YYYY-MM-DD."), cases={"type": "array", "items": S, "description": "Case reference numbers or ids."}, workspace={"type": "string", "enum": list(p.WORKSPACES)}, steps={"type": "array", "items": _props(kind={"type": "string", "enum": ["task", "followUp"]}, title=S, due=_described(S, "YYYY-MM-DD."), minutes={"type": "integer"}, priority={"type": "string", "enum": list(p.PRIORITIES)}, channel={"type": "string", "enum": list(p.CHANNELS)}, contact=S)}), ["title", "steps"], lambda a: f"Proposed an action plan: {text(a.get('title'))}", add_action_plan),
         ]

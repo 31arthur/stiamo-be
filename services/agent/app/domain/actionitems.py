@@ -16,6 +16,7 @@ from datetime import date, timedelta
 from typing import Any
 
 from app.domain.dayplan import DAY_END, DAY_START, DEFAULT_MEETING, busy_blocks, clock, free_windows, hearing_block, is_open
+from app.domain.zones import convert
 
 def label_day(day: str | None) -> str | None:
     """A day as it is said: Thu 26 Nov."""
@@ -62,10 +63,13 @@ class ActionItem:
             return f"{self.day} {clock(self.start)}"
         return self.day or (f"due {self.due}" if self.due else "unscheduled")
 
-    def view(self, today: str | None = None) -> dict[str, Any]:
+    def view(self, today: str | None = None, zone: str | None = None, home: str | None = None) -> dict[str, Any]:
         """What Chittu is shown: the facts, never the raw record. Days come with a label ready to say (Thu 26 Nov), and an overdue item with how many days late
         it is, so he never has to work either out."""
-        out = {"ref": self.ref, "kind": self.kind, "title": self.title, "workspace": self.workspace, "day": self.day, "dayLabel": label_day(self.day), "time": clock(self.start) if self.start is not None else None,
+        day, start = self.day, self.start
+        if zone and home and zone != home and day and start is not None:  # shown on the clock the owner is on now (stored on the home clock)
+            day, start = convert(day, start, home, zone)
+        out = {"ref": self.ref, "kind": self.kind, "title": self.title, "workspace": self.workspace, "day": day, "dayLabel": label_day(day), "time": clock(start) if start is not None else None,
                "minutes": self.duration, "due": self.due, "dueLabel": label_day(self.due) if self.due and self.due != self.day else None, "status": self.status, "priority": self.priority, "fixed": self.fixed, "case": self.case_ref,
                "contact": self.contact, "source": self.source}
         there = self.day or self.due
